@@ -2874,6 +2874,66 @@
         }
       }
     },
+    "/install.sh": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "install_script",
+        "responses": {
+          "200": {
+            "description": "The node installer, a POSIX shell script with this pool's address, signing key and proxy port written in. Run it as `curl -fsSL <pool>/install.sh | MTPOOL_TOKEN=<token> sh -s -- --name <name>`.",
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The Host header or the forwarded scheme is not usable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the limit window ends"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This build has no signing key, so it cannot hand out an installer",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/metrics": {
       "get": {
         "tags": [
@@ -2917,6 +2977,81 @@
             "bearer": []
           }
         ]
+      }
+    },
+    "/releases/{name}": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "release_file",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "File name: `manifest.json`, `manifest.json.minisig` or an agent binary",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "manifest.json"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The release file",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Always `no-cache`: a new release replaces the file under the same name"
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such release file",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the limit window ends"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
       }
     }
   },

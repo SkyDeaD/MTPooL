@@ -19,6 +19,7 @@ pub const ENV_CHEBURCHECK_URL: &str = "MTPOOL_CHEBURCHECK_URL";
 pub const ENV_REDFLAG_URL: &str = "MTPOOL_REDFLAG_URL";
 pub const ENV_CLOUDFLARE_URL: &str = "MTPOOL_CLOUDFLARE_URL";
 /// Lets nodes on private, loopback and shared addresses enroll. Only for a test stand.
+pub const ENV_RELEASES_DIR: &str = "MTPOOL_RELEASES_DIR";
 pub const ENV_ALLOW_PRIVATE_IPS: &str = "MTPOOL_ALLOW_PRIVATE_IPS";
 
 pub const DEFAULT_DB_PATH: &str = "/var/lib/mtpool/registrar.db";
@@ -87,6 +88,15 @@ pub fn base(
 /// Whether `MTPOOL_ALLOW_PRIVATE_IPS` is exactly `true`. Anything else, or nothing, is off.
 pub fn allow_private_ips(get: impl Fn(&str) -> Option<String>) -> bool {
     get(ENV_ALLOW_PRIVATE_IPS).as_deref() == Some("true")
+}
+
+/// The directory `/releases/{name}` reads from: `MTPOOL_RELEASES_DIR` or the default.
+pub fn releases_dir(get: impl Fn(&str) -> Option<String>) -> PathBuf {
+    PathBuf::from(
+        get(ENV_RELEASES_DIR)
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| crate::release::DEFAULT_RELEASES_DIR.to_owned()),
+    )
 }
 
 impl Config {
@@ -196,6 +206,22 @@ mod tests {
             let err = Endpoints::from_lookup(lookup(&[(var, value)])).unwrap_err();
             assert!(err.to_string().contains(var), "{var}: {err}");
         }
+    }
+
+    #[test]
+    fn the_releases_directory_has_a_default_and_can_be_replaced() {
+        assert_eq!(
+            releases_dir(lookup(&[])),
+            PathBuf::from("/var/lib/mtpool/releases")
+        );
+        assert_eq!(
+            releases_dir(lookup(&[("MTPOOL_RELEASES_DIR", "/srv/r")])),
+            PathBuf::from("/srv/r")
+        );
+        assert_eq!(
+            releases_dir(lookup(&[("MTPOOL_RELEASES_DIR", "")])),
+            PathBuf::from("/var/lib/mtpool/releases")
+        );
     }
 
     #[test]

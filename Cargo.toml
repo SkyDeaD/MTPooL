@@ -22,8 +22,10 @@ mtpool-core = { path = "crates/core" }
 mtpool-protocol = { path = "crates/protocol" }
 arc-swap = "1.9.3"
 async-trait = "0.1.92"
+aes = "0.9.4"
 axum = "0.8.9"
 clap = "4.6.7"
+ctr = "0.10.1"
 data-encoding = "2.11.1"
 fast_qr = "0.14.0"
 futures-core = "0.3.34"

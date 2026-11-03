@@ -5,6 +5,7 @@ pub mod agent;
 pub mod bot;
 pub mod problem;
 pub mod public;
+pub mod signing;
 
 use time::OffsetDateTime;
 use time::format_description::well_known::{Rfc2822, Rfc3339};

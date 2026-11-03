@@ -1,12 +1,14 @@
 //! Command line: `serve`, `openapi`, `admin reset-token`, `backup`, `restore`, `version`.
 
 use std::io::IsTerminal;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 use crate::auth::tokens;
+use crate::backup;
 use crate::config::{Config, DEFAULT_LOG, ENV_LOG};
 use crate::server;
 use crate::store::Store;
@@ -29,10 +31,18 @@ pub enum CliCommand {
         #[command(subcommand)]
         command: AdminCommand,
     },
-    /// Copy the database to a backup file.
-    Backup,
-    /// Restore the database from a backup file.
-    Restore,
+    /// Copy the database to a backup file (and write its .sha256), while the registrar runs.
+    Backup {
+        /// Where to write it; by default /var/backups/mtpool/registrar-<unix time>.db.
+        #[arg(long)]
+        to: Option<PathBuf>,
+    },
+    /// Restore the database from a backup file. The registrar must be stopped.
+    Restore {
+        /// The backup; the file <from>.sha256 must lie beside it.
+        #[arg(long)]
+        from: PathBuf,
+    },
     /// Print the version.
     Version,
 }
@@ -73,7 +83,7 @@ pub fn init_logging(directives: &str) {
 pub async fn run(cli: Cli, config: Config) -> ExitCode {
     match cli.command {
         CliCommand::Version => {
-            println!("{}", env!("CARGO_PKG_VERSION"));
+            println!("{}", version_line());
             ExitCode::SUCCESS
         }
         CliCommand::Openapi => {
@@ -94,8 +104,50 @@ pub async fn run(cli: Cli, config: Config) -> ExitCode {
             }
             Err(message) => fail(&message),
         },
-        CliCommand::Backup => fail("backup is not implemented yet"),
-        CliCommand::Restore => fail("restore is not implemented yet"),
+        CliCommand::Backup { to } => {
+            let to = to.unwrap_or_else(default_backup_path);
+            match blocking(move || backup::backup(&config.db_path, &to).map(|()| to)).await {
+                Ok(to) => {
+                    println!("{}", to.display());
+                    ExitCode::SUCCESS
+                }
+                Err(message) => fail(&message),
+            }
+        }
+        CliCommand::Restore { from } => {
+            match blocking(move || backup::restore(&config.db_path, &from)).await {
+                Ok(()) => {
+                    println!("restored; start the registrar again");
+                    ExitCode::SUCCESS
+                }
+                Err(message) => fail(&message),
+            }
+        }
+    }
+}
+
+/// `/var/backups/mtpool/registrar-<unix time>.db`.
+fn default_backup_path() -> PathBuf {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    PathBuf::from(format!("/var/backups/mtpool/registrar-{now}.db"))
+}
+
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, backup::BackupError> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// The version, and the id of the signing key built in when there is one.
+fn version_line() -> String {
+    match mtpool_protocol::signing::key_id(crate::release::MINISIGN_PUB) {
+        Some(id) => format!("{} (signing key {id})", env!("CARGO_PKG_VERSION")),
+        None => env!("CARGO_PKG_VERSION").to_owned(),
     }
 }
 
@@ -119,6 +171,14 @@ async fn reset_token(config: Config) -> Result<String, String> {
 
 async fn serve(config: Config) -> Result<(), String> {
     let path = config.db_path.clone();
+    // Held for as long as the registrar runs: a restore refuses while it is.
+    let _serving = backup::lock_serving(&path).map_err(|e| match e {
+        backup::BackupError::Running => format!(
+            "another registrar already serves {}; stop it first",
+            path.display()
+        ),
+        other => other.to_string(),
+    })?;
     tracing::info!(db = %path.display(), version = env!("CARGO_PKG_VERSION"), "starting");
     let store = tokio::task::spawn_blocking(move || Store::open(&path))
         .await
@@ -145,8 +205,20 @@ mod tests {
     fn all_subcommands_parse() {
         assert_eq!(parse(&["serve"]).unwrap(), CliCommand::Serve);
         assert_eq!(parse(&["openapi"]).unwrap(), CliCommand::Openapi);
-        assert_eq!(parse(&["backup"]).unwrap(), CliCommand::Backup);
-        assert_eq!(parse(&["restore"]).unwrap(), CliCommand::Restore);
+        assert_eq!(parse(&["backup"]).unwrap(), CliCommand::Backup { to: None });
+        assert_eq!(
+            parse(&["backup", "--to", "/tmp/b.db"]).unwrap(),
+            CliCommand::Backup {
+                to: Some("/tmp/b.db".into())
+            }
+        );
+        assert_eq!(
+            parse(&["restore", "--from", "/tmp/b.db"]).unwrap(),
+            CliCommand::Restore {
+                from: "/tmp/b.db".into()
+            }
+        );
+        assert!(parse(&["restore"]).is_err(), "restore needs a file");
         assert_eq!(parse(&["version"]).unwrap(), CliCommand::Version);
         assert_eq!(
             parse(&["admin", "reset-token"]).unwrap(),

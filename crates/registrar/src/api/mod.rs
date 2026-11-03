@@ -212,6 +212,8 @@ pub fn public_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(stats::summary))
         .routes(routes!(stats::series))
         .routes(routes!(public::openapi_document))
+        .routes(routes!(crate::release::install_script))
+        .routes(routes!(crate::release::release_file))
 }
 
 /// Every documented route: the public, agent, bot and admin APIs.

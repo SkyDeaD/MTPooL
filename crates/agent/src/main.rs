@@ -232,7 +232,10 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Version => {
-            println!("{}", env!("CARGO_PKG_VERSION"));
+            match mtpool_protocol::signing::key_id(mtpool_agent::MINISIGN_PUB) {
+                Some(id) => println!("{} (signing key {id})", env!("CARGO_PKG_VERSION")),
+                None => println!("{}", env!("CARGO_PKG_VERSION")),
+            }
             ExitCode::SUCCESS
         }
         Command::Run { config } => {

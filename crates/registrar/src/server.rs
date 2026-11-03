@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::future::{Future, IntoFuture};
 use std::io;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -30,6 +31,7 @@ use crate::config::{self, Config, ConfigError, Endpoints};
 use crate::dns::cloudflare::CloudflareDns;
 use crate::dns::worker::DnsWorker;
 use crate::prober::Prober;
+use crate::release;
 use crate::secrets;
 use crate::sensors::Sensor;
 use crate::sensors::cheburcheck::CheburcheckSensor;
@@ -76,6 +78,11 @@ pub struct AppState {
     /// Nodes may enroll from private, loopback and shared addresses. Set once at startup from
     /// `MTPOOL_ALLOW_PRIVATE_IPS`; only a test stand wants it.
     pub allow_private_ips: bool,
+    /// Where `/releases/{name}` reads from.
+    pub releases_dir: Arc<PathBuf>,
+    /// The key releases are signed with, as served in `/install.sh`; empty when this build has
+    /// none (then `/install.sh` says so).
+    pub minisign_pub: &'static str,
 }
 
 impl AppState {
@@ -105,6 +112,8 @@ impl AppState {
             settings_lock: Arc::new(AsyncMutex::new(())),
             rechecks: Arc::new(Mutex::new(HashMap::new())),
             allow_private_ips: false,
+            releases_dir: Arc::new(PathBuf::from(release::DEFAULT_RELEASES_DIR)),
+            minisign_pub: release::MINISIGN_PUB,
         }
     }
 
@@ -129,6 +138,18 @@ impl AppState {
     /// The same state with private node addresses allowed or not.
     pub fn with_allow_private_ips(mut self, allow: bool) -> AppState {
         self.allow_private_ips = allow;
+        self
+    }
+
+    /// The same state with release files read from `dir`.
+    pub fn with_releases_dir(mut self, dir: PathBuf) -> AppState {
+        self.releases_dir = Arc::new(dir);
+        self
+    }
+
+    /// The same state serving `key` as the release signing key.
+    pub fn with_minisign_pub(mut self, key: &'static str) -> AppState {
+        self.minisign_pub = key;
         self
     }
 
@@ -275,6 +296,7 @@ pub async fn run_with(
              This is for a test stand, never for a public registrar"
         );
     }
+    let releases_dir = config::releases_dir(|name| std::env::var(name).ok());
     let loader = store.clone();
     let state = tokio::task::spawn_blocking(move || loader.load()).await??;
     // The fan is a driver of the state owner: every emitted event reaches the open streams.
@@ -322,6 +344,7 @@ pub async fn run_with(
             .with_events(fan.clone())
             .with_gp_settings(gp_settings)
             .with_allow_private_ips(allow_private_ips)
+            .with_releases_dir(releases_dir)
             .with_verifier(Arc::new(verifier)),
     );
     if let Ok(addr) = listener.local_addr() {

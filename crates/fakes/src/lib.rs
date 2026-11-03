@@ -83,6 +83,8 @@ struct Inner {
     created: u64,
     records: Vec<Record>,
     next_record: u64,
+    /// Every create and delete of a DNS record, in the order they happened.
+    dns_log: Vec<Value>,
 }
 
 /// The state of the stand-ins; cheap to clone, every clone is the same one.
@@ -194,7 +196,10 @@ async fn state(State(fakes): State<Fakes>) -> Response {
         .collect();
     json_response(
         StatusCode::OK,
-        &json!({"dns": dns, "measurements": inner.created, "calls": inner.calls}),
+        &json!({
+            "dns": dns, "dns_log": inner.dns_log,
+            "measurements": inner.created, "calls": inner.calls,
+        }),
     )
 }
 
@@ -491,6 +496,7 @@ fn cloudflare(
             };
             let mut document = recorded(CF_CREATE);
             document["result"] = record_json(&record);
+            inner.dns_log.push(change("create", &record));
             inner.records.push(record);
             json_response(StatusCode::OK, &document)
         }
@@ -499,20 +505,33 @@ fn cloudflare(
                 return zone_missing();
             }
             let mut inner = fakes.lock();
-            let before = inner.records.len();
+            let gone = inner
+                .records
+                .iter()
+                .find(|r| r.id == *id)
+                .map(|r| change("delete", r));
             inner.records.retain(|r| r.id != *id);
-            if inner.records.len() == before {
+            let Some(gone) = gone else {
                 return json_response(
                     StatusCode::NOT_FOUND,
                     &json!({"success": false, "errors": [{"code": 81044, "message": "Record does not exist."}], "messages": [], "result": null}),
                 );
-            }
+            };
+            inner.dns_log.push(gone);
             let mut document = recorded(CF_DELETE);
             document["result"]["id"] = json!(id);
             json_response(StatusCode::OK, &document)
         }
         _ => not_found(),
     }
+}
+
+/// One entry of the DNS change log.
+fn change(op: &str, record: &Record) -> Value {
+    json!({
+        "op": op, "name": record.name, "type": record.kind,
+        "content": record.content, "id": record.id,
+    })
 }
 
 fn zone_missing() -> Response {
@@ -853,6 +872,52 @@ mod tests {
         assert_eq!(
             json_of(&app, get_with_token("/__state")).await.1["dns"],
             json!([])
+        );
+    }
+
+    #[tokio::test]
+    async fn cloudflare_changes_are_logged_in_the_order_they_happened() {
+        let app = router(Fakes::default());
+        let records = format!("/cloudflare/client/v4/zones/{}/dns_records", crate::ZONE_ID);
+        let mut ids = Vec::new();
+        for content in ["192.0.2.7", "192.0.2.8"] {
+            let (_, created) = json_of(
+                &app,
+                post(
+                    &records,
+                    &json!({"type":"A","name":"pool.example.com","content":content}),
+                ),
+            )
+            .await;
+            ids.push(created["result"]["id"].as_str().expect("an id").to_owned());
+        }
+        let delete = |id: &str| {
+            Request::delete(format!("{records}/{id}"))
+                .header("authorization", "Bearer e2e-fake-token")
+                .body(Body::empty())
+                .expect("a request")
+        };
+        assert_eq!(json_of(&app, delete(&ids[0])).await.0, StatusCode::OK);
+        // A delete of a record that is not there changes nothing and is not logged.
+        assert_eq!(
+            json_of(&app, delete(&ids[0])).await.0,
+            StatusCode::NOT_FOUND
+        );
+        // A list is not a change.
+        json_of(
+            &app,
+            get_with_token(&format!("{records}?name=pool.example.com")),
+        )
+        .await;
+
+        let state = json_of(&app, get_with_token("/__state")).await.1;
+        assert_eq!(
+            state["dns_log"],
+            json!([
+                {"op":"create","name":"pool.example.com","type":"A","content":"192.0.2.7","id":ids[0]},
+                {"op":"create","name":"pool.example.com","type":"A","content":"192.0.2.8","id":ids[1]},
+                {"op":"delete","name":"pool.example.com","type":"A","content":"192.0.2.7","id":ids[0]},
+            ])
         );
     }
 

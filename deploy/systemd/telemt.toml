@@ -1,0 +1,29 @@
+# The starting configuration of telemt on a node; the agent rewrites the port, the domain and the
+# users from what the registrar says. __PORT__, __TLS_DOMAIN__ and __SECRET__ are filled in when
+# the file is installed. The user here is a throwaway.
+[general]
+use_middle_proxy = false
+
+[general.modes]
+classic = false
+secure = false
+tls = true
+
+[general.telemetry]
+core_enabled = true
+user_enabled = true
+
+[network]
+ipv4 = true
+ipv6 = false
+prefer = 4
+
+[server]
+port = __PORT__
+metrics_listen = "127.0.0.1:9090"
+
+[censorship]
+tls_domain = "__TLS_DOMAIN__"
+
+[access.users]
+standby = "__SECRET__"

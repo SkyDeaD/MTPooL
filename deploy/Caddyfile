@@ -1,0 +1,8 @@
+# The registrar behind Caddy: Caddy gets the certificate and the registrar listens on loopback.
+# install-registrar.sh writes the domain over {$MTPOOL_DOMAIN}.
+{$MTPOOL_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080 {
+		header_up X-Forwarded-Proto {scheme}
+	}
+}

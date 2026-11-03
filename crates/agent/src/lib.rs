@@ -14,3 +14,7 @@ pub mod lifecycle;
 pub mod local_health;
 pub mod report;
 pub mod state_files;
+
+/// The public key releases are verified with, as built in (empty in a debug build made without
+/// the key file).
+pub const MINISIGN_PUB: &str = env!("MTPOOL_MINISIGN_PUB");
