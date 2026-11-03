@@ -3,6 +3,7 @@
 
 pub mod client;
 pub mod config;
+pub mod engine;
 pub mod host;
 pub mod lifecycle;
 pub mod state_files;

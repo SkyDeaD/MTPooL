@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 mtpool-protocol.workspace = true
+async-trait.workspace = true
 clap = { workspace = true, features = ["derive"] }
 rand.workspace = true
 reqwest = { workspace = true, features = ["json", "rustls"] }

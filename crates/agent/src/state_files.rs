@@ -19,6 +19,10 @@ pub trait Fs: Send + Sync {
     /// Replaces the file with `bytes`, readable by the owner only. The content is written to
     /// `<path>.tmp` first and renamed, so a crash never leaves half a file.
     fn write_private(&self, path: &Path, bytes: &[u8]) -> io::Result<()>;
+    /// Replaces the file with `bytes`, giving it the mode (and, if the process may, the owner)
+    /// of the existing file `like`, so a configuration someone else owns keeps its access rights.
+    /// The content goes to `<path>.tmp` first and is renamed. `like` must exist.
+    fn write_like(&self, path: &Path, bytes: &[u8], like: &Path) -> io::Result<()>;
     /// Removes the file; one that is not there is not an error.
     fn remove(&self, path: &Path) -> io::Result<()>;
 }
@@ -78,6 +82,52 @@ impl Fs for RealFs {
         Ok(())
     }
 
+    fn write_like(&self, path: &Path, bytes: &[u8], like: &Path) -> io::Result<()> {
+        use std::io::Write;
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+        let template = std::fs::metadata(like)?;
+        let mut tmp = path.as_os_str().to_owned();
+        tmp.push(".tmp");
+        let tmp = PathBuf::from(tmp);
+        match std::fs::remove_file(&tmp) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        let written = (|| {
+            // Created closed to everyone but the owner; the rights of `like` are set after the
+            // content is in, so the file is never readable by more than it will be.
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            file.write_all(bytes)?;
+            if file.metadata()?.uid() != template.uid() || file.metadata()?.gid() != template.gid()
+            {
+                // Only a process that may give a file away can; for any other the file stays its
+                // own, which is the best that can be done.
+                match std::os::unix::fs::fchown(&file, Some(template.uid()), Some(template.gid())) {
+                    Err(e) if e.kind() != io::ErrorKind::PermissionDenied => return Err(e),
+                    _ => {}
+                }
+            }
+            file.set_permissions(std::fs::Permissions::from_mode(template.mode() & 0o7777))?;
+            file.sync_all()
+        })();
+        if let Err(e) = written.and_then(|()| std::fs::rename(&tmp, path)) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty())
+            && let Ok(dir) = std::fs::File::open(parent)
+        {
+            let _ = dir.sync_all();
+        }
+        Ok(())
+    }
+
     fn remove(&self, path: &Path) -> io::Result<()> {
         match std::fs::remove_file(path) {
             Ok(()) => Ok(()),
@@ -110,6 +160,16 @@ impl Fs for MemFs {
         Ok(self.files().get(path).cloned())
     }
     fn write_private(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        self.files().insert(path.to_owned(), bytes.to_vec());
+        Ok(())
+    }
+    fn write_like(&self, path: &Path, bytes: &[u8], like: &Path) -> io::Result<()> {
+        if !self.files().contains_key(like) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "the file to copy the access rights from is missing",
+            ));
+        }
         self.files().insert(path.to_owned(), bytes.to_vec());
         Ok(())
     }

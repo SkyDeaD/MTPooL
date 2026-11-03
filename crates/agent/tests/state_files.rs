@@ -137,3 +137,49 @@ fn secrets_do_not_print() {
     };
     assert!(!format!("{credentials:?}").contains("very-secret"));
 }
+
+#[test]
+fn real_fs_write_like_keeps_the_mode_of_the_original() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("telemt.toml");
+    std::fs::write(&file, b"old").unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+    RealFs.write_like(&file, b"new", &file).unwrap();
+    assert_eq!(std::fs::read(&file).unwrap(), b"new");
+    assert_eq!(mode(&file), 0o640);
+    assert!(!dir.path().join("telemt.toml.tmp").exists());
+
+    // A backup copy takes the rights of the file it is a copy of.
+    let backup = dir.path().join("telemt.toml.bak");
+    RealFs.write_like(&backup, b"old", &file).unwrap();
+    assert_eq!(std::fs::read(&backup).unwrap(), b"old");
+    assert_eq!(mode(&backup), 0o640);
+}
+
+#[test]
+fn real_fs_write_like_needs_the_original() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing");
+    let target = dir.path().join("target");
+    let error = RealFs.write_like(&target, b"x", &missing).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert!(!target.exists());
+    assert!(!dir.path().join("target.tmp").exists());
+}
+
+#[test]
+fn mem_fs_write_like_behaves_like_the_real_one() {
+    let fs = MemFs::new();
+    let file = Path::new("/etc/x.toml");
+    assert!(fs.write_like(file, b"a", file).is_err());
+    fs.write_private(file, b"old").unwrap();
+    fs.write_like(Path::new("/etc/x.toml.bak"), b"old", file)
+        .unwrap();
+    fs.write_like(file, b"new", file).unwrap();
+    assert_eq!(fs.read(file).unwrap().unwrap(), b"new");
+    assert_eq!(
+        fs.read(Path::new("/etc/x.toml.bak")).unwrap().unwrap(),
+        b"old"
+    );
+}

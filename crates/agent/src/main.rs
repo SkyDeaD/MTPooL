@@ -8,10 +8,16 @@ use std::sync::Arc;
 use clap::{Parser, Subcommand};
 use mtpool_agent::client::RegistrarClient;
 use mtpool_agent::config::{DEFAULT_CONFIG_PATH, LocalConfig};
+use mtpool_agent::engine::http::ReqwestHttp;
+use mtpool_agent::engine::telemt::{
+    DEFAULT_CONFIG_PATH as TELEMT_CONFIG, DEFAULT_UNIT, TelemtEngine,
+};
+use mtpool_agent::host::TokioRunner;
 use mtpool_agent::lifecycle::{
-    DetectedEngine, Hooks, Lifecycle, LogSink, NoReports, StaticEngine, system_jitter,
+    ConfigSink, DetectedEngine, EngineProbe, Hooks, Lifecycle, NoReports, system_jitter,
 };
 use mtpool_agent::state_files::RealFs;
+use mtpool_protocol::agent::AgentConfig;
 use mtpool_protocol::public::Engine;
 use tracing_subscriber::EnvFilter;
 
@@ -70,6 +76,34 @@ async fn shutdown_signal() {
     }
 }
 
+type Telemt = TelemtEngine<TokioRunner, ReqwestHttp>;
+
+/// The one telemt adapter, as the engine the lifecycle detects and as the sink it hands the
+/// config to. A port in the local config wins over the one in telemt's own file.
+#[derive(Clone)]
+struct SharedTelemt {
+    telemt: Arc<Telemt>,
+    port: Option<u16>,
+}
+
+impl EngineProbe for SharedTelemt {
+    async fn detect(&self) -> Option<DetectedEngine> {
+        match self.port {
+            Some(port) => Some(DetectedEngine {
+                engine: Engine::Telemt,
+                port,
+            }),
+            None => self.telemt.detect().await,
+        }
+    }
+}
+
+impl ConfigSink for SharedTelemt {
+    async fn apply(&self, config: &AgentConfig) {
+        self.telemt.apply(config).await;
+    }
+}
+
 async fn run(config_path: PathBuf) -> ExitCode {
     let config = match LocalConfig::load(&config_path) {
         Ok(config) => config,
@@ -85,18 +119,31 @@ async fn run(config_path: PathBuf) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // Until the engine adapter exists the agent assumes telemt on the configured port.
-    let engine = config.port.map(|port| DetectedEngine {
-        engine: Engine::Telemt,
-        port,
-    });
-    let hooks = Hooks {
-        engine: StaticEngine(engine),
-        reports: NoReports,
-        sink: LogSink,
+    let http = match ReqwestHttp::new() {
+        Ok(http) => http,
+        Err(error) => {
+            tracing::error!("cannot build the HTTP client for the engine: {error}");
+            return ExitCode::FAILURE;
+        }
     };
-    let lifecycle = match Lifecycle::new(&config, client, Arc::new(RealFs), hooks, system_jitter())
-    {
+    let fs = Arc::new(RealFs);
+    let telemt = SharedTelemt {
+        telemt: Arc::new(TelemtEngine::new(
+            PathBuf::from(TELEMT_CONFIG),
+            DEFAULT_UNIT,
+            config.state_dir.clone(),
+            Arc::new(TokioRunner),
+            fs.clone(),
+            Arc::new(http),
+        )),
+        port: config.port,
+    };
+    let hooks = Hooks {
+        engine: telemt.clone(),
+        reports: NoReports,
+        sink: telemt,
+    };
+    let lifecycle = match Lifecycle::new(&config, client, fs, hooks, system_jitter()) {
         Ok(lifecycle) => lifecycle,
         Err(error) => {
             tracing::error!(
