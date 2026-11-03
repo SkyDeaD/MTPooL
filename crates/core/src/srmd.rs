@@ -12,7 +12,8 @@
 //!   difference.
 //! - Growing first unfolds folded domains, then creates new ones. `rebalance` does not add a
 //!   created domain to the settings: the caller does, and `SrmdState::created` remembers it.
-//! - Folding keeps `max(needed, domains that SRMD did not create)` of the first active domains.
+//! - Folding keeps `max(needed, domains that SRMD did not create)` active domains: the ones SRMD
+//!   did not create first, then the rest in the order of `active`.
 //!   The others fold, the biggest by clients first, each onto the least loaded survivor. A
 //!   domain SRMD did not create (the base one, one added by hand) is never folded unless an
 //!   admin hands it over with `take`.
@@ -263,16 +264,16 @@ fn split_base(settings: &Settings) -> Option<(String, String)> {
 /// Folds the surplus domains. The first `max(required, domains SRMD does not own)` active
 /// domains survive. The biggest of the others goes first, each onto the least loaded survivor.
 fn fold(state: &mut SrmdState, active: &[String], required: usize) -> Vec<SrmdAction> {
-    let not_owned = active
-        .iter()
-        .filter(|d| !state.created.contains(*d))
-        .count();
-    let keep = required.max(not_owned);
+    // Domains SRMD does not own come first wherever the caller listed them, so they survive.
+    let (not_owned, owned): (Vec<&String>, Vec<&String>) =
+        active.iter().partition(|d| !state.created.contains(*d));
+    let keep = required.max(not_owned.len());
     if keep >= active.len() {
         return Vec::new();
     }
+    let ordered: Vec<String> = not_owned.into_iter().chain(owned).cloned().collect();
     let clients = |state: &SrmdState, d: &str| state.domain_clients.get(d).copied().unwrap_or(0);
-    let (survivors, surplus) = active.split_at(keep);
+    let (survivors, surplus) = ordered.split_at(keep);
     let mut surplus: Vec<&String> = surplus.iter().collect();
     surplus.sort_by_key(|d| std::cmp::Reverse(clients(state, d)));
     let mut load: Vec<(&String, u64)> = survivors.iter().map(|d| (d, clients(state, d))).collect();
@@ -543,6 +544,30 @@ mod tests {
                 fold("y.example.com", "z.example.com"),
             ]
         );
+    }
+
+    #[test]
+    fn fold_never_touches_non_created_domain_listed_late() {
+        let s = settings(true, &[]);
+        let mut state = SrmdState::default();
+        state.created.insert("c1.example.com".into());
+        state.created.insert("c2.example.com".into());
+        let out = ticks(
+            &mut state,
+            &["c1.example.com", "base.example.com", "c2.example.com"],
+            1,
+            &s,
+            20,
+        );
+        assert_eq!(
+            out[19],
+            vec![
+                fold("c1.example.com", "base.example.com"),
+                fold("c2.example.com", "base.example.com"),
+            ],
+            "base is not owned by SRMD and survives wherever it is listed"
+        );
+        assert!(!state.cnames.contains_key("base.example.com"));
     }
 
     #[test]
