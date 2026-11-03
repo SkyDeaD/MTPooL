@@ -3,6 +3,7 @@
 pub mod health;
 pub mod lifecycle;
 pub mod links;
+pub mod selection;
 pub mod settings;
 pub mod types;
 pub mod votes;
@@ -14,6 +15,7 @@ pub use lifecycle::{
     reset_tombstones, tick_node, unban,
 };
 pub use links::build_proxy_link;
+pub use selection::{Assignments, MasterChange, SelectionResult, Slot, queue_order, select};
 pub use settings::{GlobalpingSettings, ProxyUser, Settings, SettingsError, SrmdSettings};
 pub use types::{
     EngineKind, Generation, IdError, NodeId, NodeState, OwnerId, Ts, is_public_ipv4, mask_ip,
