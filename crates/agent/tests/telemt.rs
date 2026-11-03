@@ -1,0 +1,1340 @@
+//! The telemt adapter: the Prometheus parser, the DC2 check and the configuration transaction,
+//! all against the real telemt 3.5.16 answers recorded in `tests/fixtures/telemt` and scripted
+//! hosts. Nothing here runs a command or touches the real file system.
+
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
+
+use mtpool_agent::engine::dc2;
+use mtpool_agent::engine::http::testing::ScriptedHttp;
+use mtpool_agent::engine::http::{HttpGet, HttpResponse};
+use mtpool_agent::engine::prom::{self, parse_prometheus};
+use mtpool_agent::engine::telemt::{TelemtEngine, TelemtToml, metrics_url};
+use mtpool_agent::engine::{ApplyOutcome, DesiredConfig, Engine, EngineError, EngineKind};
+use mtpool_agent::host::testing::ScriptedRunner;
+use mtpool_agent::lifecycle::{ConfigSink, DetectedEngine, EngineProbe};
+use mtpool_agent::state_files::{Fs, MemFs};
+use mtpool_protocol::agent::{AgentConfig, AgentUser, Dc2Report, Intervals};
+use serde_json::{Value, json};
+
+const METRICS: &str = include_str!("fixtures/telemt/metrics.txt");
+const METRICS_USER_OFF: &str = include_str!("fixtures/telemt/metrics_user_telemetry_off.txt");
+const DCS: &str = include_str!("fixtures/telemt/dcs.json");
+const DCS_ME_DISABLED: &str = include_str!("fixtures/telemt/dcs_me_disabled.json");
+const TOML: &str = include_str!("fixtures/telemt/telemt.toml");
+
+const CONFIG: &str = "/etc/telemt/telemt.toml";
+const BACKUP: &str = "/etc/telemt/telemt.toml.bak";
+const STATE_DIR: &str = "/state";
+const POOL_USERS: &str = "/state/pool_users.json";
+const METRICS_URL: &str = "http://127.0.0.1:9090/metrics";
+const DCS_URL: &str = "http://127.0.0.1:9091/v1/stats/dcs";
+/// The second the recorded `dcs.json` was generated at.
+const DCS_AT: u64 = 1_793_732_062;
+
+const ALICE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const BOB: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const OWNER: &str = "cccccccccccccccccccccccccccccccc";
+
+fn ok(body: &str) -> Result<HttpResponse, String> {
+    Ok(HttpResponse {
+        status: 200,
+        body: body.to_owned(),
+    })
+}
+
+/// The recorded config with the control API switched off: telemt answers on it by default, so
+/// the only way to have none is `enabled = false`.
+fn without_api() -> String {
+    let off = TOML.replace(
+        "[server.api]\nenabled = true\n",
+        "[server.api]\nenabled = false\n",
+    );
+    assert_ne!(off, TOML);
+    off
+}
+
+/// The recorded config with the owner's own user and a comment of the owner's added.
+fn owner_config() -> String {
+    format!("{TOML}owner = \"{OWNER}\" # the owner's own user, not the pool's\n")
+}
+
+fn desired(users: &[(&str, &str)], sni: &str, port: u16) -> DesiredConfig {
+    DesiredConfig {
+        users: users
+            .iter()
+            .map(|(name, secret)| ((*name).to_owned(), (*secret).to_owned()))
+            .collect(),
+        sni: sni.to_owned(),
+        port,
+    }
+}
+
+struct Rig<H: HttpGet + 'static> {
+    fs: Arc<MemFs>,
+    runner: Arc<ScriptedRunner>,
+    http: Arc<H>,
+    engine: TelemtEngine<ScriptedRunner, H>,
+}
+
+impl<H: HttpGet + 'static> Rig<H> {
+    fn config_text(&self) -> String {
+        String::from_utf8(self.fs.read(Path::new(CONFIG)).unwrap().unwrap()).unwrap()
+    }
+    fn file(&self, path: &str) -> Option<String> {
+        self.fs
+            .read(Path::new(path))
+            .unwrap()
+            .map(|bytes| String::from_utf8(bytes).unwrap())
+    }
+    fn pool_users(&self) -> Option<Vec<String>> {
+        self.file(POOL_USERS)
+            .map(|text| serde_json::from_str(&text).unwrap())
+    }
+    /// The `systemctl` calls as `verb unit` strings.
+    fn systemctl(&self) -> Vec<String> {
+        self.runner
+            .calls()
+            .iter()
+            .map(|call| {
+                assert_eq!(call.program, "systemctl");
+                call.args.join(" ")
+            })
+            .collect()
+    }
+}
+
+fn rig_with<H: HttpGet + 'static>(
+    config: Option<&str>,
+    state: Option<&str>,
+    http: impl FnOnce(&Arc<MemFs>) -> H,
+) -> Rig<H> {
+    let fs = Arc::new(MemFs::new());
+    if let Some(config) = config {
+        fs.write_private(Path::new(CONFIG), config.as_bytes())
+            .unwrap();
+    }
+    if let Some(state) = state {
+        fs.write_private(Path::new(POOL_USERS), state.as_bytes())
+            .unwrap();
+    }
+    let runner = Arc::new(ScriptedRunner::new());
+    let http = Arc::new(http(&fs));
+    let engine = TelemtEngine::new(
+        CONFIG.into(),
+        "telemt.service",
+        STATE_DIR.into(),
+        runner.clone(),
+        fs.clone(),
+        http.clone(),
+    )
+    .with_clock(|| DCS_AT + 10);
+    Rig {
+        fs,
+        runner,
+        http,
+        engine,
+    }
+}
+
+fn rig(config: &str, state: Option<&str>) -> Rig<ScriptedHttp> {
+    rig_with(Some(config), state, |_| {
+        let http = ScriptedHttp::new();
+        http.always(METRICS_URL, ok(METRICS));
+        http
+    })
+}
+
+/// `systemctl stop` and `start` both succeed.
+fn script_restart(runner: &ScriptedRunner) {
+    runner.push_output(0, b"");
+    runner.push_output(0, b"");
+}
+
+// ---------------------------------------------------------------------------------------------
+// The Prometheus parser and the metrics report
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn parses_writers_and_user_metrics() {
+    let samples = parse_prometheus(METRICS);
+    assert!(samples.len() > 500, "{} samples", samples.len());
+    let build = samples
+        .iter()
+        .find(|s| s.name == "telemt_build_info")
+        .unwrap();
+    assert_eq!(build.label("version"), Some("3.5.16"));
+    assert_eq!(
+        prom::first(&samples, "telemt_me_writers_active_current"),
+        Some(0.0)
+    );
+    assert_eq!(
+        prom::sum(&samples, "telemt_user_unique_ips_current"),
+        Some(0.0)
+    );
+    assert_eq!(prom::first(&samples, "telemt_no_such_metric"), None);
+    assert_eq!(prom::sum(&samples, "telemt_no_such_metric"), None);
+
+    // The recorded run had no client traffic, so per-user series with traffic are the format of
+    // the recorded series with numbers in them.
+    let text = r#"
+# HELP telemt_me_writers_active_current Current non-draining active ME writers
+# TYPE telemt_me_writers_active_current gauge
+telemt_me_writers_active_current 3
+telemt_user_unique_ips_current{user="alice"} 2
+telemt_user_unique_ips_current{user="bob"} 1
+telemt_user_octets_from_client_total{user="alice"} 1500
+telemt_user_octets_from_client_total{user="bob"} 500
+telemt_user_octets_to_client_total{user="alice"} 9000
+telemt_user_octets_to_client_total{user="bob"} 1000
+"#;
+    let samples = parse_prometheus(text);
+    assert_eq!(
+        prom::first(&samples, "telemt_me_writers_active_current"),
+        Some(3.0)
+    );
+    assert_eq!(
+        prom::sum(&samples, "telemt_user_unique_ips_current"),
+        Some(3.0)
+    );
+    assert_eq!(
+        samples
+            .iter()
+            .filter(|s| s.name == "telemt_user_octets_from_client_total")
+            .map(|s| s.label("user").unwrap())
+            .collect::<Vec<_>>(),
+        ["alice", "bob"]
+    );
+}
+
+#[test]
+fn parser_handles_escapes_specials_timestamps_and_noise() {
+    let text = concat!(
+        "# a comment\n",
+        "\n",
+        "plain 1.5\n",
+        "with_ts 7 1700000000000\n",
+        "escaped{user=\"a\\\"b\\\\c\\nd\",zone=\"x\"} 2\n",
+        "spaced { k = \"v\" } 3\n",
+        "nan_value NaN\n",
+        "inf_value +Inf\n",
+        "exp 1e3\n",
+        "broken{user=\"unterminated} 4\n",
+        "no_value\n",
+        "bad_value abc\n",
+        "trailing 5\r\n",
+    );
+    let samples = parse_prometheus(text);
+    let by = |name: &str| samples.iter().find(|s| s.name == name).unwrap();
+    assert_eq!(by("plain").value, 1.5);
+    assert_eq!(by("with_ts").value, 7.0);
+    let escaped = by("escaped");
+    assert_eq!(escaped.label("user"), Some("a\"b\\c\nd"));
+    assert_eq!(escaped.label("zone"), Some("x"));
+    assert_eq!(escaped.value, 2.0);
+    assert_eq!(by("spaced").label("k"), Some("v"));
+    assert!(by("nan_value").value.is_nan());
+    assert_eq!(by("inf_value").value, f64::INFINITY);
+    assert_eq!(by("exp").value, 1000.0);
+    assert_eq!(by("trailing").value, 5.0);
+    for name in ["broken", "no_value", "bad_value"] {
+        assert!(
+            samples.iter().all(|s| s.name != name),
+            "{name} is not a sample"
+        );
+    }
+    // A sum never turns into NaN because of one bad series.
+    let with_nan = parse_prometheus("m 1\nm NaN\nm 2\n");
+    assert_eq!(prom::sum(&with_nan, "m"), Some(3.0));
+}
+
+fn with_users(extra: &str) -> String {
+    format!("{METRICS}{extra}")
+}
+
+#[tokio::test]
+async fn metrics_report_from_the_recorded_answer() {
+    let rig = rig(TOML, None);
+    let report = rig.engine.metrics().await.unwrap();
+    // The recording has no client traffic and one user without a connection.
+    assert_eq!(report.from_client_total, 0);
+    assert_eq!(report.to_client_total, 0);
+    assert_eq!(report.clients, Some(0));
+    assert!(report.ok);
+    assert_eq!(rig.http.requests().len(), 1);
+    assert_eq!(rig.http.requests()[0].url, METRICS_URL);
+    assert_eq!(rig.http.requests()[0].authorization, None);
+}
+
+#[tokio::test]
+async fn octets_with_and_without_total_suffix() {
+    let with_total = with_users(concat!(
+        "telemt_user_octets_from_client_total{user=\"alice\"} 1500\n",
+        "telemt_user_octets_from_client_total{user=\"bob\"} 500\n",
+        "telemt_user_octets_to_client_total{user=\"alice\"} 9000\n",
+        "telemt_user_octets_to_client_total{user=\"bob\"} 1000\n",
+        "telemt_user_unique_ips_current{user=\"alice\"} 2\n",
+        "telemt_user_unique_ips_current{user=\"bob\"} 1\n",
+    ));
+    let without_total = with_users(concat!(
+        "telemt_user_octets_from_client{user=\"alice\"} 1500\n",
+        "telemt_user_octets_from_client{user=\"bob\"} 500\n",
+        "telemt_user_octets_to_client{user=\"alice\"} 9000\n",
+        "telemt_user_octets_to_client{user=\"bob\"} 1000\n",
+        "telemt_user_unique_ips_current{user=\"alice\"} 2\n",
+        "telemt_user_unique_ips_current{user=\"bob\"} 1\n",
+    ));
+    // An engine that exported both spellings would be counted once.
+    let both = format!(
+        "{with_total}telemt_user_octets_from_client{{user=\"alice\"}} 1500\ntelemt_user_octets_to_client{{user=\"alice\"}} 9000\n"
+    );
+    for body in [with_total, without_total, both] {
+        let rig = rig_with(Some(TOML), None, |_| {
+            let http = ScriptedHttp::new();
+            http.always(METRICS_URL, ok(&body));
+            http
+        });
+        let report = rig.engine.metrics().await.unwrap();
+        assert_eq!(report.from_client_total, 2000, "{body:.0}");
+        assert_eq!(report.to_client_total, 10_000);
+        assert_eq!(report.clients, Some(3));
+        assert!(report.ok);
+    }
+}
+
+#[tokio::test]
+async fn metrics_ok_follows_the_middle_proxy_writers_without_a_control_api() {
+    let no_api = without_api();
+    assert!(!TelemtToml::parse(&no_api).unwrap().control_api().is_some());
+
+    // Writers at 0 and nothing else to say how telemt does: not serving.
+    let rig_down = rig(&no_api, None);
+    assert!(!rig_down.engine.metrics().await.unwrap().ok);
+
+    let serving = METRICS.replace(
+        "telemt_me_writers_active_current 0",
+        "telemt_me_writers_active_current 2",
+    );
+    let rig_up = rig_with(Some(&no_api), None, |_| {
+        let http = ScriptedHttp::new();
+        http.always(METRICS_URL, ok(&serving));
+        http
+    });
+    assert!(rig_up.engine.metrics().await.unwrap().ok);
+
+    // Without the middle proxy there are no writers to wait for.
+    let direct = no_api.replace("use_middle_proxy = true", "use_middle_proxy = false");
+    assert!(rig(&direct, None).engine.metrics().await.unwrap().ok);
+}
+
+#[tokio::test]
+async fn metrics_errors_are_reported_not_hidden() {
+    // No answer at all.
+    let rig_down = rig_with(Some(TOML), None, |_| ScriptedHttp::new());
+    assert!(matches!(
+        rig_down.engine.metrics().await,
+        Err(EngineError::Http(_))
+    ));
+    // An error status is not metrics.
+    let rig_500 = rig_with(Some(TOML), None, |_| {
+        let http = ScriptedHttp::new();
+        http.always(
+            METRICS_URL,
+            Ok(HttpResponse {
+                status: 503,
+                body: METRICS.to_owned(),
+            }),
+        );
+        http
+    });
+    assert!(matches!(
+        rig_500.engine.metrics().await,
+        Err(EngineError::Http(_))
+    ));
+    // A page that is not metrics.
+    let rig_html = rig_with(Some(TOML), None, |_| {
+        let http = ScriptedHttp::new();
+        http.always(METRICS_URL, ok("<html>hello</html>"));
+        http
+    });
+    assert!(matches!(
+        rig_html.engine.metrics().await,
+        Err(EngineError::Http(_))
+    ));
+    // No configuration, no engine.
+    let rig_none = rig_with(None, None, |_| ScriptedHttp::new());
+    assert!(matches!(
+        rig_none.engine.metrics().await,
+        Err(EngineError::Config(_))
+    ));
+}
+
+#[test]
+fn metrics_url_listen_over_port_over_default_9090() {
+    let url = |toml: &str| metrics_url(&TelemtToml::parse(toml).unwrap());
+    // `[server] metrics_listen` wins over `metrics_port`.
+    assert_eq!(
+        url("[server]\nmetrics_listen = \"127.0.0.1:9188\"\nmetrics_port = 9100\n"),
+        "http://127.0.0.1:9188/metrics"
+    );
+    assert_eq!(
+        url("[server]\nmetrics_listen = \"10.1.2.3:9188\"\n"),
+        "http://10.1.2.3:9188/metrics"
+    );
+    // A wildcard bind is reached on the loopback.
+    assert_eq!(
+        url("[server]\nmetrics_listen = \"0.0.0.0:9188\"\n"),
+        "http://127.0.0.1:9188/metrics"
+    );
+    assert_eq!(
+        url("[server]\nmetrics_listen = \"[::]:9188\"\n"),
+        "http://[::1]:9188/metrics"
+    );
+    // `metrics_port` is served on the loopback.
+    assert_eq!(
+        url("[server]\nmetrics_port = 9100\n"),
+        "http://127.0.0.1:9100/metrics"
+    );
+    // Neither: the default.
+    assert_eq!(
+        url("[server]\nport = 8443\n"),
+        "http://127.0.0.1:9090/metrics"
+    );
+    assert_eq!(url(""), "http://127.0.0.1:9090/metrics");
+    // The recorded config.
+    assert_eq!(url(TOML), METRICS_URL);
+    // A listen address that is not an address is not used.
+    assert_eq!(
+        url("[server]\nmetrics_listen = \"not an address\"\nmetrics_port = 9100\n"),
+        "http://127.0.0.1:9100/metrics"
+    );
+}
+
+#[test]
+fn telemt_toml_reads_what_the_agent_needs() {
+    let toml = TelemtToml::parse(TOML).unwrap();
+    assert_eq!(toml.port(), 8443);
+    assert_eq!(toml.tls_domain().as_deref(), Some("example.com"));
+    assert_eq!(
+        toml.users(),
+        [(
+            "probe".to_owned(),
+            "00112233445566778899aabbccddeeff".to_owned()
+        )]
+    );
+    assert!(toml.user_telemetry_enabled());
+    let api = toml.control_api().unwrap();
+    assert_eq!(api.base, "http://127.0.0.1:9091");
+    assert_eq!(api.authorization, None);
+
+    // The defaults of telemt: port 443, user telemetry on, a control API only when the table is
+    // there.
+    let bare = TelemtToml::parse("").unwrap();
+    assert_eq!(bare.port(), 443);
+    assert_eq!(bare.tls_domain(), None);
+    assert!(bare.users().is_empty());
+    assert!(bare.user_telemetry_enabled());
+    // telemt serves its control API on 0.0.0.0:9091 unless it is switched off.
+    let api = bare.control_api().unwrap();
+    assert_eq!(api.base, "http://127.0.0.1:9091");
+    assert_eq!(api.authorization, None);
+
+    let off = TelemtToml::parse("[general.telemetry]\nuser_enabled = false\n").unwrap();
+    assert!(!off.user_telemetry_enabled());
+
+    // The legacy name of the table, a wildcard bind and a header.
+    let legacy = TelemtToml::parse(
+        "[server.admin_api]\nlisten = \"0.0.0.0:9191\"\nauth_header = \"Bearer test-value\"\n",
+    )
+    .unwrap();
+    let api = legacy.control_api().unwrap();
+    assert_eq!(api.base, "http://127.0.0.1:9191");
+    assert_eq!(api.authorization.as_deref(), Some("Bearer test-value"));
+    // An empty header means no header; a disabled API is not configured.
+    let empty = TelemtToml::parse("[server.api]\nauth_header = \"\"\n").unwrap();
+    assert_eq!(empty.control_api().unwrap().authorization, None);
+    assert_eq!(empty.control_api().unwrap().base, "http://127.0.0.1:9091");
+    let disabled = TelemtToml::parse("[server.api]\nenabled = false\n").unwrap();
+    assert!(disabled.control_api().is_none());
+
+    assert!(matches!(
+        TelemtToml::parse("[server\nport ="),
+        Err(EngineError::Config(_))
+    ));
+}
+
+// ---------------------------------------------------------------------------------------------
+// DC2
+// ---------------------------------------------------------------------------------------------
+
+/// The recorded `dcs.json` changed by `edit`.
+fn dcs_with(edit: impl FnOnce(&mut Value)) -> String {
+    let mut value: Value = serde_json::from_str(DCS).unwrap();
+    edit(&mut value);
+    value.to_string()
+}
+
+fn dc2_entry(value: &mut Value) -> &mut Value {
+    value["data"]["dcs"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|dc| dc["dc"] == 2)
+        .unwrap()
+}
+
+fn healthy_dcs() -> String {
+    dcs_with(|value| {
+        let dc = dc2_entry(value);
+        dc["available_endpoints"] = json!(1);
+        dc["alive_writers"] = json!(2);
+        dc["fresh_alive_writers"] = json!(2);
+    })
+}
+
+#[test]
+fn dc2_reasons() {
+    let at = DCS_AT;
+    let cases: Vec<(&str, Result<String, ()>, u64, Dc2Report)> = vec![
+        (
+            "healthy",
+            Ok(healthy_dcs()),
+            at,
+            Dc2Report {
+                ok: true,
+                reason: None,
+            },
+        ),
+        ("the api did not answer", Err(()), at, fail(dc2::API_ERROR)),
+        (
+            "the answer is not json",
+            Ok("<html>".into()),
+            at,
+            fail(dc2::API_ERROR),
+        ),
+        (
+            "the api says not ok",
+            Ok(dcs_with(|v| v["ok"] = json!(false))),
+            at,
+            fail(dc2::API_ERROR),
+        ),
+        (
+            "no data in the answer",
+            Ok(r#"{"ok":true}"#.into()),
+            at,
+            fail(dc2::API_ERROR),
+        ),
+        (
+            "middle proxy is off (recorded answer)",
+            Ok(DCS_ME_DISABLED.into()),
+            1_793_732_129,
+            fail(dc2::ME_DISABLED),
+        ),
+        (
+            "snapshot a second over 300 old",
+            Ok(healthy_dcs()),
+            at + 301,
+            fail(dc2::STALE),
+        ),
+        (
+            "snapshot exactly 300 old is still good",
+            Ok(healthy_dcs()),
+            at + 300,
+            Dc2Report {
+                ok: true,
+                reason: None,
+            },
+        ),
+        (
+            "snapshot a second over 120 ahead",
+            Ok(healthy_dcs()),
+            at - 121,
+            fail(dc2::STALE),
+        ),
+        (
+            "snapshot exactly 120 ahead is still good",
+            Ok(healthy_dcs()),
+            at - 120,
+            Dc2Report {
+                ok: true,
+                reason: None,
+            },
+        ),
+        (
+            "no time in the snapshot",
+            Ok(dcs_with(|v| {
+                v["data"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("generated_at_epoch_secs");
+            })),
+            at,
+            fail(dc2::STALE),
+        ),
+        (
+            "dc 2 is not in the answer",
+            Ok(dcs_with(|v| {
+                v["data"]["dcs"]
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|dc| dc["dc"] != 2);
+            })),
+            at,
+            fail(dc2::ABSENT),
+        ),
+        (
+            "dc 2 has no endpoints",
+            Ok(dcs_with(|v| dc2_entry(v)["endpoints"] = json!([]))),
+            at,
+            fail(dc2::NO_ENDPOINTS),
+        ),
+        (
+            "dc 2 has no fresh writer",
+            Ok(dcs_with(|v| {
+                let dc = dc2_entry(v);
+                dc["fresh_alive_writers"] = json!(0);
+                dc["alive_writers"] = json!(2);
+            })),
+            at,
+            fail(dc2::NO_FRESH),
+        ),
+        (
+            "the recorded answer: endpoints known, nothing alive",
+            Ok(DCS.into()),
+            at,
+            fail(dc2::NO_FRESH),
+        ),
+    ];
+    for (what, answer, now, expected) in cases {
+        let body = match &answer {
+            Ok(body) => Ok(body.as_str()),
+            Err(()) => Err(()),
+        };
+        let got = dc2::evaluate(body, now);
+        assert_eq!(got, expected, "{what}");
+    }
+    // The strings the registrar and the spec know.
+    assert_eq!(
+        [
+            dc2::API_ERROR,
+            dc2::ME_DISABLED,
+            dc2::STALE,
+            dc2::ABSENT,
+            dc2::NO_ENDPOINTS,
+            dc2::NO_FRESH
+        ],
+        [
+            "dc2_api_error",
+            "dc2_me_disabled",
+            "dc2_stale",
+            "dc2_absent",
+            "dc2_no_endpoints",
+            "dc2_no_fresh"
+        ]
+    );
+}
+
+fn fail(reason: &str) -> Dc2Report {
+    Dc2Report {
+        ok: false,
+        reason: Some(reason.to_owned()),
+    }
+}
+
+#[tokio::test]
+async fn dc2_asks_the_control_api_with_its_header() {
+    let config = TOML.replace(
+        "listen = \"127.0.0.1:9091\"\n",
+        "listen = \"127.0.0.1:9091\"\nauth_header = \"Bearer test-value\"\n",
+    );
+    let rig = rig_with(Some(&config), None, |_| {
+        let http = ScriptedHttp::new();
+        http.always(DCS_URL, ok(&healthy_dcs()));
+        http
+    });
+    let report = rig.engine.dc2().await.unwrap();
+    assert_eq!(
+        report,
+        Dc2Report {
+            ok: true,
+            reason: None
+        }
+    );
+    let requests = rig.http.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url, DCS_URL);
+    assert_eq!(
+        requests[0].authorization.as_deref(),
+        Some("Bearer test-value")
+    );
+}
+
+#[tokio::test]
+async fn dc2_failures_of_the_api_are_a_reason_not_an_error() {
+    let down = rig_with(Some(TOML), None, |_| ScriptedHttp::new());
+    assert_eq!(down.engine.dc2().await, Some(fail(dc2::API_ERROR)));
+    let forbidden = rig_with(Some(TOML), None, |_| {
+        let http = ScriptedHttp::new();
+        http.always(
+            DCS_URL,
+            Ok(HttpResponse {
+                status: 401,
+                body: healthy_dcs(),
+            }),
+        );
+        http
+    });
+    assert_eq!(forbidden.engine.dc2().await, Some(fail(dc2::API_ERROR)));
+}
+
+#[tokio::test]
+async fn dc2_asks_the_default_control_api_when_the_config_has_no_table() {
+    let bare = "[server]\nport = 8443\nmetrics_port = 9090\n\n[access.users]\nprobe = \"00112233445566778899aabbccddeeff\"\n";
+    assert!(!bare.contains("api"));
+    let rig = rig_with(Some(bare), None, |_| {
+        let http = ScriptedHttp::new();
+        http.always(DCS_URL, ok(&healthy_dcs()));
+        http
+    });
+    assert_eq!(
+        rig.engine.dc2().await,
+        Some(Dc2Report {
+            ok: true,
+            reason: None
+        })
+    );
+    let requests = rig.http.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url, DCS_URL);
+    assert_eq!(requests[0].authorization, None);
+}
+
+#[tokio::test]
+async fn dc2_is_not_checked_without_a_control_api() {
+    let no_api = without_api();
+    let rig = rig(&no_api, None);
+    assert_eq!(rig.engine.dc2().await, None);
+    assert!(rig.http.requests().is_empty());
+    // No configuration: nothing to ask either.
+    let none = rig_with(None, None, |_| ScriptedHttp::new());
+    assert_eq!(none.engine.dc2().await, None);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Health
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn user_telemetry_disabled_is_reported() {
+    let config = TOML.replace("user_enabled = true", "user_enabled = false");
+    let rig = rig_with(Some(&config), None, |_| {
+        let http = ScriptedHttp::new();
+        http.always(METRICS_URL, ok(METRICS_USER_OFF));
+        http
+    });
+    // Without per-user statistics there are no clients and no traffic to report.
+    let report = rig.engine.metrics().await.unwrap();
+    assert!(report.ok);
+    assert_eq!(report.clients, None);
+    assert_eq!(report.from_client_total, 0);
+    assert_eq!(report.to_client_total, 0);
+    // The engine works, but something is lost: ok with a reason.
+    let health = rig.engine.health().await;
+    assert!(health.ok);
+    assert_eq!(health.reason.as_deref(), Some("user_telemetry_disabled"));
+
+    // The engine's own switch is what counts: the gauge in `/metrics` says it is off even if the
+    // file the agent read says it is on.
+    let rig_gauge = rig_with(Some(TOML), None, |_| {
+        let http = ScriptedHttp::new();
+        http.always(METRICS_URL, ok(METRICS_USER_OFF));
+        http
+    });
+    assert_eq!(rig_gauge.engine.metrics().await.unwrap().clients, None);
+    assert_eq!(
+        rig_gauge.engine.health().await.reason.as_deref(),
+        Some("user_telemetry_disabled")
+    );
+
+    // With it on there is nothing to warn about.
+    let healthy = self::rig(TOML, None).engine.health().await;
+    assert!(healthy.ok);
+    assert_eq!(healthy.reason, None);
+}
+
+#[tokio::test]
+async fn health_is_not_ok_when_metrics_do_not_answer_or_no_writers_serve() {
+    let down = rig_with(Some(TOML), None, |_| ScriptedHttp::new());
+    let health = down.engine.health().await;
+    assert!(!health.ok);
+    assert_eq!(health.reason.as_deref(), Some("metrics_unreachable"));
+
+    let no_api = without_api();
+    let idle = rig(&no_api, None).engine.health().await;
+    assert!(!idle.ok);
+    assert_eq!(idle.reason.as_deref(), Some("no_me_writers"));
+}
+
+#[test]
+fn the_engine_is_telemt_and_can_be_used_as_a_trait_object() {
+    let rig = rig(TOML, None);
+    let engine: Arc<dyn Engine> = Arc::new(rig.engine);
+    assert_eq!(engine.kind(), EngineKind::Telemt);
+    assert_eq!(engine.port(), Some(8443));
+}
+
+#[tokio::test]
+async fn detect_reads_the_port_from_the_engine_config() {
+    let rig = rig(TOML, None);
+    assert_eq!(
+        rig.engine.detect().await,
+        Some(DetectedEngine {
+            engine: EngineKind::Telemt,
+            port: 8443
+        })
+    );
+    let none = rig_with(None, None, |_| ScriptedHttp::new());
+    assert_eq!(none.engine.detect().await, None);
+    assert_eq!(none.engine.port(), None);
+    let broken = rig_with(Some("[server\nport ="), None, |_| ScriptedHttp::new());
+    assert_eq!(broken.engine.detect().await, None);
+}
+
+// ---------------------------------------------------------------------------------------------
+// apply_config
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn apply_preserves_comments_and_foreign_users() {
+    let old = owner_config();
+    let rig = rig(&old, None);
+    script_restart(&rig.runner);
+
+    let outcome = rig
+        .engine
+        .apply_config(&desired(
+            &[("alice", ALICE), ("bob", BOB)],
+            "cdn.example.org",
+            9443,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(outcome, ApplyOutcome::Applied);
+
+    let new = rig.config_text();
+    // Everything but the two changed values is untouched, comments and layout included.
+    for line in old.lines() {
+        if line.starts_with("port = ") || line.starts_with("tls_domain = ") {
+            continue;
+        }
+        assert!(new.lines().any(|l| l == line), "lost: {line}");
+    }
+    assert!(new.contains("# telemt 3.5.16 test config for recording fixtures"));
+    assert!(new.contains(&format!(
+        "owner = \"{OWNER}\" # the owner's own user, not the pool's"
+    )));
+    let parsed = TelemtToml::parse(&new).unwrap();
+    assert_eq!(parsed.port(), 9443);
+    assert_eq!(parsed.tls_domain().as_deref(), Some("cdn.example.org"));
+    let users = parsed.users();
+    for expected in [("alice", ALICE), ("bob", BOB), ("owner", OWNER)] {
+        assert!(
+            users.contains(&(expected.0.to_owned(), expected.1.to_owned())),
+            "{expected:?}"
+        );
+    }
+    // The user that was in the file before the pool came is still there.
+    assert!(users.iter().any(|(name, _)| name == "probe"));
+
+    // The old file is kept next to the new one, the pool remembers the names it wrote.
+    assert_eq!(rig.file(BACKUP).as_deref(), Some(old.as_str()));
+    assert_eq!(
+        rig.pool_users(),
+        Some(vec!["alice".to_owned(), "bob".to_owned()])
+    );
+    // The engine was stopped, written, started, and asked for its metrics.
+    assert_eq!(
+        rig.systemctl(),
+        ["stop telemt.service", "start telemt.service"]
+    );
+    assert!(rig.http.requests().iter().any(|r| r.url == METRICS_URL));
+    // Nothing is left of the temporary file.
+    assert_eq!(rig.file("/etc/telemt/telemt.toml.tmp"), None);
+}
+
+#[tokio::test]
+async fn apply_removes_revoked_pool_user_keeps_owner_user() {
+    let config = format!("{}alice = \"{ALICE}\"\nbob = \"{BOB}\"\n", owner_config());
+    let rig = rig(&config, Some(r#"["alice","bob"]"#));
+    script_restart(&rig.runner);
+
+    // The pool revoked bob; alice's secret was rotated.
+    let new_alice = "dddddddddddddddddddddddddddddddd";
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("alice", new_alice)], "example.com", 8443))
+        .await
+        .unwrap();
+    assert_eq!(outcome, ApplyOutcome::Applied);
+
+    let users = TelemtToml::parse(&rig.config_text()).unwrap().users();
+    let names: Vec<&str> = users.iter().map(|(name, _)| name.as_str()).collect();
+    assert!(!names.contains(&"bob"), "{names:?}");
+    assert!(names.contains(&"owner"), "{names:?}");
+    assert!(names.contains(&"probe"), "{names:?}");
+    assert!(users.contains(&("alice".to_owned(), new_alice.to_owned())));
+    assert!(users.contains(&("owner".to_owned(), OWNER.to_owned())));
+    assert_eq!(rig.pool_users(), Some(vec!["alice".to_owned()]));
+}
+
+#[tokio::test]
+async fn a_user_the_pool_never_wrote_is_never_removed() {
+    // The state file is missing (a fresh node): the pool owns nothing yet.
+    let rig = rig(&owner_config(), None);
+    script_restart(&rig.runner);
+    rig.engine
+        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .await
+        .unwrap();
+    let names: Vec<String> = TelemtToml::parse(&rig.config_text())
+        .unwrap()
+        .users()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(names, ["probe", "owner", "alice"]);
+}
+
+#[tokio::test]
+async fn apply_noop_when_unchanged_no_restart() {
+    let config = format!(
+        "{}alice = \"{ALICE}\"\n",
+        owner_config().replace("port = 8443", "port = 9443")
+    )
+    .replace(
+        "tls_domain = \"example.com\"",
+        "tls_domain = \"cdn.example.org\"",
+    );
+    let rig = rig(&config, Some(r#"["alice"]"#));
+
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org", 9443))
+        .await
+        .unwrap();
+    assert_eq!(outcome, ApplyOutcome::Unchanged);
+    assert!(rig.runner.calls().is_empty(), "nothing is restarted");
+    assert!(rig.http.requests().is_empty());
+    assert_eq!(rig.config_text(), config, "the file is not rewritten");
+    assert_eq!(rig.file(BACKUP), None);
+    assert_eq!(rig.pool_users(), Some(vec!["alice".to_owned()]));
+}
+
+#[tokio::test]
+async fn apply_unchanged_still_remembers_the_pool_users() {
+    // The pool's user is already in the file (installed by hand): no restart, but from now on the
+    // pool owns the name and removes it when it is revoked.
+    let config = format!("{}alice = \"{ALICE}\"\n", owner_config());
+    let rig = rig(&config, None);
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .await
+        .unwrap();
+    assert_eq!(outcome, ApplyOutcome::Unchanged);
+    assert!(rig.runner.calls().is_empty());
+    assert_eq!(rig.pool_users(), Some(vec!["alice".to_owned()]));
+}
+
+/// An engine that answers its metrics unless its configuration holds `marker`: the new
+/// configuration is what breaks it.
+struct BrokenWith {
+    fs: Arc<MemFs>,
+    marker: &'static str,
+    requests: std::sync::atomic::AtomicUsize,
+}
+
+impl HttpGet for BrokenWith {
+    async fn get(&self, _url: &str, _authorization: Option<&str>) -> Result<HttpResponse, String> {
+        self.requests
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let config = String::from_utf8(self.fs.read(Path::new(CONFIG)).unwrap().unwrap()).unwrap();
+        if config.contains(self.marker) {
+            Err("connection refused".into())
+        } else {
+            ok(METRICS)
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn apply_rollback_when_metrics_not_ready_60s() {
+    let old = owner_config();
+    let rig = rig_with(Some(&old), Some(r#"["alice"]"#), |fs| BrokenWith {
+        fs: fs.clone(),
+        marker: "port = 9443",
+        requests: 0.into(),
+    });
+    // stop, start (new), then the same again for the old file.
+    for _ in 0..2 {
+        script_restart(&rig.runner);
+    }
+
+    let started = tokio::time::Instant::now();
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org", 9443))
+        .await
+        .unwrap();
+    let waited = started.elapsed();
+
+    let ApplyOutcome::RolledBack(reason) = outcome else {
+        panic!("expected a rollback, got {outcome:?}");
+    };
+    assert!(reason.contains("60"), "{reason}");
+    assert!(
+        waited >= Duration::from_secs(60) && waited < Duration::from_secs(70),
+        "waited {waited:?}"
+    );
+    // Polled every two seconds.
+    let polls = rig.http.requests.load(std::sync::atomic::Ordering::SeqCst);
+    assert!((30..=33).contains(&polls), "{polls} polls");
+
+    // The old file is back, byte for byte, and the engine runs on it.
+    assert_eq!(rig.config_text(), old);
+    assert_eq!(
+        rig.systemctl(),
+        [
+            "stop telemt.service",
+            "start telemt.service",
+            "stop telemt.service",
+            "start telemt.service"
+        ]
+    );
+    // What failed is not remembered as the pool's.
+    assert_eq!(rig.pool_users(), Some(vec!["alice".to_owned()]));
+}
+
+#[tokio::test(start_paused = true)]
+async fn apply_waits_for_the_metrics_and_succeeds_when_they_come() {
+    let rig = rig_with(Some(&owner_config()), None, |_| {
+        let http = ScriptedHttp::new();
+        // Not up for the first three polls.
+        for _ in 0..3 {
+            http.push(METRICS_URL, Err("connection refused".into()));
+        }
+        http.always(METRICS_URL, ok(METRICS));
+        http
+    });
+    script_restart(&rig.runner);
+    let started = tokio::time::Instant::now();
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .await
+        .unwrap();
+    assert_eq!(outcome, ApplyOutcome::Applied);
+    let waited = started.elapsed();
+    assert!(
+        waited >= Duration::from_secs(6) && waited < Duration::from_secs(10),
+        "{waited:?}"
+    );
+    assert_eq!(rig.http.requests().len(), 4);
+}
+
+#[tokio::test]
+async fn apply_rolls_back_when_the_engine_does_not_start() {
+    let old = owner_config();
+    let rig = rig(&old, None);
+    rig.runner.push_output(0, b""); // stop
+    rig.runner.push_output(1, b""); // start fails
+    script_restart(&rig.runner); // and back again
+
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .await
+        .unwrap();
+    let ApplyOutcome::RolledBack(reason) = outcome else {
+        panic!("expected a rollback");
+    };
+    assert!(reason.contains("start"), "{reason}");
+    assert_eq!(rig.config_text(), old);
+    assert_eq!(rig.pool_users(), None);
+    assert_eq!(rig.systemctl().len(), 4);
+}
+
+#[tokio::test(start_paused = true)]
+async fn apply_reports_a_rollback_that_fails_too() {
+    // The engine is broken whatever the file says.
+    let rig = rig_with(Some(&owner_config()), None, |_| ScriptedHttp::new());
+    for _ in 0..2 {
+        script_restart(&rig.runner);
+    }
+    let error = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, EngineError::RollbackFailed { .. }),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn apply_does_not_touch_the_file_when_the_engine_cannot_be_stopped() {
+    let old = owner_config();
+    let rig = rig(&old, None);
+    rig.runner.push_output(5, b""); // systemctl stop fails
+    let error = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, EngineError::Host(_)), "{error:?}");
+    assert_eq!(rig.config_text(), old);
+    assert_eq!(rig.file(BACKUP), None);
+    assert_eq!(rig.pool_users(), None);
+    assert_eq!(rig.runner.calls().len(), 1);
+}
+
+#[tokio::test]
+async fn apply_refuses_a_configuration_without_any_user() {
+    // The only user is the pool's, and the pool now wants none: telemt would not start.
+    let config =
+        "[server]\nport = 8443\n\n[access.users]\nalice = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n";
+    let rig = rig(config, Some(r#"["alice"]"#));
+    let error = rig
+        .engine
+        .apply_config(&desired(&[], "example.com", 8443))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, EngineError::Config(_)), "{error:?}");
+    assert!(rig.runner.calls().is_empty());
+    assert_eq!(rig.config_text(), config);
+}
+
+#[tokio::test]
+async fn apply_refuses_what_is_not_a_secret_or_a_domain() {
+    let rig = rig(&owner_config(), None);
+    for bad in [
+        desired(&[("alice", "not-hex")], "example.com", 8443),
+        desired(&[("a b", ALICE)], "example.com", 8443),
+        desired(&[("", ALICE)], "example.com", 8443),
+        desired(&[("alice", ALICE)], "", 8443),
+        desired(&[("alice", ALICE)], "example.com", 0),
+    ] {
+        let error = rig.engine.apply_config(&bad).await.unwrap_err();
+        assert!(
+            matches!(error, EngineError::Config(_)),
+            "{bad:?}: {error:?}"
+        );
+    }
+    assert!(rig.runner.calls().is_empty());
+}
+
+#[tokio::test]
+async fn apply_creates_the_missing_tables_and_updates_listener_ports() {
+    let config = concat!(
+        // No middle proxy: no writers to wait for, so the recorded metrics count as serving.
+        "[general]\nuse_middle_proxy = false\n\n",
+        "[server]\nmetrics_port = 9090\n\n",
+        "[[server.listeners]]\nip = \"0.0.0.0\"\nport = 8443\n\n",
+        "[[server.listeners]]\nip = \"::\"\n",
+    );
+    let rig = rig(config, None);
+    script_restart(&rig.runner);
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org", 9443))
+        .await
+        .unwrap();
+    assert_eq!(outcome, ApplyOutcome::Applied);
+    let new = rig.config_text();
+    let parsed: toml_edit::DocumentMut = new.parse().unwrap();
+    assert_eq!(parsed["server"]["port"].as_integer(), Some(9443));
+    assert_eq!(
+        parsed["censorship"]["tls_domain"].as_str(),
+        Some("cdn.example.org")
+    );
+    assert_eq!(parsed["access"]["users"]["alice"].as_str(), Some(ALICE));
+    let listeners = parsed["server"]["listeners"].as_array_of_tables().unwrap();
+    assert_eq!(listeners.get(0).unwrap()["port"].as_integer(), Some(9443));
+    // A listener without a port keeps following `[server] port`.
+    assert!(listeners.get(1).unwrap().get("port").is_none());
+}
+
+#[tokio::test]
+async fn apply_without_a_config_file_is_an_error_and_starts_nothing() {
+    let rig = rig_with(None, None, |_| ScriptedHttp::new());
+    let error = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, EngineError::Config(_)), "{error:?}");
+    assert!(rig.runner.calls().is_empty());
+}
+
+#[tokio::test]
+async fn apply_with_a_broken_state_file_keeps_nothing_it_cannot_prove() {
+    // An unreadable list of the pool's names: the pool removes nothing, it does not guess.
+    let config = format!("{}bob = \"{BOB}\"\n", owner_config());
+    let rig = rig(&config, Some("not json"));
+    script_restart(&rig.runner);
+    rig.engine
+        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .await
+        .unwrap();
+    let names: Vec<String> = TelemtToml::parse(&rig.config_text())
+        .unwrap()
+        .users()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert!(names.contains(&"bob".to_owned()), "{names:?}");
+    assert_eq!(rig.pool_users(), Some(vec!["alice".to_owned()]));
+}
+
+#[tokio::test(start_paused = true)]
+async fn apply_is_ready_when_the_metrics_answer_even_without_me_writers() {
+    // The middle proxy is on, the control API is off and no ME writer is up (its servers are
+    // slow or unreachable): telemt runs on the new file, so that is not a reason to roll back.
+    let config = without_api();
+    // The recorded answer has no ME writer.
+    let slow_me = METRICS;
+    let rig = rig_with(Some(&config), None, |_| {
+        let http = ScriptedHttp::new();
+        http.always(METRICS_URL, ok(slow_me));
+        http
+    });
+    script_restart(&rig.runner);
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org", 9443))
+        .await
+        .unwrap();
+    assert_eq!(outcome, ApplyOutcome::Applied);
+    assert_eq!(
+        rig.systemctl(),
+        ["stop telemt.service", "start telemt.service"]
+    );
+    assert_eq!(rig.http.requests().len(), 1, "ready at the first answer");
+    // The writer rule is for health, which still says it.
+    assert_eq!(
+        rig.engine.health().await.reason.as_deref(),
+        Some("no_me_writers")
+    );
+}
+
+const WITHOUT_METRICS_KEYS: &str = concat!(
+    "[server]\nport = 8443\n\n",
+    "[general]\nuse_middle_proxy = true\n\n",
+    "[access.users]\nprobe = \"00112233445566778899aabbccddeeff\"\n",
+);
+
+#[tokio::test]
+async fn apply_adds_a_metrics_listener_when_the_file_names_none() {
+    let rig = rig(WITHOUT_METRICS_KEYS, None);
+    script_restart(&rig.runner);
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .await
+        .unwrap();
+    assert_eq!(outcome, ApplyOutcome::Applied);
+    let new = rig.config_text();
+    let parsed: toml_edit::DocumentMut = new.parse().unwrap();
+    assert_eq!(
+        parsed["server"]["metrics_listen"].as_str(),
+        Some("127.0.0.1:9090")
+    );
+    assert!(parsed["server"].get("metrics_port").is_none());
+    // The address the agent reads is the one it wrote.
+    assert_eq!(metrics_url(&TelemtToml::parse(&new).unwrap()), METRICS_URL);
+
+    // The second time there is nothing to change.
+    let again = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .await
+        .unwrap();
+    assert_eq!(again, ApplyOutcome::Unchanged);
+    assert_eq!(rig.config_text(), new);
+    assert_eq!(rig.runner.calls().len(), 2);
+}
+
+#[tokio::test]
+async fn apply_leaves_the_metrics_keys_the_owner_set() {
+    for keys in [
+        "metrics_port = 9100\n",
+        "metrics_listen = \"127.0.0.1:9188\"\n",
+    ] {
+        let config = WITHOUT_METRICS_KEYS.replace("port = 8443\n", &format!("port = 8443\n{keys}"));
+        let rig = rig_with(Some(&config), None, |_| {
+            let http = ScriptedHttp::new();
+            http.always("http://127.0.0.1:9100/metrics", ok(METRICS));
+            http.always("http://127.0.0.1:9188/metrics", ok(METRICS));
+            http
+        });
+        script_restart(&rig.runner);
+        rig.engine
+            .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+            .await
+            .unwrap();
+        let new = rig.config_text();
+        assert!(new.contains(keys), "{new}");
+        assert_eq!(new.matches("metrics_").count(), 1, "{new}");
+    }
+}
+
+fn agent_config(users: &[(&str, &str)], sni: &str, port: u16) -> AgentConfig {
+    AgentConfig {
+        users: users
+            .iter()
+            .map(|(name, secret)| AgentUser {
+                name: (*name).to_owned(),
+                secret_hex: (*secret).to_owned(),
+            })
+            .collect(),
+        sni: sni.to_owned(),
+        port,
+        intervals: Intervals {
+            heartbeat_sec: 15,
+            globalping_sec: 300,
+            metrics_sec: 60,
+            sync_sec: 60,
+        },
+        antiscan: false,
+    }
+}
+
+#[tokio::test]
+async fn the_config_sink_applies_what_the_registrar_sent() {
+    let rig = rig(&owner_config(), None);
+    script_restart(&rig.runner);
+    rig.engine
+        .apply(&agent_config(&[("alice", ALICE)], "cdn.example.org", 9443))
+        .await;
+    let parsed = TelemtToml::parse(&rig.config_text()).unwrap();
+    assert_eq!(parsed.port(), 9443);
+    assert!(parsed.users().iter().any(|(name, _)| name == "alice"));
+    // A failure is logged, not raised: the lifecycle goes on and asks again next round.
+    let broken = rig_with(None, None, |_| ScriptedHttp::new());
+    broken
+        .engine
+        .apply(&agent_config(&[("alice", ALICE)], "example.com", 8443))
+        .await;
+    assert!(broken.runner.calls().is_empty());
+}
+
+#[test]
+fn desired_config_comes_from_the_agent_config() {
+    let config = agent_config(&[("alice", ALICE), ("bob", BOB)], "cdn.example.org", 9443);
+    assert_eq!(
+        DesiredConfig::from(&config),
+        desired(&[("alice", ALICE), ("bob", BOB)], "cdn.example.org", 9443)
+    );
+}

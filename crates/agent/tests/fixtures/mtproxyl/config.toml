@@ -1,0 +1,24 @@
+# DERIVED, not recorded: the layout of the telemt configuration that the MTProxyL manager
+# rebuilds from its own settings. The tables and keys are those of the recorded
+# fixtures/telemt/telemt.toml (telemt 3.5.16); the users are made up.
+[general]
+use_middle_proxy = true
+
+[general.telemetry]
+core_enabled = true
+user_enabled = true
+
+[server]
+port = 443
+metrics_port = 9090
+
+[server.api]
+enabled = true
+listen = "127.0.0.1:9091"
+
+[censorship]
+tls_domain = "example.com"
+
+[access.users]
+alice = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+owner = "cccccccccccccccccccccccccccccccc"

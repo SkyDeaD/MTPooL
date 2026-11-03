@@ -1,0 +1,5 @@
+iptables v1.8.10 (nf_tables): Chain 'ANTISCAN_MTPOOL' does not exist
+iptables: Chain already exists.
+iptables: Bad rule (does a matching rule exist in that chain?).
+iptables: No chain/target/match by that name.
+ipset v7.19: The set with the given name does not exist

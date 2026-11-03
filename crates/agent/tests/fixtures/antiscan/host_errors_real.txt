@@ -1,0 +1,3 @@
+ipset v7.19: Set cannot be destroyed: it is in use by a kernel component
+iptables v1.8.10 (nf_tables):  CHAIN_DEL failed (Device or resource busy): chain ANTISCAN_MTPOOL
+iptables v1.8.10 (nf_tables): Set ANTISCAN_MTPOOL doesn't exist.
