@@ -44,6 +44,17 @@ fn ok(body: &str) -> Result<HttpResponse, String> {
     })
 }
 
+/// The recorded config with the control API switched off: telemt answers on it by default, so
+/// the only way to have none is `enabled = false`.
+fn without_api() -> String {
+    let off = TOML.replace(
+        "[server.api]\nenabled = true\n",
+        "[server.api]\nenabled = false\n",
+    );
+    assert_ne!(off, TOML);
+    off
+}
+
 /// The recorded config with the owner's own user and a comment of the owner's added.
 fn owner_config() -> String {
     format!("{TOML}owner = \"{OWNER}\" # the owner's own user, not the pool's\n")
@@ -294,11 +305,8 @@ async fn octets_with_and_without_total_suffix() {
 
 #[tokio::test]
 async fn metrics_ok_follows_the_middle_proxy_writers_without_a_control_api() {
-    let no_api = TOML.replace(
-        "[server.api]\nenabled = true\nlisten = \"127.0.0.1:9091\"\n",
-        "",
-    );
-    assert!(!no_api.contains("server.api"));
+    let no_api = without_api();
+    assert!(!TelemtToml::parse(&no_api).unwrap().control_api().is_some());
 
     // Writers at 0 and nothing else to say how telemt does: not serving.
     let rig_down = rig(&no_api, None);
@@ -427,7 +435,10 @@ fn telemt_toml_reads_what_the_agent_needs() {
     assert_eq!(bare.tls_domain(), None);
     assert!(bare.users().is_empty());
     assert!(bare.user_telemetry_enabled());
-    assert!(bare.control_api().is_none());
+    // telemt serves its control API on 0.0.0.0:9091 unless it is switched off.
+    let api = bare.control_api().unwrap();
+    assert_eq!(api.base, "http://127.0.0.1:9091");
+    assert_eq!(api.authorization, None);
 
     let off = TelemtToml::parse("[general.telemetry]\nuser_enabled = false\n").unwrap();
     assert!(!off.user_telemetry_enabled());
@@ -678,11 +689,30 @@ async fn dc2_failures_of_the_api_are_a_reason_not_an_error() {
 }
 
 #[tokio::test]
-async fn dc2_is_not_checked_without_a_control_api() {
-    let no_api = TOML.replace(
-        "[server.api]\nenabled = true\nlisten = \"127.0.0.1:9091\"\n",
-        "",
+async fn dc2_asks_the_default_control_api_when_the_config_has_no_table() {
+    let bare = "[server]\nport = 8443\nmetrics_port = 9090\n\n[access.users]\nprobe = \"00112233445566778899aabbccddeeff\"\n";
+    assert!(!bare.contains("api"));
+    let rig = rig_with(Some(bare), None, |_| {
+        let http = ScriptedHttp::new();
+        http.always(DCS_URL, ok(&healthy_dcs()));
+        http
+    });
+    assert_eq!(
+        rig.engine.dc2().await,
+        Some(Dc2Report {
+            ok: true,
+            reason: None
+        })
     );
+    let requests = rig.http.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url, DCS_URL);
+    assert_eq!(requests[0].authorization, None);
+}
+
+#[tokio::test]
+async fn dc2_is_not_checked_without_a_control_api() {
+    let no_api = without_api();
     let rig = rig(&no_api, None);
     assert_eq!(rig.engine.dc2().await, None);
     assert!(rig.http.requests().is_empty());
@@ -740,10 +770,7 @@ async fn health_is_not_ok_when_metrics_do_not_answer_or_no_writers_serve() {
     assert!(!health.ok);
     assert_eq!(health.reason.as_deref(), Some("metrics_unreachable"));
 
-    let no_api = TOML.replace(
-        "[server.api]\nenabled = true\nlisten = \"127.0.0.1:9091\"\n",
-        "",
-    );
+    let no_api = without_api();
     let idle = rig(&no_api, None).engine.health().await;
     assert!(!idle.ok);
     assert_eq!(idle.reason.as_deref(), Some("no_me_writers"));
@@ -1169,6 +1196,98 @@ async fn apply_with_a_broken_state_file_keeps_nothing_it_cannot_prove() {
         .collect();
     assert!(names.contains(&"bob".to_owned()), "{names:?}");
     assert_eq!(rig.pool_users(), Some(vec!["alice".to_owned()]));
+}
+
+#[tokio::test(start_paused = true)]
+async fn apply_is_ready_when_the_metrics_answer_even_without_me_writers() {
+    // The middle proxy is on, the control API is off and no ME writer is up (its servers are
+    // slow or unreachable): telemt runs on the new file, so that is not a reason to roll back.
+    let config = without_api();
+    // The recorded answer has no ME writer.
+    let slow_me = METRICS;
+    let rig = rig_with(Some(&config), None, |_| {
+        let http = ScriptedHttp::new();
+        http.always(METRICS_URL, ok(slow_me));
+        http
+    });
+    script_restart(&rig.runner);
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org", 9443))
+        .await
+        .unwrap();
+    assert_eq!(outcome, ApplyOutcome::Applied);
+    assert_eq!(
+        rig.systemctl(),
+        ["stop telemt.service", "start telemt.service"]
+    );
+    assert_eq!(rig.http.requests().len(), 1, "ready at the first answer");
+    // The writer rule is for health, which still says it.
+    assert_eq!(
+        rig.engine.health().await.reason.as_deref(),
+        Some("no_me_writers")
+    );
+}
+
+const WITHOUT_METRICS_KEYS: &str = concat!(
+    "[server]\nport = 8443\n\n",
+    "[general]\nuse_middle_proxy = true\n\n",
+    "[access.users]\nprobe = \"00112233445566778899aabbccddeeff\"\n",
+);
+
+#[tokio::test]
+async fn apply_adds_a_metrics_listener_when_the_file_names_none() {
+    let rig = rig(WITHOUT_METRICS_KEYS, None);
+    script_restart(&rig.runner);
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .await
+        .unwrap();
+    assert_eq!(outcome, ApplyOutcome::Applied);
+    let new = rig.config_text();
+    let parsed: toml_edit::DocumentMut = new.parse().unwrap();
+    assert_eq!(
+        parsed["server"]["metrics_listen"].as_str(),
+        Some("127.0.0.1:9090")
+    );
+    assert!(parsed["server"].get("metrics_port").is_none());
+    // The address the agent reads is the one it wrote.
+    assert_eq!(metrics_url(&TelemtToml::parse(&new).unwrap()), METRICS_URL);
+
+    // The second time there is nothing to change.
+    let again = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .await
+        .unwrap();
+    assert_eq!(again, ApplyOutcome::Unchanged);
+    assert_eq!(rig.config_text(), new);
+    assert_eq!(rig.runner.calls().len(), 2);
+}
+
+#[tokio::test]
+async fn apply_leaves_the_metrics_keys_the_owner_set() {
+    for keys in [
+        "metrics_port = 9100\n",
+        "metrics_listen = \"127.0.0.1:9188\"\n",
+    ] {
+        let config = WITHOUT_METRICS_KEYS.replace("port = 8443\n", &format!("port = 8443\n{keys}"));
+        let rig = rig_with(Some(&config), None, |_| {
+            let http = ScriptedHttp::new();
+            http.always("http://127.0.0.1:9100/metrics", ok(METRICS));
+            http.always("http://127.0.0.1:9188/metrics", ok(METRICS));
+            http
+        });
+        script_restart(&rig.runner);
+        rig.engine
+            .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+            .await
+            .unwrap();
+        let new = rig.config_text();
+        assert!(new.contains(keys), "{new}");
+        assert_eq!(new.matches("metrics_").count(), 1, "{new}");
+    }
 }
 
 fn agent_config(users: &[(&str, &str)], sni: &str, port: u16) -> AgentConfig {

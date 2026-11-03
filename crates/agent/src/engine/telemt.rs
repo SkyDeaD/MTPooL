@@ -33,8 +33,11 @@ pub const POOL_USERS_FILE: &str = "pool_users.json";
 /// How long a restarted telemt has to answer its metrics.
 const READY_TIMEOUT: Duration = Duration::from_secs(60);
 const READY_POLL: Duration = Duration::from_secs(2);
-/// telemt's own defaults, for what the file does not say.
+/// telemt's own default for `[server] port`.
 const DEFAULT_PORT: u16 = 443;
+/// telemt has no default metrics port: without `metrics_listen` or `metrics_port` it starts no
+/// metrics listener at all. The agent therefore writes `metrics_listen` itself (on the loopback
+/// of this port) when the file has neither, and reads from the same address.
 const DEFAULT_METRICS_PORT: u16 = 9090;
 const DEFAULT_API_LISTEN: &str = "0.0.0.0:9091";
 
@@ -132,17 +135,18 @@ impl TelemtToml {
             .unwrap_or_default()
     }
 
-    /// The control API, if the file has a `[server.api]` (or its older name `[server.admin_api]`)
-    /// that is not switched off.
+    /// The control API. telemt serves it by default (on `0.0.0.0:9091`, no header check), also
+    /// when the file has no `[server.api]` (or its older name `[server.admin_api]`) at all; only
+    /// `enabled = false` switches it off.
     pub fn control_api(&self) -> Option<ControlApi> {
         let table = self
             .table(&["server", "api"])
-            .or_else(|| self.table(&["server", "admin_api"]))?;
-        if table.get("enabled").and_then(Item::as_bool) == Some(false) {
+            .or_else(|| self.table(&["server", "admin_api"]));
+        if table.and_then(|t| t.get("enabled")).and_then(Item::as_bool) == Some(false) {
             return None;
         }
         let listen = table
-            .get("listen")
+            .and_then(|t| t.get("listen"))
             .and_then(Item::as_str)
             .and_then(|listen| listen.parse::<SocketAddr>().ok())
             .unwrap_or_else(|| {
@@ -151,7 +155,7 @@ impl TelemtToml {
                     .expect("the default is an address")
             });
         let authorization = table
-            .get("auth_header")
+            .and_then(|t| t.get("auth_header"))
             .and_then(Item::as_str)
             .filter(|header| !header.is_empty())
             .map(str::to_owned);
@@ -189,7 +193,8 @@ fn reachable(addr: SocketAddr) -> SocketAddr {
 }
 
 /// Where telemt serves `/metrics`: `[server] metrics_listen`, else `metrics_port` on the
-/// loopback, else port 9090 on the loopback.
+/// loopback, else port 9090 on the loopback, which is the listener `apply_config` writes into a
+/// file that names none.
 pub fn metrics_url(config: &TelemtToml) -> String {
     let listen = config
         .value_of(&["server"], "metrics_listen")
@@ -336,9 +341,11 @@ impl<R: CommandRunner, H: HttpGet> TelemtEngine<R, H> {
         Ok(snapshot_of(&config, &samples))
     }
 
-    /// The engine answers its metrics and is serving.
+    /// telemt is up on the file it was started with: its metrics answer. Whether its middle
+    /// proxy has writers is not asked here (its servers may be slow or unreachable for longer
+    /// than the wait, and that is no fault of the new file); `health` reports it.
     async fn is_ready(&self) -> bool {
-        self.snapshot().await.is_ok_and(|s| s.report.ok)
+        self.snapshot().await.is_ok()
     }
 
     /// Polls until the engine is ready; the reason if it is not within the time.
@@ -647,6 +654,12 @@ fn edit(old: &str, desired: &DesiredConfig, managed: &[String]) -> Result<String
                 set_value(listener, "port", Value::from(port));
             }
         }
+    }
+
+    // telemt starts no metrics listener unless the file names one, and the agent needs it.
+    if !server.contains_key("metrics_listen") && !server.contains_key("metrics_port") {
+        let listen = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_METRICS_PORT);
+        set_value(server, "metrics_listen", Value::from(listen.to_string()));
     }
 
     let censorship = table_of(root, "censorship", false)?;
