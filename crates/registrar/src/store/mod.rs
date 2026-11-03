@@ -21,6 +21,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use mtpool_core::{Event, PersistOp, PoolState, Ts};
 use rusqlite::{Connection, OpenFlags};
 
+pub use auth::{AuthOp, NewTokenRow};
+
+mod auth;
 mod queries;
 #[cfg(test)]
 mod tests;
@@ -35,7 +38,10 @@ const BUSY_TIMEOUT: Duration = Duration::from_millis(5000);
 
 /// Schema migrations in order. A database with a higher version than the last one here belongs
 /// to a newer build and is not opened.
-const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("../../migrations/0001_init.sql"))];
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, include_str!("../../migrations/0001_init.sql")),
+    (2, include_str!("../../migrations/0002_auth.sql")),
+];
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -88,11 +94,18 @@ impl Default for StoreOptions {
     }
 }
 
-/// What the writer takes: the ops of `core` and its events.
+/// What the writer takes: the ops of `core`, its events and the auth writes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WriteOp {
     Persist(PersistOp),
     Event(Event),
+    Auth(AuthOp),
+}
+
+impl From<AuthOp> for WriteOp {
+    fn from(op: AuthOp) -> WriteOp {
+        WriteOp::Auth(op)
+    }
 }
 
 impl From<PersistOp> for WriteOp {

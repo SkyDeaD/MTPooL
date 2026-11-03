@@ -107,6 +107,9 @@ impl Writer {
             WriteOp::Event(event) => {
                 self.write_immediate("event", |conn| insert_event(conn, &event))
             }
+            WriteOp::Auth(op) => {
+                self.write_immediate(super::auth::name(&op), |conn| super::auth::apply(conn, &op))
+            }
             WriteOp::Persist(op) => match op.durability() {
                 Durability::Batched => self.batch.push(op),
                 Durability::Immediate => {

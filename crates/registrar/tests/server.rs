@@ -11,11 +11,7 @@ use tower::ServiceExt;
 
 fn app(store: Store) -> (axum::Router, mtpool_registrar::actor::ActorHandle) {
     let actor = Actor::spawn(PoolState::default(), store.clone(), vec![]);
-    let state = AppState {
-        store,
-        actor: actor.clone(),
-        snapshots: actor.snapshots(),
-    };
+    let state = AppState::new(store, actor.clone(), actor.snapshots());
     (router(state), actor)
 }
 

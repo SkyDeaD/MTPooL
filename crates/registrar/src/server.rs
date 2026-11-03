@@ -2,6 +2,7 @@
 
 use std::future::Future;
 use std::io;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
@@ -14,6 +15,7 @@ use tokio::net::TcpListener;
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::actor::{Actor, ActorHandle, EffectDriver};
+use crate::auth::{AuthState, session};
 use crate::config::Config;
 use crate::snapshot::SnapshotStore;
 use crate::store::{Store, StoreError, WriteHealth};
@@ -26,12 +28,25 @@ pub struct AppState {
     pub store: Store,
     pub actor: ActorHandle,
     pub snapshots: SnapshotStore,
+    pub auth: AuthState,
+}
+
+impl AppState {
+    pub fn new(store: Store, actor: ActorHandle, snapshots: SnapshotStore) -> AppState {
+        AppState {
+            store,
+            actor,
+            snapshots,
+            auth: AuthState::new(),
+        }
+    }
 }
 
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        .merge(session::routes())
         .with_state(state)
         // Outermost: the limit also covers routes that do not exist.
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
@@ -101,18 +116,22 @@ pub async fn run(
     let loader = store.clone();
     let state = tokio::task::spawn_blocking(move || loader.load()).await??;
     let actor = Actor::spawn(state, store.clone(), drivers);
-    let app = router(AppState {
-        store: store.clone(),
-        actor: actor.clone(),
-        snapshots: actor.snapshots(),
-    });
+    let app = router(AppState::new(
+        store.clone(),
+        actor.clone(),
+        actor.snapshots(),
+    ));
     if let Ok(addr) = listener.local_addr() {
         tracing::info!(%addr, "listening");
     }
-    let served = axum::serve(listener, app)
-        .with_graceful_shutdown(stop)
-        .await
-        .map_err(RunError::Serve);
+    // The peer address is what tells whether `X-Forwarded-For` comes from the local proxy.
+    let served = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(stop)
+    .await
+    .map_err(RunError::Serve);
     tracing::info!("stopping");
     let stored = shutdown(&actor, &store).await;
     served?;

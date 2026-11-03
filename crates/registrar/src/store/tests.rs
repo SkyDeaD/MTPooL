@@ -103,6 +103,9 @@ fn migrations_apply_on_empty_db() {
         "srmd_state",
         "events",
         "traffic",
+        "owners",
+        "tokens",
+        "sessions",
     ] {
         let found: i64 = conn
             .query_row(
@@ -118,7 +121,7 @@ fn migrations_apply_on_empty_db() {
             r.get(0)
         })
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, 2);
     let mode: String = conn
         .query_row("PRAGMA journal_mode", [], |r| r.get(0))
         .unwrap();
@@ -135,7 +138,7 @@ fn migrations_apply_on_empty_db() {
     // Opening again applies nothing twice.
     let store = Store::open(&path).unwrap();
     store.close().unwrap();
-    assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 1);
+    assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 2);
 }
 
 #[test]
@@ -155,7 +158,7 @@ fn unknown_schema_version_refuses_open() {
             err,
             StoreError::UnknownSchemaVersion {
                 found: 999,
-                supported: 1
+                supported: 2
             }
         ),
         "{err:?}"
@@ -858,4 +861,98 @@ fn retention_removes_sensor_rounds_35d() {
         ),
         0
     );
+}
+
+fn token_row(kind: &'static str, seed: u8) -> NewTokenRow {
+    NewTokenRow {
+        kind,
+        hash: [seed; 32],
+        prefix: "mtp_x".into(),
+        owner_id: None,
+        node_id: None,
+        expires_at: None,
+        created_at: NOW,
+    }
+}
+
+#[test]
+fn auth_ops_written_with_full_sync_and_readable_after_flush() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).unwrap();
+    store.send(AuthOp::InsertSession {
+        hash: [1; 32],
+        csrf: "c".into(),
+        created_at: NOW,
+        expires_at: Ts(NOW.0 + 1000),
+    });
+    store.flush().unwrap();
+    assert_eq!(store.last_immediate_sync(), 2);
+    let n: i64 = store
+        .read()
+        .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1);
+
+    // An insert clears the sessions that have ended.
+    store.send(AuthOp::InsertSession {
+        hash: [2; 32],
+        csrf: "d".into(),
+        created_at: Ts(NOW.0 + 2000),
+        expires_at: Ts(NOW.0 + 5000),
+    });
+    store.flush().unwrap();
+    assert_eq!(count(&path, "SELECT count(*) FROM sessions"), 1);
+    store.send(AuthOp::DeleteSession { hash: [2; 32] });
+    store.flush().unwrap();
+    assert_eq!(count(&path, "SELECT count(*) FROM sessions"), 0);
+}
+
+#[test]
+fn rotate_admin_replaces_tokens_and_sessions_in_one_step() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).unwrap();
+    store.send(AuthOp::InsertToken(token_row("admin", 1)));
+    store.send(AuthOp::InsertToken(token_row("metrics", 2)));
+    store.send(AuthOp::InsertSession {
+        hash: [9; 32],
+        csrf: "c".into(),
+        created_at: NOW,
+        expires_at: Ts(NOW.0 + 1000),
+    });
+    store.send(AuthOp::RotateAdmin(token_row("admin", 3)));
+    store.flush().unwrap();
+
+    assert_eq!(count(&path, "SELECT count(*) FROM sessions"), 0);
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM tokens WHERE kind = 'admin' AND revoked_at IS NULL"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM tokens WHERE kind = 'metrics' AND revoked_at IS NULL"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM tokens WHERE hash = x'0303030303030303030303030303030303030303030303030303030303030303' AND revoked_at IS NULL"
+        ),
+        1
+    );
+}
+
+#[test]
+fn auth_op_debug_does_not_print_secrets() {
+    let op = AuthOp::InsertSession {
+        hash: [7; 32],
+        csrf: "very-secret-csrf".into(),
+        created_at: NOW,
+        expires_at: NOW,
+    };
+    assert_eq!(format!("{op:?}"), "insert_session");
 }

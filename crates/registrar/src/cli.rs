@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
+use crate::auth::tokens;
 use crate::config::{Config, ENV_LOG};
 use crate::server;
 use crate::store::Store;
@@ -69,7 +70,14 @@ pub async fn run(cli: Cli) -> ExitCode {
         },
         CliCommand::Admin {
             command: AdminCommand::ResetToken,
-        } => fail("admin reset-token is not implemented yet"),
+        } => match reset_token().await {
+            // The token is shown here and nowhere else.
+            Ok(token) => {
+                println!("{token}");
+                ExitCode::SUCCESS
+            }
+            Err(message) => fail(&message),
+        },
         CliCommand::Backup => fail("backup is not implemented yet"),
         CliCommand::Restore => fail("restore is not implemented yet"),
     }
@@ -78,6 +86,20 @@ pub async fn run(cli: Cli) -> ExitCode {
 fn fail(message: &str) -> ExitCode {
     eprintln!("error: {message}");
     ExitCode::FAILURE
+}
+
+/// Issues a new admin token: the old ones stop working and every panel session ends. Works on
+/// a stopped or a running registrar, which reads tokens and sessions from the database.
+async fn reset_token() -> Result<String, String> {
+    let config = Config::from_env().map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        let store = Store::open(&config.db_path).map_err(|e| e.to_string())?;
+        let token = tokens::rotate_admin(&store).map_err(|e| e.to_string());
+        let closed = store.close().map_err(|e| e.to_string());
+        token.and_then(|t| closed.map(|()| t))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 async fn serve() -> Result<(), String> {
