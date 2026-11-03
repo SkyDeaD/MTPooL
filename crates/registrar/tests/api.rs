@@ -797,6 +797,11 @@ async fn openapi_json_matches_committed_file() {
         "/api/v1/stats/summary",
         "/api/v1/stats/series",
         "/api/v1/openapi.json",
+        "/api/v1/agent/enroll",
+        "/api/v1/agent/heartbeat",
+        "/api/v1/agent/report",
+        "/api/v1/agent/retire",
+        "/api/v1/agent/config",
     ] {
         assert!(paths.contains(path), "{path} is documented: {paths:?}");
     }
@@ -810,6 +815,11 @@ async fn openapi_json_matches_committed_file() {
         "StatsSummary",
         "StatsSeries",
         "LastRound",
+        "EnrollRequest",
+        "EnrollResponse",
+        "ReportRequest",
+        "AgentConfig",
+        "Terminate",
     ] {
         assert!(
             schemas.contains(schema),

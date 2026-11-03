@@ -18,6 +18,7 @@ use utoipa_axum::routes;
 
 use crate::server::AppState;
 
+pub mod agent;
 pub mod public;
 pub mod qr;
 pub mod ratelimit;
@@ -186,16 +187,16 @@ pub(crate) fn json(body: String) -> Response {
 #[derive(OpenApi)]
 #[openapi(
     info(
-        title = "MTPooL public API",
+        title = "MTPooL API",
         version = "1",
-        description = "Read-only view of the proxy pool: nodes, domains, Telegram links, bans and statistics. No credentials needed; node addresses are masked and measurement ids are never shown. Errors are application/problem+json with a stable `code`."
+        description = "The public read-only view of the proxy pool: nodes, domains, Telegram links, bans and statistics. No credentials needed; node addresses are masked and measurement ids are never shown. The agent routes under `/api/v1/agent` take a bearer token. Errors are application/problem+json with a stable `code`."
     ),
     tags((name = "public", description = "Public read-only routes"))
 )]
 struct ApiDoc;
 
 /// The routes of the public API, with their documentation.
-pub fn routes() -> OpenApiRouter<AppState> {
+pub fn public_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(public::list_nodes))
         .routes(routes!(public::get_node))
@@ -206,6 +207,11 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(stats::summary))
         .routes(routes!(stats::series))
         .routes(routes!(public::openapi_document))
+}
+
+/// Every documented route: the public API and the agent API.
+pub fn routes() -> OpenApiRouter<AppState> {
+    public_routes().merge(agent::routes())
 }
 
 /// The OpenAPI document, pretty-printed: what `mtpool-registrar openapi` prints (plus a

@@ -1,8 +1,8 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "MTPooL public API",
-    "description": "Read-only view of the proxy pool: nodes, domains, Telegram links, bans and statistics. No credentials needed; node addresses are masked and measurement ids are never shown. Errors are application/problem+json with a stable `code`.",
+    "title": "MTPooL API",
+    "description": "The public read-only view of the proxy pool: nodes, domains, Telegram links, bans and statistics. No credentials needed; node addresses are masked and measurement ids are never shown. The agent routes under `/api/v1/agent` take a bearer token. Errors are application/problem+json with a stable `code`.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -10,6 +10,430 @@
     "version": "1"
   },
   "paths": {
+    "/api/v1/agent/config": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "What the node's proxy has to be set up with.",
+        "operationId": "config",
+        "responses": {
+          "200": {
+            "description": "The proxy users, SNI, port and intervals",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentConfig"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid node token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The node is out of the pool: `{\"terminate\": true, ...}`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Terminate"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The registrar does not know the node; enroll again",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/agent/enroll": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Registers a node of the owner of the enroll token, at the address the request comes from.",
+        "operationId": "enroll",
+        "requestBody": {
+          "description": "The node's name, port and engine",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The node is enrolled. The node token is shown here once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad name, port or body, or an address that is not public IPv4 (`bad_request`, `invalid_name`, `private_ip`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid enroll token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token is of another kind, or the owner is at its node limit (`forbidden`, `owner_limit`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is larger than 256 KiB",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Enrollment from this address is paused (`enroll_paused`, `Retry-After`), or too many failed attempts (`rate_limited`)",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until enrollment may be tried again"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/agent/heartbeat": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "Tells the registrar the node is alive, from the address it connects from.",
+        "operationId": "heartbeat",
+        "requestBody": {
+          "description": "Empty, or `{}`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Noted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad body, or an address that is not public IPv4",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid node token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The node is out of the pool: `{\"terminate\": true, ...}`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Terminate"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The registrar does not know the node; enroll again",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is larger than 256 KiB",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/agent/report": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "The node's checks of the last round. A measured Globalping result is checked by the\nregistrar before it counts; the agent gets its answer without waiting for that.",
+        "operationId": "report",
+        "requestBody": {
+          "description": "At most 256 KiB",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Accepted. A measurement is verified afterwards.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not the document this route takes (unknown fields included)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid node token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The node is out of the pool: `{\"terminate\": true, ...}`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Terminate"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`clock_skew` (the report is dated outside the window of 10 minutes back and 1 minute ahead), `report_mismatch` (address, port or SNI are not the node's), `measurement_reused`, or `stale`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The registrar does not know the node; enroll again",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is larger than 256 KiB",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/agent/retire": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "The node leaves the pool.",
+        "operationId": "retire",
+        "requestBody": {
+          "description": "Empty, or `{}`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The node is out of the pool",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad body",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid node token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The node was out of the pool already: `{\"terminate\": true, ...}`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Terminate"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The registrar does not know the node",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is larger than 256 KiB",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/bans": {
       "get": {
         "tags": [
@@ -569,6 +993,57 @@
   },
   "components": {
     "schemas": {
+      "AgentConfig": {
+        "type": "object",
+        "description": "`GET /agent/config`: what the node's proxy has to be set up with.",
+        "required": [
+          "users",
+          "sni",
+          "port",
+          "intervals",
+          "antiscan"
+        ],
+        "properties": {
+          "antiscan": {
+            "type": "boolean",
+            "description": "Whether the agent defends the port against active probing."
+          },
+          "intervals": {
+            "$ref": "#/components/schemas/Intervals"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "sni": {
+            "type": "string",
+            "description": "The TLS domain the proxy pretends to be."
+          },
+          "users": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentUser"
+            }
+          }
+        }
+      },
+      "AgentUser": {
+        "type": "object",
+        "required": [
+          "name",
+          "secret_hex"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "secret_hex": {
+            "type": "string",
+            "description": "32 hex characters."
+          }
+        }
+      },
       "BanRecord": {
         "type": "object",
         "description": "One entry of the ban log. `reverify` entries record a failed attempt to lift a ban, not a\nnew ban: they carry no `lifetime_sec` and no `gap_sec`.",
@@ -651,6 +1126,25 @@
           }
         }
       },
+      "Dc2Report": {
+        "type": "object",
+        "description": "The check of the second Telegram data center.",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "DnsRecord": {
         "type": "object",
         "description": "What the domain is set to resolve to.",
@@ -678,6 +1172,15 @@
           "CNAME"
         ]
       },
+      "Empty": {
+        "type": "object",
+        "description": "An answer with nothing in it."
+      },
+      "EmptyRequest": {
+        "type": "object",
+        "description": "`POST /agent/heartbeat` and `POST /agent/retire`: nothing to say. An empty body is fine.",
+        "additionalProperties": false
+      },
       "Engine": {
         "type": "string",
         "enum": [
@@ -685,6 +1188,185 @@
           "mt_proxy_l",
           "meko"
         ]
+      },
+      "EnrollRequest": {
+        "type": "object",
+        "description": "`POST /agent/enroll`. The address of the node is the one the request comes from.",
+        "required": [
+          "name",
+          "port",
+          "engine"
+        ],
+        "properties": {
+          "engine": {
+            "$ref": "#/components/schemas/Engine"
+          },
+          "name": {
+            "type": "string",
+            "description": "1 to 32 letters, digits and `._-`, starting and ending with a letter or digit. The\nregistrar adds `-` and five random characters to make the node id.",
+            "example": "alpha"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The port the proxy listens on.",
+            "example": 443,
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "EnrollResponse": {
+        "type": "object",
+        "description": "The answer to a successful enrollment.",
+        "required": [
+          "node_id",
+          "node_token",
+          "generation",
+          "reverify"
+        ],
+        "properties": {
+          "generation": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "node_id": {
+            "type": "string",
+            "example": "alpha-a1b2c"
+          },
+          "node_token": {
+            "type": "string",
+            "description": "The bearer token of the node. Shown here once; only its hash is kept."
+          },
+          "replaced": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Another node on the same address that this one displaced."
+          },
+          "reverify": {
+            "type": "boolean",
+            "description": "The address was blocked: a decisive check decides whether the node may stay."
+          }
+        }
+      },
+      "GpReport": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A measurement was made; the registrar verifies it under its own key.",
+            "required": [
+              "id",
+              "kind"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "example": "abc123"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "measured"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "No measurement this time (a 429 or an outage of the service). Not a failure.",
+            "required": [
+              "reason",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "no_data"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "description": "`rate_limited`, `unavailable`, `timeout`; anything else counts as no data.",
+                "example": "rate_limited"
+              }
+            }
+          }
+        ],
+        "description": "What the agent says about its Globalping check."
+      },
+      "HostReport": {
+        "type": "object",
+        "description": "The host the node runs on.",
+        "required": [
+          "load1",
+          "mem_used_bytes",
+          "mem_total_bytes",
+          "disk_used_bytes",
+          "disk_total_bytes"
+        ],
+        "properties": {
+          "disk_total_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "disk_used_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "load1": {
+            "type": "number",
+            "format": "double"
+          },
+          "mem_total_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "mem_used_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "Intervals": {
+        "type": "object",
+        "description": "How often the agent does each of its jobs, in seconds.",
+        "required": [
+          "heartbeat_sec",
+          "globalping_sec",
+          "metrics_sec",
+          "sync_sec"
+        ],
+        "properties": {
+          "globalping_sec": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "heartbeat_sec": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "metrics_sec": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "sync_sec": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
       },
       "LastRound": {
         "type": "object",
@@ -732,6 +1414,42 @@
             "$ref": "#/components/schemas/Vote"
           }
         }
+      },
+      "MetricsReport": {
+        "type": "object",
+        "description": "What the engine's metrics said.",
+        "required": [
+          "ok",
+          "from_client_total",
+          "to_client_total"
+        ],
+        "properties": {
+          "clients": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Clients connected now.",
+            "minimum": 0
+          },
+          "from_client_total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cumulative octets from clients, as the engine exports them.",
+            "minimum": 0
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "to_client_total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cumulative octets to clients.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
       },
       "NodeState": {
         "type": "string",
@@ -948,6 +1666,75 @@
           }
         }
       },
+      "ReportRequest": {
+        "type": "object",
+        "description": "`POST /agent/report`.",
+        "required": [
+          "ip",
+          "port",
+          "sni",
+          "gp",
+          "metrics",
+          "checked_at"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": "string",
+            "description": "When the agent made the checks, RFC 3339. Must be within 10 minutes before and one\nminute after the registrar's clock.",
+            "example": "2026-11-03T12:00:00Z"
+          },
+          "dc2": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Dc2Report"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What went wrong on the node, if something did."
+          },
+          "gp": {
+            "$ref": "#/components/schemas/GpReport"
+          },
+          "host": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HostReport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ip": {
+            "type": "string",
+            "format": "ipv4",
+            "description": "The address the measurement was made against. Must be the registered one.",
+            "example": "203.0.113.7"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/MetricsReport"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "sni": {
+            "type": "string",
+            "description": "The TLS domain the measurement used.",
+            "example": "tls.example.com"
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsBucket": {
         "allOf": [
           {
@@ -1116,6 +1903,35 @@
           }
         }
       },
+      "Terminate": {
+        "type": "object",
+        "description": "The body of a 403 to a node that is out of the pool: it stops its proxy and, if the reason\nallows, enrolls again.",
+        "required": [
+          "terminate",
+          "reason",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/TerminateReason"
+          },
+          "terminate": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TerminateReason": {
+        "type": "string",
+        "enum": [
+          "banned",
+          "dead",
+          "pruned",
+          "address_refused"
+        ]
+      },
       "Verdict": {
         "type": "string",
         "enum": [
@@ -1133,12 +1949,23 @@
           "abstain"
         ]
       }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "`mtp_enroll_...` for enrollment, `mtp_node_...` for everything else"
+      }
     }
   },
   "tags": [
     {
       "name": "public",
       "description": "Public read-only routes"
+    },
+    {
+      "name": "agent",
+      "description": "Routes of the node agent; they need a node token, enrollment an enroll token"
     }
   ]
 }

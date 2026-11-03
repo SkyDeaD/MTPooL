@@ -19,12 +19,14 @@ use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::actor::{Actor, ActorHandle, Clock, EffectDriver, system_clock};
 use crate::api;
+use crate::api::agent::Ledger;
 use crate::api::ratelimit::{self as request_limit, RequestLimiter};
 use crate::api::stats::StatsCache;
 use crate::auth::{AuthState, session};
 use crate::config::Config;
 use crate::snapshot::SnapshotStore;
 use crate::store::{Store, StoreError, WriteHealth};
+use crate::verifier::{MeasurementVerifier, NoVerifier};
 
 /// Largest request body any route accepts.
 pub const MAX_BODY_BYTES: usize = 256 * 1024;
@@ -38,6 +40,10 @@ pub struct AppState {
     pub clock: Clock,
     pub limiter: Arc<RequestLimiter>,
     pub stats: StatsCache,
+    /// Checks the measurements agents name in their reports.
+    pub verifier: Arc<dyn MeasurementVerifier>,
+    /// The measurement ids claimed lately, before they reach the database.
+    pub ledger: Arc<Ledger>,
 }
 
 impl AppState {
@@ -59,28 +65,55 @@ impl AppState {
             clock,
             limiter: Arc::new(RequestLimiter::new()),
             stats: StatsCache::new(),
+            verifier: Arc::new(NoVerifier),
+            ledger: Arc::new(Ledger::new()),
         }
+    }
+
+    /// The same state with `verifier` checking the agents' measurements.
+    pub fn with_verifier(mut self, verifier: Arc<dyn MeasurementVerifier>) -> AppState {
+        self.verifier = verifier;
+        self
     }
 }
 
 pub fn router(state: AppState) -> Router {
     // The request limit covers the public routes only, not the probes or the admin session.
-    let (public, _) = api::routes()
+    let (public, _) = api::public_routes()
         .layer(middleware::from_fn_with_state(
             state.clone(),
             request_limit::limit,
         ))
         .split_for_parts();
+    // The agent routes are not behind it: agents are held to the failed-attempt limit.
+    let (agent, _) = api::agent::routes().split_for_parts();
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .merge(session::routes())
         .merge(public)
+        .merge(agent)
         .fallback(api::not_found)
         .method_not_allowed_fallback(api::method_not_allowed)
         .with_state(state)
         // Outermost: the limit also covers routes that do not exist.
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
+        .layer(middleware::map_response(too_large_as_problem))
+}
+
+/// The body limit answers with a bare 413; every error of this API is a problem.
+async fn too_large_as_problem(response: Response) -> Response {
+    let plain = response.status() == StatusCode::PAYLOAD_TOO_LARGE
+        && !response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.starts_with(mtpool_protocol::problem::CONTENT_TYPE));
+    if plain {
+        api::agent::payload_too_large().into_response()
+    } else {
+        response
+    }
 }
 
 async fn healthz() -> &'static str {
