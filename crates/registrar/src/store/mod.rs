@@ -268,8 +268,9 @@ impl Store {
         }
     }
 
-    /// Deletes events older than 30 days, traffic older than 35 days and tombstones past their
-    /// 7 days. Runs on the writer thread, in order with the other writes.
+    /// Deletes events older than 30 days, traffic and sensor rounds (with their votes) older
+    /// than 35 days and tombstones past their 7 days. Bans are kept. Runs on the writer thread,
+    /// in order with the other writes.
     pub fn retain(&self, now: Ts) -> Result<(), StoreError> {
         self.request(|reply| writer::Msg::Retain(now, reply))
     }

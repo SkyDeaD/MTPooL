@@ -810,3 +810,52 @@ fn read_connections_cannot_write() {
     let conn = store.read();
     assert!(conn.execute("DELETE FROM settings", []).is_err());
 }
+
+#[test]
+fn retention_removes_sensor_rounds_35d() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).unwrap();
+    let vote = SensorVote {
+        vote: Vote::Clear,
+        evidence: json!(null),
+    };
+    let round = |days: i64| PersistOp::RecordRound {
+        node: id("alpha-a1b2c"),
+        generation: Generation(1),
+        at: Ts(NOW.0 - days * DAY_MS),
+        verdict: RoundVerdict::Undecided,
+        votes: vec![
+            (SensorKind::Globalping, vote.clone()),
+            (SensorKind::Cheburcheck, vote.clone()),
+        ],
+    };
+    store.send(round(36));
+    store.send(round(34));
+    store.flush().unwrap();
+    assert_eq!(count(&path, "SELECT count(*) FROM sensor_rounds"), 2);
+    assert_eq!(count(&path, "SELECT count(*) FROM sensor_votes"), 4);
+
+    store.retain(NOW).unwrap();
+
+    assert_eq!(count(&path, "SELECT count(*) FROM sensor_rounds"), 1);
+    assert_eq!(
+        count(
+            &path,
+            &format!(
+                "SELECT count(*) FROM sensor_rounds WHERE at = {}",
+                NOW.0 - 34 * DAY_MS
+            )
+        ),
+        1
+    );
+    // The cascade removed the votes of the old round and only those.
+    assert_eq!(count(&path, "SELECT count(*) FROM sensor_votes"), 2);
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM sensor_votes \
+             WHERE round_id NOT IN (SELECT id FROM sensor_rounds)"
+        ),
+        0
+    );
+}
