@@ -4,11 +4,11 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use mtpool_core::Ts;
-use serde_json::json;
 
+use crate::api::ApiError;
 use crate::store::{AuthOp, Store};
 
 pub mod middleware;
@@ -183,26 +183,15 @@ impl AuthError {
 
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
-        let body = json!({
-            "type": "about:blank",
-            "title": self.title,
-            "status": self.status.as_u16(),
-            "code": self.code,
-            "detail": self.detail,
-        });
-        let mut response = (self.status, body.to_string()).into_response();
-        let headers = response.headers_mut();
-        headers.insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/problem+json"),
-        );
+        let unauthorized = self.status == StatusCode::UNAUTHORIZED;
+        let mut error = ApiError::new(self.status, self.code, self.title, self.detail);
         if let Some(seconds) = self.retry_after {
-            headers.insert(header::RETRY_AFTER, HeaderValue::from(seconds));
+            error = error.retry_after(seconds);
         }
-        if self.status == StatusCode::UNAUTHORIZED {
-            headers.insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        if unauthorized {
+            error = error.www_authenticate();
         }
-        response
+        error.into_response()
     }
 }
 

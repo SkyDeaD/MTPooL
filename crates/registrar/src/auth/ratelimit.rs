@@ -22,7 +22,7 @@ struct Entry {
 
 /// The key an address is counted under: an IPv6 client usually holds a whole /64, so the
 /// prefix is the key; an IPv4-mapped address counts as the IPv4 one.
-fn key(ip: IpAddr) -> IpAddr {
+pub(crate) fn key(ip: IpAddr) -> IpAddr {
     match ip {
         IpAddr::V4(_) => ip,
         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {

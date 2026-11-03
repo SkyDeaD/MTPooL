@@ -76,9 +76,8 @@ pub async fn run(cli: Cli, config: Config) -> ExitCode {
             println!("{}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        // Placeholder until the API types exist: the document is generated from them.
         CliCommand::Openapi => {
-            println!("{{}}");
+            println!("{}", crate::api::openapi_pretty());
             ExitCode::SUCCESS
         }
         CliCommand::Serve => match serve(config).await {

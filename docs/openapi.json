@@ -1,0 +1,1144 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "MTPooL public API",
+    "description": "Read-only view of the proxy pool: nodes, domains, Telegram links, bans and statistics. No credentials needed; node addresses are masked and measurement ids are never shown. Errors are application/problem+json with a stable `code`.",
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    },
+    "version": "1"
+  },
+  "paths": {
+    "/api/v1/bans": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "list_bans",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Entries to return, 1 to 200 (default 50)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Only entries with an id below this one: the id of the last entry of the previous page",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ban log, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BanRecord"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A parameter is not a number or out of range",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the limit window ends"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "list_domains",
+        "responses": {
+          "200": {
+            "description": "The domains of the pool with their masters and DNS",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Changes with the pool; send it back in If-None-Match"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PublicDomain"
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The client's copy is current"
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the limit window ends"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/links": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "list_links",
+        "responses": {
+          "200": {
+            "description": "Telegram proxy links, one per user and domain",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Changes with the pool; send it back in If-None-Match"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProxyLink"
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The client's copy is current"
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the limit window ends"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/links/{id}/qr.svg": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "link_qr",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Link id, `<user>@<domain>`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "alice@proxy.example.com"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The QR code of the link",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The tag of the links list"
+              }
+            },
+            "content": {
+              "image/svg+xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The client's copy is current"
+          },
+          "404": {
+            "description": "No such link",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the limit window ends"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "list_nodes",
+        "responses": {
+          "200": {
+            "description": "All nodes of the pool",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Changes with the pool; send it back in If-None-Match"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PublicNode"
+                  }
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The client's copy is current"
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the limit window ends"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{id}": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "get_node",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "alpha-a1b2c"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The node with its latest sensor round",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicNode"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the limit window ends"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "openapi_document",
+        "responses": {
+          "200": {
+            "description": "This document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the limit window ends"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stats/series": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "series",
+        "parameters": [
+          {
+            "name": "range",
+            "in": "query",
+            "description": "The window: 24h (default), 7d or 30d",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/StatsRange"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The figures per bucket over the range",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Changes with the figures; send it back in If-None-Match"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsSeries"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The client's copy is current"
+          },
+          "400": {
+            "description": "Unknown range",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the limit window ends"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stats/summary": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "summary",
+        "parameters": [
+          {
+            "name": "range",
+            "in": "query",
+            "description": "The window: 24h (default), 7d or 30d",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/StatsRange"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Totals over the range, the bans by reason and the latest bans",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Changes with the figures; send it back in If-None-Match"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsSummary"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The client's copy is current"
+          },
+          "400": {
+            "description": "Unknown range",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the limit window ends"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BanRecord": {
+        "type": "object",
+        "description": "One entry of the ban log. `reverify` entries record a failed attempt to lift a ban, not a\nnew ban: they carry no `lifetime_sec` and no `gap_sec`.",
+        "required": [
+          "id",
+          "ip",
+          "node_id",
+          "at",
+          "votes",
+          "reverify",
+          "lifted_by_admin"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          },
+          "gap_sec": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seconds since the previous ban in the pool; `null` for the first one."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Pass the id of the last entry as `before` to get the next page."
+          },
+          "ip": {
+            "type": "string",
+            "description": "The address with the two middle octets hidden.",
+            "example": "203.x.x.113"
+          },
+          "lifetime_sec": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seconds from the registration of the node to the ban; `null` once the node is gone."
+          },
+          "lifted_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lifted_by_admin": {
+            "type": "boolean"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "reverify": {
+            "type": "boolean"
+          },
+          "votes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BanVote"
+            },
+            "description": "The votes that confirmed the ban."
+          }
+        }
+      },
+      "BanVote": {
+        "type": "object",
+        "required": [
+          "sensor",
+          "vote"
+        ],
+        "properties": {
+          "sensor": {
+            "type": "string"
+          },
+          "vote": {
+            "$ref": "#/components/schemas/Vote"
+          }
+        }
+      },
+      "DnsRecord": {
+        "type": "object",
+        "description": "What the domain is set to resolve to.",
+        "required": [
+          "type",
+          "values"
+        ],
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/DnsRecordType"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Addresses of an `A` record, with the two middle octets hidden, or the one target of a\n`CNAME`."
+          }
+        }
+      },
+      "DnsRecordType": {
+        "type": "string",
+        "enum": [
+          "A",
+          "CNAME"
+        ]
+      },
+      "Engine": {
+        "type": "string",
+        "enum": [
+          "telemt",
+          "mt_proxy_l",
+          "meko"
+        ]
+      },
+      "LastRound": {
+        "type": "object",
+        "description": "The latest sensor round of a node. Evidence and measurement ids are not published.",
+        "required": [
+          "at",
+          "verdict",
+          "votes"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/Verdict"
+          },
+          "votes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LastVote"
+            }
+          }
+        }
+      },
+      "LastVote": {
+        "type": "object",
+        "required": [
+          "sensor",
+          "vote"
+        ],
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the sensor abstained: `not_configured`, `unavailable`, `rate_limited`, `timeout`,\n`unknown_answer` or `no_data`. Only for `abstain`."
+          },
+          "sensor": {
+            "type": "string",
+            "example": "globalping"
+          },
+          "vote": {
+            "$ref": "#/components/schemas/Vote"
+          }
+        }
+      },
+      "NodeState": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "healthy",
+          "quarantine",
+          "banned",
+          "dead",
+          "pruned"
+        ]
+      },
+      "Problem": {
+        "type": "object",
+        "description": "What went wrong. `code` is the part clients branch on and never changes for a given\nfailure: `bad_request`, `unauthorized`, `forbidden`, `csrf`, `not_found`,\n`method_not_allowed`, `rate_limited`, `internal`. `title` and `detail` are for people.",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "not_found"
+          },
+          "detail": {
+            "type": "string",
+            "example": "No node with this id."
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The HTTP status of the response.",
+            "example": 404,
+            "minimum": 0
+          },
+          "title": {
+            "type": "string",
+            "example": "Not found"
+          },
+          "type": {
+            "type": "string",
+            "description": "A URI reference naming the problem type; `about:blank` when `code` says it all.",
+            "example": "about:blank"
+          }
+        }
+      },
+      "ProxyLink": {
+        "type": "object",
+        "description": "A Telegram proxy link of one user on one domain.",
+        "required": [
+          "id",
+          "domain",
+          "user",
+          "link",
+          "qr_url"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "description": "`<user>@<domain>`.",
+            "example": "alice@proxy.example.com"
+          },
+          "link": {
+            "type": "string",
+            "description": "The `tg://proxy?...` link."
+          },
+          "qr_url": {
+            "type": "string",
+            "description": "Path of the QR code of the link (SVG).",
+            "example": "/api/v1/links/alice@proxy.example.com/qr.svg"
+          },
+          "user": {
+            "type": "string"
+          }
+        }
+      },
+      "PublicDomain": {
+        "type": "object",
+        "required": [
+          "domain",
+          "masters"
+        ],
+        "properties": {
+          "dns": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DnsRecord",
+                "description": "`null` while the domain has no DNS state yet."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "domain": {
+            "type": "string",
+            "example": "proxy.example.com"
+          },
+          "masters": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The node ids that are masters of the domain."
+          }
+        }
+      },
+      "PublicNode": {
+        "type": "object",
+        "description": "A node of the pool.",
+        "required": [
+          "id",
+          "state",
+          "engine",
+          "ip",
+          "port",
+          "registered_at",
+          "state_since",
+          "is_master",
+          "domains"
+        ],
+        "properties": {
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The domains the node is master of."
+          },
+          "engine": {
+            "$ref": "#/components/schemas/Engine"
+          },
+          "id": {
+            "type": "string",
+            "example": "alpha-a1b2c"
+          },
+          "ip": {
+            "type": "string",
+            "description": "The address with the two middle octets hidden.",
+            "example": "203.x.x.113"
+          },
+          "is_master": {
+            "type": "boolean",
+            "description": "Whether the node is the master of at least one domain."
+          },
+          "last_round": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LastRound",
+                "description": "The latest sensor round. Only in the answer for a single node."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "registered_at": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          },
+          "state": {
+            "$ref": "#/components/schemas/NodeState"
+          },
+          "state_since": {
+            "type": "string",
+            "description": "When the node entered its current state. RFC 3339, UTC."
+          }
+        }
+      },
+      "RecentBan": {
+        "type": "object",
+        "description": "A ban in the activity feed.",
+        "required": [
+          "ts",
+          "node_id",
+          "ip_masked"
+        ],
+        "properties": {
+          "gap_sec": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "ip_masked": {
+            "type": "string",
+            "example": "203.x.x.113"
+          },
+          "lifetime_sec": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "ts": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          }
+        }
+      },
+      "StatsBucket": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/StatsPoint"
+          },
+          {
+            "type": "object",
+            "required": [
+              "start_ts"
+            ],
+            "properties": {
+              "start_ts": {
+                "type": "string",
+                "description": "RFC 3339, UTC: the start of the bucket."
+              }
+            }
+          }
+        ]
+      },
+      "StatsPoint": {
+        "type": "object",
+        "description": "Numbers of one stretch of time: the whole range (`kpi`) or one bucket of the series.",
+        "required": [
+          "bans",
+          "traffic_ingress_bytes",
+          "traffic_egress_bytes",
+          "traffic_total_bytes"
+        ],
+        "properties": {
+          "avg_gap_sec": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Mean seconds since the previous ban over those bans that have a previous one; `null`\nwhen there is none."
+          },
+          "avg_lifetime_sec": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Mean seconds from the registration to the ban over those of them whose node is still\nknown; `null` when there is none."
+          },
+          "bans": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bans that began in the stretch."
+          },
+          "traffic_egress_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes from the nodes to clients."
+          },
+          "traffic_ingress_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes from clients to the nodes."
+          },
+          "traffic_total_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "StatsRange": {
+        "type": "string",
+        "description": "The windows the statistics can be asked for.",
+        "enum": [
+          "24h",
+          "7d",
+          "30d"
+        ]
+      },
+      "StatsSeries": {
+        "type": "object",
+        "description": "Figures per bucket over a range.",
+        "required": [
+          "range",
+          "now",
+          "from",
+          "step_sec",
+          "buckets",
+          "history_ok"
+        ],
+        "properties": {
+          "buckets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsBucket"
+            },
+            "description": "From `from` on, `step_sec` apart; the last one is still running."
+          },
+          "from": {
+            "type": "string"
+          },
+          "history_ok": {
+            "type": "boolean"
+          },
+          "now": {
+            "type": "string"
+          },
+          "range": {
+            "$ref": "#/components/schemas/StatsRange"
+          },
+          "step_sec": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "StatsSummary": {
+        "type": "object",
+        "description": "Totals over a range.",
+        "required": [
+          "range",
+          "now",
+          "from",
+          "step_sec",
+          "kpi",
+          "by_reason",
+          "recent",
+          "history_ok"
+        ],
+        "properties": {
+          "by_reason": {
+            "type": "object",
+            "description": "Bans by the sensors that confirmed them: the names of the sensors that voted\n`blocked`, sorted and joined by `+` (`cheburcheck+globalping`).",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "from": {
+            "type": "string",
+            "description": "RFC 3339, UTC: the start of the range, aligned down to a step."
+          },
+          "history_ok": {
+            "type": "boolean",
+            "description": "Whether the stored history reaches back to `from` (traffic is kept for 35 days)."
+          },
+          "kpi": {
+            "$ref": "#/components/schemas/StatsPoint"
+          },
+          "now": {
+            "type": "string",
+            "description": "RFC 3339, UTC: when the figures were computed."
+          },
+          "range": {
+            "$ref": "#/components/schemas/StatsRange"
+          },
+          "recent": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecentBan"
+            },
+            "description": "The last 30 bans, newest first."
+          },
+          "step_sec": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "Verdict": {
+        "type": "string",
+        "enum": [
+          "confirmed",
+          "clean",
+          "undecided"
+        ]
+      },
+      "Vote": {
+        "type": "string",
+        "description": "What one sensor said in a round.",
+        "enum": [
+          "blocked",
+          "clear",
+          "abstain"
+        ]
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "public",
+      "description": "Public read-only routes"
+    }
+  ]
+}

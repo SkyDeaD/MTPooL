@@ -9,6 +9,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use listenfd::ListenFd;
@@ -16,7 +17,10 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tower_http::limit::RequestBodyLimitLayer;
 
-use crate::actor::{Actor, ActorHandle, EffectDriver};
+use crate::actor::{Actor, ActorHandle, Clock, EffectDriver, system_clock};
+use crate::api;
+use crate::api::ratelimit::{self as request_limit, RequestLimiter};
+use crate::api::stats::StatsCache;
 use crate::auth::{AuthState, session};
 use crate::config::Config;
 use crate::snapshot::SnapshotStore;
@@ -31,24 +35,49 @@ pub struct AppState {
     pub actor: ActorHandle,
     pub snapshots: SnapshotStore,
     pub auth: AuthState,
+    pub clock: Clock,
+    pub limiter: Arc<RequestLimiter>,
+    pub stats: StatsCache,
 }
 
 impl AppState {
     pub fn new(store: Store, actor: ActorHandle, snapshots: SnapshotStore) -> AppState {
+        AppState::with_clock(store, actor, snapshots, system_clock())
+    }
+
+    pub fn with_clock(
+        store: Store,
+        actor: ActorHandle,
+        snapshots: SnapshotStore,
+        clock: Clock,
+    ) -> AppState {
         AppState {
             store,
             actor,
             snapshots,
             auth: AuthState::new(),
+            clock,
+            limiter: Arc::new(RequestLimiter::new()),
+            stats: StatsCache::new(),
         }
     }
 }
 
 pub fn router(state: AppState) -> Router {
+    // The request limit covers the public routes only, not the probes or the admin session.
+    let (public, _) = api::routes()
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            request_limit::limit,
+        ))
+        .split_for_parts();
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .merge(session::routes())
+        .merge(public)
+        .fallback(api::not_found)
+        .method_not_allowed_fallback(api::method_not_allowed)
         .with_state(state)
         // Outermost: the limit also covers routes that do not exist.
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
