@@ -62,6 +62,9 @@ pub struct SrmdSettings {
     pub max_domains: u32,
     /// Ticks the divergence must hold before one action is taken.
     pub diverge_ticks: u32,
+    /// Name new domains are built from (`shared.example.com` gives `shared1.example.com`).
+    /// `None` takes the first entry of `Settings::domains`.
+    pub base_domain: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -141,6 +144,7 @@ impl Default for SrmdSettings {
             max_nodes_per_domain: 5,
             max_domains: 50,
             diverge_ticks: 20,
+            base_domain: None,
         }
     }
 }
@@ -323,6 +327,7 @@ mod tests {
         assert_eq!(s.srmd.max_nodes_per_domain, 5);
         assert_eq!(s.srmd.max_domains, 50);
         assert_eq!(s.srmd.diverge_ticks, 20);
+        assert_eq!(s.srmd.base_domain, None);
         assert_eq!(s.globalping.probe_limit, 20);
         assert_eq!(s.globalping.min_probes, 10);
         assert_eq!(s.globalping.success_threshold, 0.5);
