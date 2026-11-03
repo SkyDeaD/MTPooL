@@ -106,6 +106,7 @@ fn migrations_apply_on_empty_db() {
         "owners",
         "tokens",
         "sessions",
+        "gp_measurements",
     ] {
         let found: i64 = conn
             .query_row(
@@ -121,7 +122,7 @@ fn migrations_apply_on_empty_db() {
             r.get(0)
         })
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     let mode: String = conn
         .query_row("PRAGMA journal_mode", [], |r| r.get(0))
         .unwrap();
@@ -138,7 +139,7 @@ fn migrations_apply_on_empty_db() {
     // Opening again applies nothing twice.
     let store = Store::open(&path).unwrap();
     store.close().unwrap();
-    assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 2);
+    assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 3);
 }
 
 #[test]
@@ -158,7 +159,7 @@ fn unknown_schema_version_refuses_open() {
             err,
             StoreError::UnknownSchemaVersion {
                 found: 999,
-                supported: 2
+                supported: 3
             }
         ),
         "{err:?}"
@@ -955,4 +956,37 @@ fn auth_op_debug_does_not_print_secrets() {
         expires_at: NOW,
     };
     assert_eq!(format!("{op:?}"), "insert_session");
+}
+
+#[test]
+fn recorded_measurements_are_seen_and_old_ones_forgotten() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).unwrap();
+    let record = |m: &str, at: i64| {
+        store.send(ReportOp::RecordMeasurement {
+            id: m.into(),
+            node: id("alpha-00001"),
+            at: Ts(at),
+        });
+        store.flush().unwrap();
+    };
+    record("old", NOW.0 - DAY_MS - 1);
+    record("fresh", NOW.0);
+    // Recording the same id again changes nothing and does not fail the writer.
+    record("fresh", NOW.0 + 5);
+    assert_eq!(store.health(), WriteHealth::Ok);
+
+    let conn = store.read();
+    assert!(measurement_seen(&conn, "fresh").unwrap());
+    assert!(
+        !measurement_seen(&conn, "old").unwrap(),
+        "forgotten after a day"
+    );
+    assert!(!measurement_seen(&conn, "other").unwrap());
+    drop(conn);
+    assert_eq!(count(&path, "SELECT count(*) FROM gp_measurements"), 1);
+    assert_eq!(
+        count(&path, "SELECT at FROM gp_measurements WHERE id = 'fresh'"),
+        NOW.0
+    );
 }

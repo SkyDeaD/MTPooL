@@ -8,3 +8,4 @@ pub mod config;
 pub mod server;
 pub mod snapshot;
 pub mod store;
+pub mod verifier;

@@ -22,9 +22,11 @@ use mtpool_core::{Event, PersistOp, PoolState, Ts};
 use rusqlite::{Connection, OpenFlags};
 
 pub use auth::{AuthOp, NewTokenRow};
+pub use reports::{ReportOp, measurement_seen};
 
 mod auth;
 mod queries;
+mod reports;
 #[cfg(test)]
 mod tests;
 mod writer;
@@ -41,6 +43,7 @@ const BUSY_TIMEOUT: Duration = Duration::from_millis(5000);
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../../migrations/0001_init.sql")),
     (2, include_str!("../../migrations/0002_auth.sql")),
+    (3, include_str!("../../migrations/0003_reports.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -94,17 +97,25 @@ impl Default for StoreOptions {
     }
 }
 
-/// What the writer takes: the ops of `core`, its events and the auth writes.
+/// What the writer takes: the ops of `core`, its events, the auth writes and the agent report
+/// writes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WriteOp {
     Persist(PersistOp),
     Event(Event),
     Auth(AuthOp),
+    Report(ReportOp),
 }
 
 impl From<AuthOp> for WriteOp {
     fn from(op: AuthOp) -> WriteOp {
         WriteOp::Auth(op)
+    }
+}
+
+impl From<ReportOp> for WriteOp {
+    fn from(op: ReportOp) -> WriteOp {
+        WriteOp::Report(op)
     }
 }
 
