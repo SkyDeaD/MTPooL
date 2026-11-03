@@ -5,10 +5,13 @@ use std::fmt;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use crate::types::Ts;
+use serde::{Deserialize, Serialize};
+
+use crate::types::{Generation, Ts};
 
 /// What a domain should resolve to.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RecordValue {
     A(Vec<Ipv4Addr>),
     Cname(String),
@@ -16,13 +19,17 @@ pub enum RecordValue {
 
 /// Desired/applied DNS state of one domain. `generation` is checked before a worker
 /// result is applied, so a stale result is rejected.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DnsState {
     pub desired: RecordValue,
     pub applied: Option<RecordValue>,
-    pub generation: u64,
+    pub generation: Generation,
     pub retries: u32,
     pub next_try: Ts,
+    /// The generation a worker is pushing right now. Memory of the running process only: a
+    /// restart forgets it, so a push lost with the process is tried again.
+    #[serde(skip)]
+    pub in_flight: Option<Generation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

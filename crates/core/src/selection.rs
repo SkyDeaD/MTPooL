@@ -17,12 +17,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 
+use serde::{Deserialize, Serialize};
+
 use crate::lifecycle::NodeRecord;
 use crate::settings::Settings;
 use crate::types::{NodeId, NodeState, Ts};
 
 /// One master of a domain and since when it holds the slot.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Slot {
     pub node: NodeId,
     pub since: Ts,
@@ -30,7 +32,7 @@ pub struct Slot {
 
 /// Domain to its master slots. The position of a slot in the list is stable: a replacement
 /// takes the place of the node it replaces.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Assignments(pub BTreeMap<String, Vec<Slot>>);
 
 /// A slot that changed hands. Fill has no `removed`, a dropped surplus slot has no `added`.

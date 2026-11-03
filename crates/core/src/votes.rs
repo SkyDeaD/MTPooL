@@ -1,8 +1,10 @@
 //! Sensor votes and the round verdict. The ban rule lives here and nowhere else.
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SensorKind {
     Globalping,
     Cheburcheck,
@@ -10,7 +12,8 @@ pub enum SensorKind {
 }
 
 /// Why a sensor gave no answer. An abstention is never a response and never a ban vote.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AbstainReason {
     NotConfigured,
     Unavailable,
@@ -20,7 +23,8 @@ pub enum AbstainReason {
     NoData,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Vote {
     Blocked,
     Clear,
@@ -28,13 +32,14 @@ pub enum Vote {
 }
 
 /// A vote with the evidence the registrar stores next to it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SensorVote {
     pub vote: Vote,
     pub evidence: Value,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RoundVerdict {
     Confirmed,
     Clean,

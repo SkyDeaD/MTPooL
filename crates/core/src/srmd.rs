@@ -28,10 +28,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::settings::Settings;
 
 /// SRMD memory between ticks.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SrmdState {
     /// Domains SRMD owns: the ones it created and the ones the admin handed over with `take`.
     pub created: BTreeSet<String>,

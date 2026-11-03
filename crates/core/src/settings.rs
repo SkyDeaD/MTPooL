@@ -3,7 +3,9 @@
 use std::collections::HashSet;
 use std::fmt;
 
-#[derive(Debug, Clone, PartialEq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     // Agent intervals.
     pub heartbeat_interval_sec: u32,
@@ -48,14 +50,14 @@ pub struct Settings {
     pub globalping: GlobalpingSettings,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProxyUser {
     pub name: String,
     /// 32 hex characters.
     pub secret_hex: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SrmdSettings {
     pub enabled: bool,
     pub max_nodes_per_domain: u32,
@@ -67,7 +69,7 @@ pub struct SrmdSettings {
     pub base_domain: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GlobalpingSettings {
     pub probe_limit: u32,
     /// Fewer probes with a result than this means `Abstain`.

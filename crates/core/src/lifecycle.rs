@@ -5,6 +5,8 @@
 
 use std::net::Ipv4Addr;
 
+use serde::{Deserialize, Serialize};
+
 use crate::health::{
     FailedCondition, GpStatus, Latch, NodeHealth, failed_conditions, younger_than,
 };
@@ -20,7 +22,7 @@ const TOMBSTONE_TTL_MS: i64 = 7 * 24 * 3600 * 1000;
 /// Retry hint while a reverify round for the same IP is running.
 const REVERIFY_IN_FLIGHT_RETRY_SEC: u32 = 60;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeRecord {
     pub id: NodeId,
     pub owner: OwnerId,
@@ -177,7 +179,7 @@ impl NodeRecord {
 }
 
 /// An IP that may not enroll as a normal node.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IpBlock {
     pub ip: Ipv4Addr,
     /// The node that was banned.
@@ -188,7 +190,7 @@ pub struct IpBlock {
 }
 
 /// Escalating pause after a prune, kept per node id and per IP.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tombstone {
     pub node_id: NodeId,
     pub ip: Ipv4Addr,

@@ -3,16 +3,18 @@
 use std::fmt;
 use std::net::Ipv4Addr;
 
+use serde::{Deserialize, Serialize};
+
 /// Unix time in milliseconds. The core never reads the clock: callers pass it in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Ts(pub i64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct OwnerId(pub i64);
 
 /// Version of a domain's desired DNS state or of a node's state; checked before applying
 /// a worker result, so a stale result is rejected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Generation(pub u64);
 
 impl Generation {
@@ -21,14 +23,16 @@ impl Generation {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EngineKind {
     Telemt,
     MtProxyL,
     Meko,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum NodeState {
     Pending,
     Healthy,
@@ -42,7 +46,8 @@ pub enum NodeState {
 ///
 /// The name is 1 to 32 ASCII letters, digits and `._-`, starting and ending with a
 /// letter or digit. The suffix is five lowercase letters or digits.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct NodeId(String);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +64,20 @@ impl fmt::Display for IdError {
 }
 
 impl std::error::Error for IdError {}
+
+impl TryFrom<String> for NodeId {
+    type Error = IdError;
+
+    fn try_from(s: String) -> Result<NodeId, IdError> {
+        NodeId::parse(&s)
+    }
+}
+
+impl From<NodeId> for String {
+    fn from(id: NodeId) -> String {
+        id.0
+    }
+}
 
 impl NodeId {
     pub fn parse(s: &str) -> Result<NodeId, IdError> {

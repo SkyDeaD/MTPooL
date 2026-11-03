@@ -1,11 +1,13 @@
 //! Node health: the conditions a node must meet to be eligible as a master.
 
+use serde::{Deserialize, Serialize};
+
 use crate::settings::Settings;
 use crate::types::Ts;
 
 /// Hysteresis over a noisy probe: trips after enough failures in a row, recovers after
 /// enough successes in a row. Thresholds are passed in so E2E can shrink them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Latch {
     pub up: bool,
     pub fails: u8,
@@ -60,7 +62,8 @@ impl Default for Latch {
 }
 
 /// Result of the latest Globalping check, as confirmed by the registrar.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GpStatus {
     Unknown,
     Ok {
@@ -88,7 +91,7 @@ impl GpStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeHealth {
     pub tcp: Latch,
     pub metrics: Latch,
@@ -101,7 +104,8 @@ pub struct NodeHealth {
     pub port_ok: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FailedCondition {
     Tcp,
     Metrics,
