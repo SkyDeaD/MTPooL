@@ -1,17 +1,28 @@
 {
   "_source": "documented shape, not a recording",
-  "status": "RKN_BLOCK",
-  "checked_at": "2026-11-03T12:00:00Z",
+  "checked_at": "2026-11-03T12:00:00+00:00",
   "local": {
-    "tcp": false,
-    "handshake": false,
     "data": false,
-    "latency_ms": null
+    "duration_ms": 1000,
+    "handshake": false,
+    "label": "RU — Москва (за ТСПУ)",
+    "latency_ms": null,
+    "ping_ms": null,
+    "ssh": false,
+    "tcp": false
   },
+  "port": 443,
   "remote": {
-    "tcp": true,
-    "handshake": true,
     "data": true,
-    "latency_ms": 29
-  }
+    "duration_ms": 1000,
+    "handshake": true,
+    "label": "NL — Amsterdam",
+    "latency_ms": 29,
+    "ping_ms": null,
+    "ssh": false,
+    "tcp": true
+  },
+  "secret_type": "faketls",
+  "server": "192.0.2.1",
+  "status": "RKN_BLOCK"
 }

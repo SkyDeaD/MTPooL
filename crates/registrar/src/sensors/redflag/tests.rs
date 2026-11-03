@@ -1,10 +1,10 @@
-//! The RedFlag sensor against answers in the documented shape.
+//! The RedFlag sensor against recorded and derived answers.
 //!
-//! No node of this project exists yet, so nothing could be recorded: the files in
-//! `tests/fixtures/redflag` are built from the shape the design document gives (`status`,
-//! `checked_at`, and the `local` and `remote` blocks with `tcp`, `handshake`, `data` and
-//! `latency_ms`). Each carries a top-level `_source` key that says so, and the parser ignores it.
-//! The real exchange is checked against the live service in the end-to-end task.
+//! `down.json` and `unauthorized.json` in `tests/fixtures/redflag` are real answers of the
+//! service, recorded on 2026-11-04 for the documentation address 192.0.2.1 (the second one
+//! without a key). The field names come from them. The other files are derived: they keep the
+//! recorded shape and change the values to reach the other statuses, so no real server is ever
+//! named. Each has a top-level `_source` key that says which it is; the parser ignores it.
 
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -23,6 +23,7 @@ const RKN_BLOCK: &str = include_str!("../../../tests/fixtures/redflag/rkn_block.
 const MT_DEAD: &str = include_str!("../../../tests/fixtures/redflag/mt_dead.json");
 const DOWN: &str = include_str!("../../../tests/fixtures/redflag/down.json");
 const UNKNOWN: &str = include_str!("../../../tests/fixtures/redflag/unknown.json");
+const UNAUTHORIZED: &str = include_str!("../../../tests/fixtures/redflag/unauthorized.json");
 const UNRECOGNISED: &str = include_str!("../../../tests/fixtures/redflag/unrecognised_status.json");
 
 const KEY: &str = "test-key-not-a-real-credential";
@@ -94,6 +95,32 @@ async fn status_table() {
         let vote = vote_on(body).await;
         assert_eq!(vote.vote, expected, "{body}");
     }
+}
+
+#[tokio::test]
+async fn the_recorded_down_answer_abstains_and_keeps_the_documented_fields() {
+    let vote = vote_on(DOWN).await;
+    assert_eq!(vote.vote, Vote::Abstain(AbstainReason::NoData));
+    assert_eq!(
+        vote.evidence,
+        json!({
+            "status": "DOWN",
+            "reason": "no_verdict",
+            "checked_at": "2026-11-03T19:30:59+00:00",
+            "local": {"tcp": false, "handshake": false, "data": false, "latency_ms": null},
+            "remote": {"tcp": false, "handshake": false, "data": false, "latency_ms": null},
+        })
+    );
+}
+
+#[tokio::test]
+async fn the_recorded_unauthorized_answer_abstains_as_unavailable() {
+    let server = serve(401, UNAUTHORIZED).await;
+    let vote = sensor_for(&server).vote(&target()).await;
+    assert_eq!(vote.vote, Vote::Abstain(AbstainReason::Unavailable));
+    assert_eq!(vote.evidence["http_status"], 401);
+    // The words of the answer are not copied into the evidence.
+    assert!(!vote.evidence.to_string().contains("X-API-Key"));
 }
 
 #[tokio::test]
@@ -394,7 +421,7 @@ async fn evidence_contains_local_and_remote() {
         vote.evidence,
         json!({
             "status": "RKN_BLOCK",
-            "checked_at": "2026-11-03T12:00:00Z",
+            "checked_at": "2026-11-03T12:00:00+00:00",
             "local": {"tcp": false, "handshake": false, "data": false, "latency_ms": null},
             "remote": {"tcp": true, "handshake": true, "data": true, "latency_ms": 29},
         })
@@ -406,7 +433,7 @@ async fn the_evidence_keeps_only_the_documented_fields() {
     let body = json!({
         "_source": "x",
         "status": "OK",
-        "checked_at": "2026-11-03T12:00:00Z",
+        "checked_at": "2026-11-03T12:00:00+00:00",
         "server": "192.0.2.10",
         "secret": SECRET,
         "local": {"tcp": true, "handshake": true, "data": true, "latency_ms": 1,

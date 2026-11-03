@@ -1,17 +1,28 @@
 {
-  "_source": "documented shape, not a recording",
-  "status": "DOWN",
-  "checked_at": "2026-11-03T12:00:00Z",
+  "_source": "recorded 2026-11-04 against 192.0.2.1 (documentation address)",
+  "checked_at": "2026-11-03T19:30:59+00:00",
   "local": {
-    "tcp": false,
-    "handshake": false,
     "data": false,
-    "latency_ms": null
+    "duration_ms": 15006,
+    "handshake": false,
+    "label": "RU — Москва (за ТСПУ)",
+    "latency_ms": null,
+    "ping_ms": null,
+    "ssh": false,
+    "tcp": false
   },
+  "port": 443,
   "remote": {
-    "tcp": false,
-    "handshake": false,
     "data": false,
-    "latency_ms": null
-  }
+    "duration_ms": 8207,
+    "handshake": false,
+    "label": "NL — Amsterdam",
+    "latency_ms": null,
+    "ping_ms": null,
+    "ssh": false,
+    "tcp": false
+  },
+  "secret_type": "faketls",
+  "server": "192.0.2.1",
+  "status": "DOWN"
 }

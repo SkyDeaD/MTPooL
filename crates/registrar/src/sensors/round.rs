@@ -4,8 +4,8 @@
 //! owner as `Command::RoundDone`. The state owner never waits for it: the driver runs on its own
 //! task, and a node whose sensors are slow cannot hold up anything but its own round.
 //!
-//! * Each sensor has its own time limit; one that does not answer in time, or that panics,
-//!   gives an abstention and the others are kept.
+//! * The whole round has one time limit; a sensor that has not answered by then, or that
+//!   panics, gives an abstention and the others are kept.
 //! * When the effect carries a fresh vote of the agent's own measurement, the central Globalping
 //!   sensor is not asked: the fresh vote stands in its place.
 //! * One round per node at a time. A second one for the same node is dropped; the state owner
@@ -28,7 +28,7 @@ use crate::actor::{ActorHandle, DriverFuture, EffectDriver};
 #[cfg(test)]
 mod tests;
 
-/// The time one sensor may take for one node.
+/// The time a whole round may take for one node.
 pub const SENSOR_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// What the sensors look at: the node's address and the pool's public face. The SNI is the TLS
@@ -96,7 +96,7 @@ impl RoundRunner {
         }
     }
 
-    /// The time one sensor may take (`SENSOR_TIMEOUT` by default).
+    /// The time the whole round may take (`SENSOR_TIMEOUT` by default).
     pub fn with_sensor_timeout(mut self, timeout: Duration) -> RoundRunner {
         self.sensor_timeout = timeout;
         self
@@ -112,6 +112,9 @@ impl RoundRunner {
         target: Target,
         fresh_gp: Option<SensorVote>,
     ) -> Command {
+        // One deadline for the whole round: the sensors run together, so the round ends one
+        // timeout after it began, however many of them are slow.
+        let deadline = tokio::time::Instant::now() + self.sensor_timeout;
         let mut fresh = fresh_gp;
         let mut slots = Vec::new();
         for sensor in &self.sensors {
@@ -135,7 +138,7 @@ impl RoundRunner {
             let vote = match slot {
                 Slot::Ready(vote) => vote,
                 Slot::Running(mut task) => {
-                    match tokio::time::timeout(self.sensor_timeout, &mut task).await {
+                    match tokio::time::timeout_at(deadline, &mut task).await {
                         Ok(Ok(vote)) => vote,
                         Ok(Err(error)) => {
                             tracing::warn!(?kind, %error, "a sensor failed during a round");

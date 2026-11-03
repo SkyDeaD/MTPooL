@@ -1,6 +1,5 @@
 //! The round runner with fake sensors and a real state owner.
 
-use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -563,7 +562,45 @@ async fn the_votes_of_a_round_are_one_per_sensor_in_order() {
     assert_eq!(kinds(&votes), [SensorKind::RedFlag, SensorKind::Globalping]);
 }
 
-#[test]
-fn unused_imports_are_used() {
-    let _: HashMap<u8, u8> = HashMap::new();
+#[tokio::test(start_paused = true)]
+async fn the_round_has_one_deadline_not_one_per_sensor() {
+    let gp = FakeSensor::new(SensorKind::Globalping, Mode::Hang);
+    let ch = FakeSensor::new(SensorKind::Cheburcheck, Mode::Hang);
+    let rf = FakeSensor::new(SensorKind::RedFlag, Mode::Hang);
+    let runner = RoundRunner::new(dyn_of(&[&gp, &ch, &rf]));
+
+    let started = Instant::now();
+    let (_, _, votes) = votes_of(
+        runner
+            .round(id("alpha-00001"), Generation(0), target(), None)
+            .await,
+    );
+    // Waited one after another it would be 360 seconds.
+    assert_eq!(started.elapsed(), SENSOR_TIMEOUT);
+    assert_eq!(votes.len(), 3);
+    assert!(
+        votes
+            .iter()
+            .all(|(_, v)| v.vote == Vote::Abstain(AbstainReason::Timeout))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_answer_that_arrives_before_the_deadline_is_kept_next_to_a_late_one() {
+    let gp = FakeSensor::new(SensorKind::Globalping, Mode::Hang);
+    // Collected second, but already done when the first one times out.
+    let ch = FakeSensor::answering(
+        SensorKind::Cheburcheck,
+        Vote::Blocked,
+        Duration::from_secs(100),
+    );
+    let runner = RoundRunner::new(dyn_of(&[&gp, &ch]));
+    let started = Instant::now();
+    let (_, _, votes) = votes_of(
+        runner
+            .round(id("alpha-00001"), Generation(0), target(), None)
+            .await,
+    );
+    assert_eq!(started.elapsed(), SENSOR_TIMEOUT);
+    assert_eq!(vote_of(&votes, SensorKind::Cheburcheck).vote, Vote::Blocked);
 }
