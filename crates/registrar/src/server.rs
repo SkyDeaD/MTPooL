@@ -26,7 +26,7 @@ use crate::api::stats::StatsCache;
 use crate::api::stream::EventFan;
 use crate::api::webhook_url::{Resolver, SystemResolver};
 use crate::auth::{AuthState, session};
-use crate::config::Config;
+use crate::config::{self, Config, ConfigError, Endpoints};
 use crate::dns::cloudflare::CloudflareDns;
 use crate::dns::worker::DnsWorker;
 use crate::prober::Prober;
@@ -73,6 +73,9 @@ pub struct AppState {
     pub settings_lock: Arc<AsyncMutex<()>>,
     /// When a re-check of a node was last asked for through the bot API (kept in memory).
     pub rechecks: Arc<Mutex<HashMap<NodeId, Ts>>>,
+    /// Nodes may enroll from private, loopback and shared addresses. Set once at startup from
+    /// `MTPOOL_ALLOW_PRIVATE_IPS`; only a test stand wants it.
+    pub allow_private_ips: bool,
 }
 
 impl AppState {
@@ -101,6 +104,7 @@ impl AppState {
             resolver: Arc::new(SystemResolver),
             settings_lock: Arc::new(AsyncMutex::new(())),
             rechecks: Arc::new(Mutex::new(HashMap::new())),
+            allow_private_ips: false,
         }
     }
 
@@ -119,6 +123,12 @@ impl AppState {
     /// The same state with `gp_settings` as the Globalping settings the settings route updates.
     pub fn with_gp_settings(mut self, gp_settings: SharedSettings) -> AppState {
         self.gp_settings = gp_settings;
+        self
+    }
+
+    /// The same state with private node addresses allowed or not.
+    pub fn with_allow_private_ips(mut self, allow: bool) -> AppState {
+        self.allow_private_ips = allow;
         self
     }
 
@@ -197,6 +207,8 @@ async fn readyz(State(app): State<AppState>) -> Response {
 pub enum RunError {
     #[error(transparent)]
     Store(#[from] StoreError),
+    #[error(transparent)]
+    Config(#[from] ConfigError),
     #[error("cannot listen: {0}")]
     Listen(io::Error),
     #[error("server error: {0}")]
@@ -255,6 +267,14 @@ pub async fn run_with(
     stop: impl Future<Output = ()> + Send + 'static,
     drain_deadline: Duration,
 ) -> Result<(), RunError> {
+    let endpoints = Endpoints::from_env()?;
+    let allow_private_ips = config::allow_private_ips(|name| std::env::var(name).ok());
+    if allow_private_ips {
+        tracing::warn!(
+            "MTPOOL_ALLOW_PRIVATE_IPS is on: nodes on private addresses may enroll. \
+             This is for a test stand, never for a public registrar"
+        );
+    }
     let loader = store.clone();
     let state = tokio::task::spawn_blocking(move || loader.load()).await??;
     // The fan is a driver of the state owner: every emitted event reaches the open streams.
@@ -266,8 +286,8 @@ pub async fn run_with(
         Arc::new(ArcSwap::from_pointee(state.settings.globalping.clone()));
     let token_store = store.clone();
     let token: TokenSource = Arc::new(move || secrets::secret(&token_store, "globalping_token"));
-    let globalping = GlobalpingClient::new(GlobalpingClient::default_base(), token)
-        .map_err(RunError::HttpClient)?;
+    let globalping =
+        GlobalpingClient::new(endpoints.globalping, token).map_err(RunError::HttpClient)?;
     let verifier = GlobalpingVerifier::new(globalping.clone(), gp_settings.clone());
     // The three sensors of a round. RedFlag's key is asked for on every call too.
     let redflag_store = store.clone();
@@ -275,22 +295,15 @@ pub async fn run_with(
         Arc::new(move || secrets::secret(&redflag_store, "redflag_api_key"));
     let sensors: Vec<Arc<dyn Sensor>> = vec![
         Arc::new(GlobalpingSensor::new(globalping, gp_settings.clone())),
-        Arc::new(
-            CheburcheckSensor::new(CheburcheckSensor::default_base())
-                .map_err(RunError::HttpClient)?,
-        ),
-        Arc::new(
-            RedFlagSensor::new(RedFlagSensor::default_base(), redflag_key)
-                .map_err(RunError::HttpClient)?,
-        ),
+        Arc::new(CheburcheckSensor::new(endpoints.cheburcheck).map_err(RunError::HttpClient)?),
+        Arc::new(RedFlagSensor::new(endpoints.redflag, redflag_key).map_err(RunError::HttpClient)?),
     ];
     drivers.push(Arc::new(RoundRunner::new(sensors)));
     // DNS: the Cloudflare token is asked for on every request, like the others.
     let dns_store = store.clone();
     let dns_token: TokenSource =
         Arc::new(move || secrets::secret(&dns_store, "cloudflare_api_token"));
-    let dns = CloudflareDns::new(CloudflareDns::default_base(), dns_token)
-        .map_err(RunError::HttpClient)?;
+    let dns = CloudflareDns::new(endpoints.cloudflare, dns_token).map_err(RunError::HttpClient)?;
     drivers.push(Arc::new(DnsWorker::new(Arc::new(dns))));
     // Webhooks: every event becomes delivery rows; the sender posts what is due.
     drivers.push(Arc::new(WebhookFanOut::new(store.clone())));
@@ -308,6 +321,7 @@ pub async fn run_with(
         AppState::new(store.clone(), actor.clone(), actor.snapshots())
             .with_events(fan.clone())
             .with_gp_settings(gp_settings)
+            .with_allow_private_ips(allow_private_ips)
             .with_verifier(Arc::new(verifier)),
     );
     if let Ok(addr) = listener.local_addr() {

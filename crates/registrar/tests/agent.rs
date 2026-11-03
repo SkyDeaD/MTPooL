@@ -151,6 +151,15 @@ fn pool(nodes: Vec<NodeRecord>) -> PoolState {
 }
 
 fn env(state: PoolState) -> Env {
+    env_with(state, false)
+}
+
+/// An environment where the registrar was started with `MTPOOL_ALLOW_PRIVATE_IPS=true`.
+fn env_allowing_private_ips(state: PoolState) -> Env {
+    env_with(state, true)
+}
+
+fn env_with(state: PoolState, allow_private_ips: bool) -> Env {
     let (dir, store) = open_store();
     let clock = Arc::new(AtomicI64::new(NOW));
     let shared = Arc::clone(&clock);
@@ -167,7 +176,8 @@ fn env(state: PoolState) -> Env {
     let verifier = FakeVerifier::new();
     let app = router(
         AppState::with_clock(store.clone(), actor.clone(), actor.snapshots(), clock_fn)
-            .with_verifier(verifier.clone()),
+            .with_verifier(verifier.clone())
+            .with_allow_private_ips(allow_private_ips),
     );
     Env {
         app,
@@ -508,6 +518,59 @@ async fn enroll_private_ip_rejected() {
     for peer in ["203.0.113.5", "198.51.100.5", "192.0.2.5", "100.63.255.255"] {
         let resp = enroll(&env, &enroll_token, peer, "alpha").await;
         assert_eq!(resp.status, StatusCode::OK, "{peer}: {}", resp.body);
+    }
+}
+
+#[tokio::test]
+async fn private_ip_rejected_by_default() {
+    let env = env(pool(vec![]));
+    let me = owner(&env, "me", 50);
+    let enroll_token = enroll_token(&env, me);
+    for peer in [
+        "10.0.0.5",
+        "172.18.0.3",
+        "192.168.1.1",
+        "127.0.0.1",
+        "100.64.0.1",
+    ] {
+        let resp = enroll(&env, &enroll_token, peer, "alpha").await;
+        assert_problem(&resp, StatusCode::BAD_REQUEST, "private_ip");
+    }
+    assert_eq!(node_count(&env).await, 0);
+}
+
+#[tokio::test]
+async fn private_ip_accepted_with_flag() {
+    let env = env_allowing_private_ips(pool(vec![]));
+    let me = owner(&env, "me", 50);
+    let enroll_token = enroll_token(&env, me);
+    for (name, peer) in [
+        ("alpha", "10.0.0.5"),
+        ("bravo", "172.18.0.3"),
+        ("charlie", "192.168.1.1"),
+        ("delta", "127.0.0.1"),
+        ("echo", "100.64.0.1"),
+    ] {
+        let resp = enroll(&env, &enroll_token, peer, name).await;
+        assert_eq!(resp.status, StatusCode::OK, "{peer}: {}", resp.body);
+        // The heartbeat of that node is judged by the same rule.
+        let node_token = resp.json()["node_token"]
+            .as_str()
+            .expect("token")
+            .to_owned();
+        let beat = post(&env, "/api/v1/agent/heartbeat", peer, &node_token, None).await;
+        assert_eq!(beat.status, StatusCode::OK, "{peer}: {}", beat.body);
+    }
+    // The flag opens private ranges only: addresses that are no address of a host stay refused.
+    for peer in [
+        "0.0.0.0",
+        "224.0.0.1",
+        "255.255.255.255",
+        "240.0.0.1",
+        "::1",
+    ] {
+        let resp = enroll(&env, &enroll_token, peer, "foxtrot").await;
+        assert_problem(&resp, StatusCode::BAD_REQUEST, "private_ip");
     }
 }
 

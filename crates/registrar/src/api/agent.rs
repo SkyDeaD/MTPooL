@@ -339,14 +339,24 @@ fn is_node_address(ip: Ipv4Addr) -> bool {
         || reserved)
 }
 
-/// The IPv4 address a node request comes from, if it is one a node can have.
-fn node_address(ip: IpAddr) -> Result<Ipv4Addr, Failure> {
+/// An address a node has on a private test network: what `is_node_address` refuses for being
+/// private, loopback, link-local or shared. Addresses that are no address of a host (unspecified,
+/// broadcast, multicast, reserved) stay refused.
+fn is_private_node_address(ip: Ipv4Addr) -> bool {
+    let [a, b, ..] = ip.octets();
+    let shared = a == 100 && (64..=127).contains(&b);
+    is_node_address(ip) || ip.is_private() || ip.is_loopback() || ip.is_link_local() || shared
+}
+
+/// The IPv4 address a node request comes from, if it is one a node can have. With
+/// `allow_private` (`MTPOOL_ALLOW_PRIVATE_IPS`) the addresses of a private network count too.
+fn node_address(ip: IpAddr, allow_private: bool) -> Result<Ipv4Addr, Failure> {
     let v4 = match ip {
         IpAddr::V4(v4) => Some(v4),
         IpAddr::V6(v6) => v6.to_ipv4_mapped(),
     };
     match v4 {
-        Some(v4) if is_node_address(v4) => Ok(v4),
+        Some(v4) if is_node_address(v4) || (allow_private && is_private_node_address(v4)) => Ok(v4),
         _ => Err(problem(
             StatusCode::BAD_REQUEST,
             "private_ip",
@@ -473,7 +483,7 @@ pub async fn enroll(
     if request.port == 0 {
         return Err(ApiError::bad_request("The port must not be 0.").into());
     }
-    let ip = node_address(peer)?;
+    let ip = node_address(peer, app.allow_private_ips)?;
 
     let owner = auth.owner_id;
     let store = app.store.clone();
@@ -641,7 +651,7 @@ pub async fn heartbeat(
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Response, Failure> {
     parse_empty(&body_bytes(body)?)?;
-    let ip = node_address(peer)?;
+    let ip = node_address(peer, app.allow_private_ips)?;
     let reply = app
         .actor
         .call(Command::Heartbeat(mtpool_core::HeartbeatRequest {

@@ -11,6 +11,7 @@ use mtpool_agent::engine::http::HttpResponse;
 use mtpool_agent::engine::http::testing::ScriptedHttp;
 use mtpool_agent::ip_detect::{
     IP_CHECK_EVERY, IP_SOURCES, IpEvent, IpWatch, PUBLIC_IP_FILE, detect_public_ip,
+    detect_public_ip_allowing,
 };
 use mtpool_agent::state_files::{Fs, MemFs};
 use tokio::time::Instant;
@@ -262,4 +263,127 @@ async fn the_known_address_survives_a_restart() {
             to: ip("198.51.100.4")
         }
     );
+}
+
+// ----- any number of sources, private addresses on a test network --------------------------
+
+/// `n` sources, `answer(i)` the text source `i` gives.
+fn sources_with(
+    n: usize,
+    answer: impl Fn(usize) -> &'static str,
+) -> (Vec<String>, Arc<ScriptedHttp>) {
+    let urls: Vec<String> = (0..n)
+        .map(|i| format!("http://ip{i}.example.test/"))
+        .collect();
+    let http = Arc::new(ScriptedHttp::new());
+    for (i, url) in urls.iter().enumerate() {
+        http.always(url, text(answer(i)));
+    }
+    (urls, http)
+}
+
+fn refs(urls: &[String]) -> Vec<&str> {
+    urls.iter().map(String::as_str).collect()
+}
+
+#[tokio::test]
+async fn ip_detect_needs_two_agreeing_sources_out_of_any_number() {
+    // Two sources: both must agree.
+    let (urls, http) = sources_with(2, |_| "192.0.2.1");
+    assert_eq!(
+        detect_public_ip(&*http, &refs(&urls)).await,
+        Some(ip("192.0.2.1"))
+    );
+    let (urls, http) = sources_with(2, |i| ["192.0.2.1", "192.0.2.2"][i]);
+    assert_eq!(detect_public_ip(&*http, &refs(&urls)).await, None);
+
+    // Eight sources: every one is asked, two that agree are enough.
+    let (urls, http) = sources_with(8, |i| match i {
+        0 => "192.0.2.9",
+        3 => "192.0.2.9",
+        _ => "not an address",
+    });
+    assert_eq!(
+        detect_public_ip(&*http, &refs(&urls)).await,
+        Some(ip("192.0.2.9"))
+    );
+    assert_eq!(http.requests().len(), 8);
+
+    // Two different pairs in eight are a split.
+    let (urls, http) = sources_with(8, |i| match i {
+        0 | 1 => "192.0.2.1",
+        2 | 3 => "192.0.2.2",
+        _ => "",
+    });
+    assert_eq!(detect_public_ip(&*http, &refs(&urls)).await, None);
+
+    // One lonely answer is no majority.
+    let (urls, http) = sources_with(3, |i| ["192.0.2.1", "", ""][i]);
+    assert_eq!(detect_public_ip(&*http, &refs(&urls)).await, None);
+}
+
+#[tokio::test]
+async fn private_addresses_count_only_when_allowed() {
+    for private in ["10.0.0.5", "172.18.0.3", "192.168.1.9", "100.64.0.1"] {
+        let (urls, http) = sources_with(4, |_| match private {
+            "10.0.0.5" => "10.0.0.5",
+            "172.18.0.3" => "172.18.0.3",
+            "192.168.1.9" => "192.168.1.9",
+            _ => "100.64.0.1",
+        });
+        assert_eq!(
+            detect_public_ip(&*http, &refs(&urls)).await,
+            None,
+            "{private}"
+        );
+        assert_eq!(
+            detect_public_ip_allowing(&*http, &refs(&urls), true).await,
+            Some(ip(private)),
+            "{private}"
+        );
+        assert_eq!(
+            detect_public_ip_allowing(&*http, &refs(&urls), false).await,
+            None,
+            "{private}"
+        );
+    }
+    // What is no address of a host stays refused with the flag.
+    for bad in [
+        "0.0.0.0",
+        "224.0.0.1",
+        "255.255.255.255",
+        "240.0.0.1",
+        "127.0.0.1",
+    ] {
+        let (urls, http) = sources_with(2, |_| match bad {
+            "0.0.0.0" => "0.0.0.0",
+            "224.0.0.1" => "224.0.0.1",
+            "255.255.255.255" => "255.255.255.255",
+            "240.0.0.1" => "240.0.0.1",
+            _ => "127.0.0.1",
+        });
+        let found = detect_public_ip_allowing(&*http, &refs(&urls), true).await;
+        // Loopback is a private network address too; the others are never accepted.
+        let expected = (bad == "127.0.0.1").then(|| ip(bad));
+        assert_eq!(found, expected, "{bad}");
+    }
+}
+
+#[tokio::test]
+async fn a_watch_with_other_sources_and_private_addresses_finds_its_address() {
+    let (urls, http) = sources_with(3, |_| "172.18.0.3");
+    let fs = Arc::new(MemFs::new());
+    let mut watch = watch(&http, &fs)
+        .with_sources(urls.clone())
+        .with_allow_private(true);
+    assert_eq!(
+        watch.check(Instant::now()).await,
+        IpEvent::Found(ip("172.18.0.3"))
+    );
+    assert_eq!(http.requests().len(), 3);
+    // It is remembered, and read back by the next run with the flag on.
+    let mut again = IpWatch::new(http.clone(), fs.clone(), PathBuf::from(STATE_DIR))
+        .with_sources(urls)
+        .with_allow_private(true);
+    assert_eq!(again.check(Instant::now()).await, IpEvent::Quiet);
 }

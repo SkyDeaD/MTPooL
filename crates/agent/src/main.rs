@@ -8,10 +8,10 @@ use std::sync::Arc;
 use clap::{Parser, Subcommand};
 use mtpool_agent::antiscan::{Antiscan, AntiscanSink, IpsumHttp};
 use mtpool_agent::client::RegistrarClient;
-use mtpool_agent::config::{DEFAULT_CONFIG_PATH, LocalConfig};
+use mtpool_agent::config::{DEFAULT_CONFIG_PATH, LocalConfig, Overrides};
 use mtpool_agent::engine::http::ReqwestHttp;
 use mtpool_agent::engine::select::{AnyEngine, select_engine};
-use mtpool_agent::gp::{DEFAULT_BASE, GpLoop};
+use mtpool_agent::gp::GpLoop;
 use mtpool_agent::host::TokioRunner;
 use mtpool_agent::ip_detect::IpWatch;
 use mtpool_agent::lifecycle::{
@@ -107,7 +107,20 @@ impl ConfigSink for SharedEngine {
 }
 
 async fn run(config_path: PathBuf) -> ExitCode {
-    let config = match LocalConfig::load(&config_path) {
+    let overrides = match Overrides::from_env() {
+        Ok(overrides) => overrides,
+        Err(error) => {
+            tracing::error!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if overrides.allow_private_ips {
+        tracing::warn!(
+            "MTPOOL_ALLOW_PRIVATE_IPS is on: private addresses count as the node's own and the \
+             registrar may be plain http. This is for a test stand, never for a public node"
+        );
+    }
+    let config = match LocalConfig::load_allowing(&config_path, overrides.allow_private_ips) {
         Ok(config) => config,
         Err(error) => {
             tracing::error!("{error}");
@@ -145,7 +158,7 @@ async fn run(config_path: PathBuf) -> ExitCode {
         port: config.port,
     };
 
-    let ipsum = match IpsumHttp::new() {
+    let ipsum = match IpsumHttp::with_url(&overrides.ipsum_url) {
         Ok(ipsum) => ipsum,
         Err(error) => {
             tracing::error!("cannot build the HTTP client for antiscan: {error}");
@@ -156,7 +169,7 @@ async fn run(config_path: PathBuf) -> ExitCode {
     let antiscan_task = tokio::spawn(antiscan.clone().run());
 
     let ports = Arc::new(LocalTcp);
-    let gp = match GpLoop::new(DEFAULT_BASE, ports.clone()) {
+    let gp = match GpLoop::new(&overrides.globalping_url, ports.clone()) {
         Ok(gp) => gp,
         Err(error) => {
             tracing::error!("cannot build the HTTP client for Globalping: {error}");
@@ -170,7 +183,9 @@ async fn run(config_path: PathBuf) -> ExitCode {
         port: config.port,
         ports,
         fs: fs.clone(),
-        ip: IpWatch::new(http, fs.clone(), config.state_dir.clone()),
+        ip: IpWatch::new(http, fs.clone(), config.state_dir.clone())
+            .with_sources(overrides.ip_sources.clone())
+            .with_allow_private(overrides.allow_private_ips),
         gp,
         memory: memory.clone(),
     });

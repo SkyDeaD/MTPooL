@@ -18,6 +18,8 @@ pub const DEFAULT_INTERVALS: Intervals = Intervals {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
+    #[error("{var} is not valid: {message}")]
+    Environment { var: &'static str, message: String },
     #[error("cannot read the configuration {path}: {source}")]
     Read {
         path: PathBuf,
@@ -71,23 +73,42 @@ struct RawIntervals {
 
 impl LocalConfig {
     pub fn load(path: &Path) -> Result<LocalConfig, ConfigError> {
+        LocalConfig::load_allowing(path, false)
+    }
+
+    /// [`LocalConfig::load`]; with `allow_insecure_registrar` the registrar may be plain `http`
+    /// on any host (a test network).
+    pub fn load_allowing(
+        path: &Path,
+        allow_insecure_registrar: bool,
+    ) -> Result<LocalConfig, ConfigError> {
         let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
             path: path.to_owned(),
             source,
         })?;
-        LocalConfig::parse(&text, path)
+        LocalConfig::parse_allowing(&text, path, allow_insecure_registrar)
     }
 
     /// Parses `text`; `origin` names the file in error messages.
     pub fn parse(text: &str, origin: &Path) -> Result<LocalConfig, ConfigError> {
+        LocalConfig::parse_allowing(text, origin, false)
+    }
+
+    /// [`LocalConfig::parse`] with the rule about plain `http` lifted when
+    /// `allow_insecure_registrar` is set.
+    pub fn parse_allowing(
+        text: &str,
+        origin: &Path,
+        allow_insecure_registrar: bool,
+    ) -> Result<LocalConfig, ConfigError> {
         let invalid = |message: String| ConfigError::Invalid {
             path: origin.to_owned(),
             message,
         };
         let raw: Raw = toml_edit::de::from_str(text).map_err(|e| invalid(e.to_string()))?;
 
-        let registrar =
-            parse_registrar(&raw.registrar).map_err(|m| invalid(format!("registrar: {m}")))?;
+        let registrar = parse_registrar(&raw.registrar, allow_insecure_registrar)
+            .map_err(|m| invalid(format!("registrar: {m}")))?;
         if !valid_name(&raw.name) {
             return Err(invalid(
                 "name must be 1 to 32 letters, digits and `._-`, starting and ending with a letter or digit"
@@ -162,8 +183,8 @@ impl LocalConfig {
 }
 
 /// The registrar address. Tokens travel in it, so it is `https`; plain `http` is for a registrar
-/// on the same machine (development and tests).
-fn parse_registrar(value: &str) -> Result<Url, String> {
+/// on the same machine (development and tests), or on any host when `allow_insecure` is set.
+fn parse_registrar(value: &str, allow_insecure: bool) -> Result<Url, String> {
     let url = Url::parse(value).map_err(|e| format!("not a URL ({e})"))?;
     let Some(host) = url.host_str() else {
         return Err("the address has no host".to_owned());
@@ -176,7 +197,7 @@ fn parse_registrar(value: &str) -> Result<Url, String> {
             .is_ok_and(|ip| ip.is_loopback());
     match url.scheme() {
         "https" => {}
-        "http" if loopback => {}
+        "http" if loopback || allow_insecure => {}
         _ => {
             return Err(
                 "the address must start with https:// (http:// only for localhost)".to_owned(),
@@ -196,4 +217,71 @@ fn valid_name(name: &str) -> bool {
         && bytes
             .iter()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+pub const ENV_GLOBALPING_URL: &str = "MTPOOL_GLOBALPING_URL";
+pub const ENV_IP_SOURCES: &str = "MTPOOL_IP_SOURCES";
+pub const ENV_IPSUM_URL: &str = "MTPOOL_IPSUM_URL";
+/// Lets the node run on a private test network. Only for a test stand.
+pub const ENV_ALLOW_PRIVATE_IPS: &str = "MTPOOL_ALLOW_PRIVATE_IPS";
+
+/// What the environment changes in the binary: the external services it talks to (a test stand
+/// points them at stand-ins) and the private-network switch. The defaults are the real ones.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Overrides {
+    pub globalping_url: String,
+    /// Two to eight URLs of plain-text address services.
+    pub ip_sources: Vec<String>,
+    pub ipsum_url: String,
+    pub allow_private_ips: bool,
+}
+
+impl Overrides {
+    pub fn from_env() -> Result<Overrides, ConfigError> {
+        Overrides::from_lookup(|name| std::env::var(name).ok())
+    }
+
+    /// `from_env` with the variables supplied by `get`. Empty values count as unset. Every error
+    /// names the variable.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Overrides, ConfigError> {
+        let get = |name: &str| get(name).filter(|v| !v.is_empty());
+        let url = |var: &'static str, default: &str| -> Result<String, ConfigError> {
+            let value = get(var).unwrap_or_else(|| default.to_owned());
+            check_url(var, &value)?;
+            Ok(value)
+        };
+        let ip_sources = match get(ENV_IP_SOURCES) {
+            None => crate::ip_detect::IP_SOURCES.map(String::from).to_vec(),
+            Some(list) => {
+                let sources: Vec<String> =
+                    list.split(',').map(|item| item.trim().to_owned()).collect();
+                if !(2..=8).contains(&sources.len()) {
+                    return Err(ConfigError::Environment {
+                        var: ENV_IP_SOURCES,
+                        message: format!("needs 2 to 8 URLs, got {}", sources.len()),
+                    });
+                }
+                for source in &sources {
+                    check_url(ENV_IP_SOURCES, source)?;
+                }
+                sources
+            }
+        };
+        Ok(Overrides {
+            globalping_url: url(ENV_GLOBALPING_URL, crate::gp::DEFAULT_BASE)?,
+            ip_sources,
+            ipsum_url: url(ENV_IPSUM_URL, crate::antiscan::IPSUM_URL)?,
+            allow_private_ips: get(ENV_ALLOW_PRIVATE_IPS).as_deref() == Some("true"),
+        })
+    }
+}
+
+fn check_url(var: &'static str, value: &str) -> Result<(), ConfigError> {
+    match Url::parse(value) {
+        Ok(url) if matches!(url.scheme(), "http" | "https") && url.host_str().is_some() => Ok(()),
+        _ => Err(ConfigError::Environment {
+            var,
+            message: format!("{value:?} is not an http or https URL"),
+        }),
+    }
 }
