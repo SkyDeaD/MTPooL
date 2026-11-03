@@ -1,5 +1,6 @@
 //! Pure pool logic without I/O.
 
+pub mod dns;
 pub mod health;
 pub mod lifecycle;
 pub mod links;
@@ -8,6 +9,10 @@ pub mod settings;
 pub mod types;
 pub mod votes;
 
+pub use dns::{
+    DnsOp, DnsPlanError, DnsState, LiveRecord, NewRecord, RecordKind, RecordValue, backoff,
+    plan_changes,
+};
 pub use health::{FailedCondition, GpStatus, Latch, NodeHealth, failed_conditions};
 pub use lifecycle::{
     EnrollDecision, EnrollInput, IpBlock, LifecycleEvent, NodeRecord, RejectReason, RoundResult,
