@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
+use mtpool_agent::antiscan::{Antiscan, AntiscanSink, IpsumHttp};
 use mtpool_agent::client::RegistrarClient;
 use mtpool_agent::config::{DEFAULT_CONFIG_PATH, LocalConfig};
 use mtpool_agent::engine::http::ReqwestHttp;
@@ -144,6 +145,16 @@ async fn run(config_path: PathBuf) -> ExitCode {
         port: config.port,
     };
 
+    let ipsum = match IpsumHttp::new() {
+        Ok(ipsum) => ipsum,
+        Err(error) => {
+            tracing::error!("cannot build the HTTP client for antiscan: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let antiscan = Arc::new(Antiscan::new(Arc::new(TokioRunner), ipsum, config.antiscan));
+    let antiscan_task = tokio::spawn(antiscan.clone().run());
+
     let ports = Arc::new(LocalTcp);
     let gp = match GpLoop::new(DEFAULT_BASE, ports.clone()) {
         Ok(gp) => gp,
@@ -168,7 +179,11 @@ async fn run(config_path: PathBuf) -> ExitCode {
         reports: checks,
         sink: Remembering {
             memory,
-            inner: shared,
+            inner: AntiscanSink {
+                antiscan,
+                local_enabled: config.antiscan,
+                inner: shared,
+            },
         },
     };
     let lifecycle = match Lifecycle::new(&config, client, fs, hooks, system_jitter()) {
@@ -184,6 +199,7 @@ async fn run(config_path: PathBuf) -> ExitCode {
     tracing::info!(version = env!("CARGO_PKG_VERSION"), name = %config.name, "mtpool-agent starts");
     let outcome = lifecycle.run(shutdown_signal()).await;
     gp_task.abort();
+    antiscan_task.abort();
     match outcome {
         Ok(()) => {
             tracing::info!("mtpool-agent stops");

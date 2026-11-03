@@ -97,6 +97,16 @@ pub mod testing {
             };
             lock(&self.answers).push_back(Ok(output));
         }
+        /// The next call answers with this exit code and standard error.
+        pub fn push_failure(&self, code: i32, stderr: &str) {
+            use std::os::unix::process::ExitStatusExt;
+            let output = Output {
+                status: std::process::ExitStatus::from_raw(code << 8),
+                stdout: Vec::new(),
+                stderr: stderr.as_bytes().to_vec(),
+            };
+            lock(&self.answers).push_back(Ok(output));
+        }
         /// The next call fails as if the program could not be started.
         pub fn push_error(&self, error: io::Error) {
             lock(&self.answers).push_back(Err(error));

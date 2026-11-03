@@ -1,0 +1,23 @@
+#                          _
+#                         (_)
+# IPsum: threat intelligence feed (shape of the full list, made-up addresses)
+#
+# ip	number of lists
+192.0.2.10	9
+198.51.100.20	7
+# a comment in the middle
+
+203.0.113.5	3
+192.0.2.10	9
+  198.51.100.21  	2  
+not-an-address	4
+999.1.1.1	2
+2001:db8::1	5
+10.1.2.3	6
+127.0.0.1	6
+169.254.1.1	2
+224.0.0.1	2
+0.0.0.0	1
+255.255.255.255	1
+192.168.5.5	2
+203.0.113.6

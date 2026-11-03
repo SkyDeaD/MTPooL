@@ -1,6 +1,7 @@
 //! Node agent: enrolls with the registrar, keeps its credentials in private state files and
 //! runs the heartbeat, report and config loops. The agent opens no listening socket.
 
+pub mod antiscan;
 pub mod client;
 pub mod config;
 pub mod dead_kill;
