@@ -206,6 +206,16 @@ impl Settings {
             "rotation_ttl_sec",
             "must be at most 43200",
         )?;
+        check(
+            self.latch_fail_threshold <= 255,
+            "latch_fail_threshold",
+            "must be at most 255",
+        )?;
+        check(
+            self.latch_ok_threshold <= 255,
+            "latch_ok_threshold",
+            "must be at most 255",
+        )?;
         check(self.proxy_port != 0, "proxy_port", "must be greater than 0")?;
         check(
             self.domains.iter().all(|d| !d.is_empty()),
@@ -385,6 +395,18 @@ mod tests {
         .validate()
         .unwrap_err();
         assert!(err.to_string().contains("masters_per_domain"), "{err}");
+    }
+
+    #[test]
+    fn latch_thresholds_fit_the_u8_counters() {
+        let with = |fail, ok| Settings {
+            latch_fail_threshold: fail,
+            latch_ok_threshold: ok,
+            ..Default::default()
+        };
+        assert!(with(255, 255).validate().is_ok());
+        assert!(with(256, 2).validate().is_err());
+        assert!(with(3, 256).validate().is_err());
     }
 
     #[test]

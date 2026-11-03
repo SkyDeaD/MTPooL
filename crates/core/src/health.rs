@@ -69,10 +69,23 @@ pub enum GpStatus {
     Failed {
         at: Ts,
     },
-    /// Globalping answered 429: no data, neither success nor failure.
+    /// Globalping answered 429: no data, neither success nor failure. Only follows a
+    /// success (see [`GpStatus::on_no_data`]); `Unknown` and `Failed` are never replaced by it.
     NoData {
         at: Ts,
     },
+}
+
+impl GpStatus {
+    /// Status after an agent report with no data. A success stays acceptable (as `NoData`,
+    /// until the report ages out into `ReportStale`); `Unknown` and `Failed` are unchanged,
+    /// so a 429 cannot turn a blocked or unproven node into a healthy one.
+    pub fn on_no_data(self, at: Ts) -> GpStatus {
+        match self {
+            GpStatus::Ok { .. } | GpStatus::NoData { .. } => GpStatus::NoData { at },
+            GpStatus::Unknown | GpStatus::Failed { .. } => self,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +94,8 @@ pub struct NodeHealth {
     pub metrics: Latch,
     pub gp: GpStatus,
     pub last_heartbeat: Ts,
+    /// Latest report with a measurement the registrar verified. A report with no data does
+    /// not refresh it, which is why a long run of 429s ages out into `ReportStale`.
     pub last_report: Ts,
     /// The node's port matches the pool setting.
     pub port_ok: bool,
@@ -260,6 +275,31 @@ mod tests {
             failed_conditions(&h, NOW, &Settings::default()),
             vec![FailedCondition::ReportStale],
             "the stale report catches it, not Globalping"
+        );
+    }
+
+    #[test]
+    fn no_data_does_not_clear_failed_or_unknown() {
+        let failed = GpStatus::Failed { at: ago(100) };
+        assert_eq!(failed.on_no_data(ago(10)), failed);
+        assert_eq!(GpStatus::Unknown.on_no_data(ago(10)), GpStatus::Unknown);
+
+        let h = NodeHealth {
+            gp: failed.on_no_data(ago(10)),
+            ..healthy()
+        };
+        assert_eq!(
+            failed_conditions(&h, NOW, &Settings::default()),
+            vec![FailedCondition::Globalping]
+        );
+
+        assert_eq!(
+            GpStatus::Ok { at: ago(100) }.on_no_data(ago(10)),
+            GpStatus::NoData { at: ago(10) }
+        );
+        assert_eq!(
+            GpStatus::NoData { at: ago(100) }.on_no_data(ago(10)),
+            GpStatus::NoData { at: ago(10) }
         );
     }
 
