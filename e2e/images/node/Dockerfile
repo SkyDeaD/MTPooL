@@ -5,6 +5,9 @@ RUN apk add --no-cache build-base
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY deploy ./deploy
+# The agent verifies releases with this key: the public half of the stand's test key.
+COPY e2e/keys/minisign.pub ./deploy/minisign.pub
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --release --locked -p mtpool-agent \
@@ -38,10 +41,22 @@ RUN set -eu; \
     telemt --version
 
 COPY --from=build /out/mtpool-agent /usr/local/bin/mtpool-agent
-COPY e2e/images/node/telemt.service e2e/images/node/mtpool-agent.service /etc/systemd/system/
-COPY e2e/images/node/telemt.toml /etc/telemt/telemt.toml
-RUN mkdir -p /etc/mtpool /var/lib/mtpool /etc/systemd/system/multi-user.target.wants \
+# The units and the engine's starting configuration are the ones the installer puts on a real
+# node. Only the agent's environment is the stand's: plain http to the registrar, private
+# addresses and the stand-ins for the services outside the pool.
+COPY deploy/systemd/telemt.service deploy/systemd/mtpool-agent.service /etc/systemd/system/
+COPY deploy/systemd/telemt.toml /tmp/telemt.toml
+RUN mkdir -p /etc/mtpool /etc/telemt /var/lib/mtpool /etc/systemd/system/multi-user.target.wants \
+ && sed -e 's/__PORT__/443/' -e 's/__TLS_DOMAIN__/www.example.com/' \
+        -e 's/__SECRET__/00112233445566778899aabbccddeeff/' /tmp/telemt.toml > /etc/telemt/telemt.toml \
+ && rm /tmp/telemt.toml \
  && ln -s /etc/systemd/system/telemt.service /etc/systemd/system/multi-user.target.wants/telemt.service
+RUN printf '%s\n' \
+      'MTPOOL_ALLOW_PRIVATE_IPS=true' \
+      'MTPOOL_GLOBALPING_URL=http://fakes:9000/globalping/' \
+      'MTPOOL_IP_SOURCES=http://fakes:9000/ip,http://fakes:9000/ip?2,http://fakes:9000/ip?3,http://fakes:9000/ip?4' \
+      'MTPOOL_IPSUM_URL=http://fakes:9000/ipsum' \
+      > /etc/mtpool/agent.env
 
 STOPSIGNAL SIGRTMIN+3
 CMD ["/sbin/init"]

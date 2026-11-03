@@ -3,9 +3,23 @@
 //! is one running copy of it; dropping it takes the copy down again (set `MTPOOL_E2E_KEEP=1` to
 //! keep it for a look). Everything here is for tests: nothing checks more than a test needs.
 
+mod backup;
+mod faults;
+mod install;
+mod observe;
+mod release;
+mod signing;
+mod traffic;
+
+pub use install::{InstallOptions, Installed, Token};
+pub use observe::eventually;
+pub use release::{Release, ReleaseSpec};
+pub use signing::{TestKey, ensure_test_key};
+
 use std::fmt;
 use std::path::PathBuf;
 use std::process::{Command as StdCommand, Stdio};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
@@ -26,6 +40,31 @@ impl std::error::Error for StandError {}
 
 pub type Result<T> = std::result::Result<T, StandError>;
 
+/// An address that can change under the holders of it: the registrar's published port is a new
+/// one after the container restarts.
+#[derive(Clone)]
+struct Url(Arc<RwLock<String>>);
+
+impl Url {
+    fn new(value: String) -> Url {
+        Url(Arc::new(RwLock::new(value)))
+    }
+
+    fn get(&self) -> String {
+        self.0
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn set(&self, value: String) {
+        *self
+            .0
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = value;
+    }
+}
+
 fn fail<T>(message: impl Into<String>) -> Result<T> {
     Err(StandError(message.into()))
 }
@@ -34,6 +73,10 @@ fn fail<T>(message: impl Into<String>) -> Result<T> {
 const POLL_EVERY: Duration = Duration::from_secs(1);
 /// The pool's name for the domain the stand serves; the fake Cloudflare knows `example.com`.
 pub const DOMAIN: &str = "pool.example.com";
+/// The TLS domain the proxies of the stand impersonate.
+pub const TLS_DOMAIN: &str = "www.example.com";
+/// The secret of the stand's proxy user `e2e`: a value for tests, not a secret.
+pub const PROXY_USER_SECRET: &str = "0123456789abcdef0123456789abcdef";
 /// The token the stand-ins accept for every secret.
 const FAKE_SECRET: &str = "e2e-fake-token";
 /// The state directory of the agent on a node.
@@ -58,7 +101,25 @@ struct Output {
     stdout: String,
 }
 
+/// What a command printed and whether it succeeded; [`run_raw`] does not call a failure an error.
+struct Raw {
+    success: bool,
+    stdout: String,
+    stderr: String,
+}
+
 async fn run(command: &mut Command, what: &str, stdin: Option<&str>) -> Result<Output> {
+    let raw = run_raw(command, what, stdin).await?;
+    if !raw.success {
+        return fail(format!(
+            "{what} failed\n--- stdout\n{}\n--- stderr\n{}",
+            raw.stdout, raw.stderr
+        ));
+    }
+    Ok(Output { stdout: raw.stdout })
+}
+
+async fn run_raw(command: &mut Command, what: &str, stdin: Option<&str>) -> Result<Raw> {
     command
         .stdin(if stdin.is_some() {
             Stdio::piped()
@@ -80,21 +141,17 @@ async fn run(command: &mut Command, what: &str, stdin: Option<&str>) -> Result<O
         .wait_with_output()
         .await
         .map_err(|e| StandError(format!("{what}: {e}")))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return fail(format!(
-            "{what} ended with {}\n--- stdout\n{stdout}\n--- stderr\n{stderr}",
-            output.status
-        ));
-    }
-    Ok(Output { stdout })
+    Ok(Raw {
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
 }
 
 /// The admin API of the registrar.
 pub struct Admin {
     http: reqwest::Client,
-    base: String,
+    base: Url,
     token: String,
 }
 
@@ -107,7 +164,7 @@ impl Admin {
     ) -> Result<Value> {
         let mut request = self
             .http
-            .request(method.clone(), format!("{}{path}", self.base))
+            .request(method.clone(), format!("{}{path}", self.base.get()))
             .bearer_auth(&self.token);
         if let Some(body) = body {
             request = request.json(&body);
@@ -141,53 +198,76 @@ impl Admin {
     }
 }
 
+/// What a command did: whether it succeeded and everything it printed.
+#[derive(Debug, Clone)]
+pub struct CommandRun {
+    pub success: bool,
+    pub output: String,
+}
+
+/// What a stand is brought up with.
+#[derive(Debug, Clone, Default)]
+pub struct StandOptions {
+    /// Put the registrar's database on a 2 MB tmpfs that [`Stand::break_db_writes`] can fill.
+    /// Such a database goes with the container, so the registrar of this stand is not restarted.
+    pub small_db: bool,
+}
+
 /// One running copy of the stand.
 pub struct Stand {
     /// Takes the project down when the stand is dropped.
     guard: Guard,
-    registrar_url: String,
+    registrar_url: Url,
     fakes_url: String,
     http: reqwest::Client,
     pub admin: Admin,
     enroll_token: String,
+    /// Whether the registrar's database is on the small tmpfs.
+    small_db: bool,
 }
 
 impl Stand {
     /// Brings the stand up, waits for the registrar and sets the pool up: settings that make the
     /// pool quick, an owner and an enroll token.
     pub async fn up() -> Result<Stand> {
+        Stand::up_with(StandOptions::default()).await
+    }
+
+    /// [`Stand::up`] with the options given.
+    pub async fn up_with(options: StandOptions) -> Result<Stand> {
+        // The images embed the public half of the stand's key; it has to exist before they build.
+        ensure_test_key()?;
         let project = project_name();
-        let file = compose_file();
+        let mut files = vec![compose_file()];
+        if options.small_db {
+            files.push(compose_file().with_file_name("compose.small-db.yml"));
+        }
         let guard = Guard {
             project: project.clone(),
-            file: file.clone(),
+            files,
+            env: Vec::new(),
         };
         eprintln!("e2e: project {project}");
         run(
-            compose(&project, &file).args([
-                "up",
-                "-d",
-                "--build",
-                "--wait",
-                "--wait-timeout",
-                "240",
-            ]),
+            guard
+                .compose()
+                .args(["up", "-d", "--build", "--wait", "--wait-timeout", "240"]),
             "docker compose up",
             None,
         )
         .await?;
 
-        let registrar_url = published(&project, &file, "registrar", "8080").await?;
-        let fakes_url = published(&project, &file, "fakes", "9000").await?;
+        let registrar_url = Url::new(published(&guard, "registrar", "8080").await?);
+        let fakes_url = published(&guard, "fakes", "9000").await?;
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .no_proxy()
             .build()
             .map_err(|e| StandError(format!("cannot build the HTTP client: {e}")))?;
-        wait_ready(&http, &registrar_url).await?;
+        wait_ready(&http, &registrar_url.get()).await?;
 
         let token = run(
-            compose(&project, &file).args([
+            guard.compose().args([
                 "exec",
                 "-T",
                 "registrar",
@@ -235,11 +315,17 @@ impl Stand {
             http,
             admin,
             enroll_token,
+            small_db: options.small_db,
         })
     }
 
-    pub fn registrar_url(&self) -> &str {
-        &self.registrar_url
+    pub fn registrar_url(&self) -> String {
+        self.registrar_url.get()
+    }
+
+    /// The enroll token of the stand's owner. A secret: it goes to a node by stdin or a file.
+    pub fn enroll_token(&self) -> &str {
+        &self.enroll_token
     }
 
     pub fn fakes_url(&self) -> &str {
@@ -281,7 +367,10 @@ impl Stand {
 
     /// The public node list of the registrar.
     pub async fn nodes(&self) -> Result<Vec<Value>> {
-        match self.public(&self.registrar_url, "/api/v1/nodes").await? {
+        match self
+            .public(&self.registrar_url.get(), "/api/v1/nodes")
+            .await?
+        {
             Value::Array(nodes) => Ok(nodes),
             other => fail(format!("the node list is not an array: {other}")),
         }
@@ -289,7 +378,8 @@ impl Stand {
 
     /// The public domain list of the registrar.
     pub async fn public_domains(&self) -> Result<Value> {
-        self.public(&self.registrar_url, "/api/v1/domains").await
+        self.public(&self.registrar_url.get(), "/api/v1/domains")
+            .await
     }
 
     async fn public(&self, base: &str, path: &str) -> Result<Value> {
@@ -403,7 +493,33 @@ impl Stand {
 /// Takes the project down when it goes out of scope, unless it is to be kept.
 struct Guard {
     project: String,
-    file: PathBuf,
+    /// The compose file, then the files that override it.
+    files: Vec<PathBuf>,
+    /// Variables of every `docker compose` command (the compose file reads some).
+    env: Vec<(String, String)>,
+}
+
+impl Guard {
+    /// `-f <file>` for each compose file.
+    fn file_args(&self) -> Vec<std::ffi::OsString> {
+        let mut args = Vec::new();
+        for file in &self.files {
+            args.push("-f".into());
+            args.push(file.into());
+        }
+        args
+    }
+
+    /// `docker compose` for this project.
+    fn compose(&self) -> Command {
+        let mut command = Command::new("docker");
+        command
+            .args(["compose", "-p", &self.project])
+            .args(self.file_args())
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
+            .kill_on_drop(true);
+        command
+    }
 }
 
 impl Drop for Guard {
@@ -411,8 +527,9 @@ impl Drop for Guard {
         if std::thread::panicking() {
             // The test failed: what the services said is the first thing to look at.
             let _ = StdCommand::new("docker")
-                .args(["compose", "-p", &self.project, "-f"])
-                .arg(&self.file)
+                .args(["compose", "-p", &self.project, "--profile", "*"])
+                .args(self.file_args())
+                .envs(self.env.iter().map(|(k, v)| (k, v)))
                 .args(["logs", "--no-color", "--tail", "80"])
                 .status();
         }
@@ -424,8 +541,9 @@ impl Drop for Guard {
             return;
         }
         let _ = StdCommand::new("docker")
-            .args(["compose", "-p", &self.project, "-f"])
-            .arg(&self.file)
+            .args(["compose", "-p", &self.project, "--profile", "*"])
+            .args(self.file_args())
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
             .args(["down", "-v", "--remove-orphans", "--timeout", "5"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -447,19 +565,50 @@ impl Node<'_> {
 
     async fn exec_with(&self, command: &str, stdin: Option<&str>) -> Result<String> {
         let output = run(
-            compose(&self.stand.guard.project, &self.stand.guard.file).args([
-                "exec",
-                "-T",
-                &self.service,
-                "sh",
-                "-c",
-                command,
-            ]),
+            &mut self.exec_command(command, &[]),
             &format!("exec in {}: {command}", self.service),
             stdin,
         )
         .await?;
         Ok(output.stdout)
+    }
+
+    /// `docker compose exec` of `sh -c command`; `env` is handed to the command as environment
+    /// (not as an argument, so it does not show in the process list).
+    fn exec_command(&self, command: &str, env: &[(&str, &str)]) -> Command {
+        let mut c = self.stand.guard.compose();
+        c.args(["exec", "-T"]);
+        for (name, _) in env {
+            // `-e NAME` takes the value from this process's environment.
+            c.args(["-e", name]);
+        }
+        c.args([&self.service, "sh", "-c", command]);
+        c.envs(env.iter().copied());
+        c
+    }
+
+    /// Like [`Node::exec`], but a failure is an answer, not an error: what the command printed
+    /// (stdout and stderr together) and whether it succeeded.
+    pub async fn try_exec(&self, command: &str, env: &[(&str, &str)]) -> Result<CommandRun> {
+        self.try_exec_with(command, env, None).await
+    }
+
+    async fn try_exec_with(
+        &self,
+        command: &str,
+        env: &[(&str, &str)],
+        stdin: Option<&str>,
+    ) -> Result<CommandRun> {
+        let raw = run_raw(
+            &mut self.exec_command(command, env),
+            &format!("exec in {}", self.service),
+            stdin,
+        )
+        .await?;
+        Ok(CommandRun {
+            success: raw.success,
+            output: format!("{}{}", raw.stdout, raw.stderr),
+        })
     }
 
     /// The address of the node on the stand's network.
@@ -492,15 +641,24 @@ impl Node<'_> {
         )
         .await?;
         self.exec("systemctl start mtpool-agent").await?;
+        self.wait_node_id(Duration::from_secs(60)).await
+    }
 
-        let deadline = Instant::now() + Duration::from_secs(60);
+    /// The id the registrar gave this node, once the agent has enrolled; `None` before.
+    pub async fn node_id(&self) -> Result<Option<String>> {
+        let id = self
+            .exec(&format!("cat {STATE_DIR}/node_id 2>/dev/null || true"))
+            .await?;
+        let id = id.trim();
+        Ok((!id.is_empty()).then(|| id.to_owned()))
+    }
+
+    /// Waits for the agent on this node to enroll, and returns the node's id.
+    pub async fn wait_node_id(&self, within: Duration) -> Result<String> {
+        let deadline = Instant::now() + within;
         loop {
-            let id = self
-                .exec(&format!("cat {STATE_DIR}/node_id 2>/dev/null || true"))
-                .await?;
-            let id = id.trim();
-            if !id.is_empty() {
-                return Ok(id.to_owned());
+            if let Some(id) = self.node_id().await? {
+                return Ok(id);
             }
             if Instant::now() >= deadline {
                 let journal = self
@@ -508,7 +666,7 @@ impl Node<'_> {
                     .await
                     .unwrap_or_default();
                 return fail(format!(
-                    "{} did not enroll within 60 seconds; the agent said:\n{journal}",
+                    "{} did not enroll within {within:?}; the agent said:\n{journal}",
                     self.service
                 ));
             }
@@ -517,19 +675,10 @@ impl Node<'_> {
     }
 }
 
-fn compose(project: &str, file: &PathBuf) -> Command {
-    let mut command = Command::new("docker");
-    command
-        .args(["compose", "-p", project, "-f"])
-        .arg(file)
-        .kill_on_drop(true);
-    command
-}
-
 /// The address on this machine of a port the compose file publishes.
-async fn published(project: &str, file: &PathBuf, service: &str, port: &str) -> Result<String> {
+async fn published(guard: &Guard, service: &str, port: &str) -> Result<String> {
     let out = run(
-        compose(project, file).args(["port", service, port]),
+        guard.compose().args(["port", service, port]),
         &format!("docker compose port {service} {port}"),
         None,
     )
@@ -580,9 +729,9 @@ async fn configure(admin: &Admin) -> Result<()> {
                 "round_interval_slow_sec": 5,
                 "dead_after_sec": 30,
                 "domains": [DOMAIN],
-                "tls_domain": "www.example.com",
+                "tls_domain": TLS_DOMAIN,
                 "dns_ttl": 60,
-                "proxy_users": [{"name": "e2e", "secret_hex": "0123456789abcdef0123456789abcdef"}],
+                "proxy_users": [{"name": "e2e", "secret_hex": PROXY_USER_SECRET}],
                 "secrets": {
                     "globalping_token": FAKE_SECRET,
                     "redflag_api_key": FAKE_SECRET,

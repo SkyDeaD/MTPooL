@@ -51,6 +51,7 @@ services:
       dockerfile: e2e/images/registrar/Dockerfile
     environment:
       MTPOOL_LISTEN: 0.0.0.0:8080
+      MTPOOL_RELEASES_DIR: /srv/releases
       MTPOOL_DB_PATH: /var/lib/mtpool/registrar.db
       MTPOOL_LOG: info
       MTPOOL_ALLOW_PRIVATE_IPS: "true"
@@ -58,6 +59,10 @@ services:
       MTPOOL_CHEBURCHECK_URL: http://fakes:9000/cheburcheck/
       MTPOOL_REDFLAG_URL: http://fakes:9000/redflag/
       MTPOOL_CLOUDFLARE_URL: http://fakes:9000/cloudflare/
+    # The database is on a volume, so that a restore can run in a second container while the
+    # registrar is stopped. compose.small-db.yml turns the volume into a 2 MB tmpfs.
+    volumes:
+      - registrar-data:/var/lib/mtpool
     ports:
       - "8080"
     depends_on:
@@ -75,3 +80,25 @@ services:
     <<: *node
   node3:
     <<: *node
+
+  # A bare Ubuntu 24.04 with systemd for the registrar installer. Not started with the rest:
+  # a scenario asks for it by name.
+  registrar-fresh:
+    <<: *node
+    image: mtpool-e2e-fresh:local
+    build:
+      context: ..
+      dockerfile: e2e/images/registrar/Dockerfile
+      target: fresh
+    profiles: ["fresh"]
+    depends_on:
+      registrar:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "systemctl", "is-active", "--quiet", "default.target"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  registrar-data:

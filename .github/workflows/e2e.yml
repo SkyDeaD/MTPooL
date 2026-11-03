@@ -10,20 +10,18 @@ permissions:
 jobs:
   stand:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - name: Build the images
-        run: docker compose -f e2e/compose.yml build
-      - name: Run the smoke scenario
-        env:
-          # A failed run leaves the stand up, so that its logs can be collected below.
-          MTPOOL_E2E_KEEP: "1"
-        run: cargo test -p mtpool-e2e --test smoke --locked -- --ignored --nocapture
+      - name: Run the scenarios
+        # Each scenario brings its own stand up and takes it down; a failed one prints the logs
+        # of its services. The test key and the images are made by the first stand.
+        run: |
+          cargo test -p mtpool-e2e --locked --test smoke --test scenarios --test operations -- --ignored --nocapture --test-threads=1
       - name: Collect the logs of the stand
         if: failure()
         run: |
