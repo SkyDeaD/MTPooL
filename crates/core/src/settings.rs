@@ -77,7 +77,7 @@ pub struct GlobalpingSettings {
     pub window_past_sec: u32,
     /// ...and this far into the future.
     pub window_future_sec: u32,
-    /// Below this many remaining credits the sensor abstains.
+    /// Below this much remaining test allowance (from `/v1/limits`) the sensor abstains.
     pub min_limit_remaining: u32,
     pub allow_credits: bool,
 }
@@ -120,7 +120,7 @@ impl Default for Settings {
             rounds_before_slow: 3,
             clean_rounds_to_exit: 2,
             reverify_pause_sec: 900,
-            masters_per_domain: 3,
+            masters_per_domain: 1,
             rotation_ttl_sec: 1800,
             dns_ttl: 60,
             dns_proxied: false,
@@ -287,6 +287,7 @@ mod tests {
     fn defaults_match_spec() {
         let s = Settings::default();
         assert_eq!(s.rotation_ttl_sec, 1800);
+        assert_eq!(s.masters_per_domain, 1);
         assert_eq!(s.heartbeat_interval_sec, 15);
         assert_eq!(s.globalping_interval_sec, 300);
         assert_eq!(s.metrics_interval_sec, 60);

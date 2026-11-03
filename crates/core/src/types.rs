@@ -10,7 +10,8 @@ pub struct Ts(pub i64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OwnerId(pub i64);
 
-/// Version of a domain's desired DNS state; checked before applying a worker result.
+/// Version of a domain's desired DNS state or of a node's state; checked before applying
+/// a worker result, so a stale result is rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Generation(pub u64);
 
