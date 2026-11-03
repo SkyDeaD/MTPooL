@@ -27,6 +27,8 @@ use crate::api::stream::EventFan;
 use crate::api::webhook_url::{Resolver, SystemResolver};
 use crate::auth::{AuthState, session};
 use crate::config::Config;
+use crate::dns::cloudflare::CloudflareDns;
+use crate::dns::worker::DnsWorker;
 use crate::secrets;
 use crate::sensors::Sensor;
 use crate::sensors::cheburcheck::CheburcheckSensor;
@@ -278,6 +280,13 @@ pub async fn run_with(
         ),
     ];
     drivers.push(Arc::new(RoundRunner::new(sensors)));
+    // DNS: the Cloudflare token is asked for on every request, like the others.
+    let dns_store = store.clone();
+    let dns_token: TokenSource =
+        Arc::new(move || secrets::secret(&dns_store, "cloudflare_api_token"));
+    let dns = CloudflareDns::new(CloudflareDns::default_base(), dns_token)
+        .map_err(RunError::HttpClient)?;
+    drivers.push(Arc::new(DnsWorker::new(Arc::new(dns))));
     let actor = Actor::spawn(state, store.clone(), drivers);
     let app = router(
         AppState::new(store.clone(), actor.clone(), actor.snapshots())

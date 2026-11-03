@@ -1,0 +1,38 @@
+{
+  "_source": "recorded shape, Cloudflare API v4, 2026-11-04; the zone, account and name servers replaced by placeholders",
+  "result": [
+    {
+      "id": "023e105f4ecef8ad9ca31a8372d0c353",
+      "name": "example.com",
+      "status": "active",
+      "paused": false,
+      "type": "full",
+      "development_mode": 0,
+      "name_servers": ["ns1.example.net", "ns2.example.net"],
+      "original_name_servers": ["ns1.example.org", "ns2.example.org"],
+      "original_registrar": null,
+      "original_dnshost": null,
+      "modified_on": "2026-01-01T00:00:00.000000Z",
+      "created_on": "2026-01-01T00:00:00.000000Z",
+      "activated_on": "2026-01-01T00:00:00.000000Z",
+      "vanity_name_servers": [],
+      "vanity_name_servers_ips": null,
+      "meta": {
+        "step": 2,
+        "custom_certificate_quota": 0,
+        "page_rule_quota": 3,
+        "phishing_detected": false
+      },
+      "tenant": {"id": null, "name": null},
+      "tenant_unit": {"id": null},
+      "owner": {"id": null, "type": "user", "email": null},
+      "account": {"id": "01a7362d577a6c3019a474fd6f485823", "name": "Example account"},
+      "permissions": ["#dns_records:edit", "#dns_records:read", "#zone:read"],
+      "plan": {"id": "0feeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "name": "Free Website"}
+    }
+  ],
+  "result_info": {"page": 1, "per_page": 20, "total_pages": 1, "count": 1, "total_count": 1},
+  "success": true,
+  "errors": [],
+  "messages": []
+}
