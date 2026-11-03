@@ -15,6 +15,12 @@ pub struct OwnerId(pub i64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Generation(pub u64);
 
+impl Generation {
+    pub fn next(self) -> Generation {
+        Generation(self.0.saturating_add(1))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EngineKind {
     Telemt,

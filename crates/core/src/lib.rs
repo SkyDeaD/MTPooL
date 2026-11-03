@@ -1,13 +1,21 @@
 //! Pure pool logic without I/O.
 
 pub mod health;
+pub mod lifecycle;
 pub mod links;
 pub mod settings;
 pub mod types;
+pub mod votes;
 
 pub use health::{FailedCondition, GpStatus, Latch, NodeHealth, failed_conditions};
+pub use lifecycle::{
+    EnrollDecision, EnrollInput, IpBlock, LifecycleEvent, NodeRecord, RejectReason, RoundResult,
+    Tombstone, apply_round, decide_enroll, is_alive, needs_sensors, next_round_at, record_prune,
+    reset_tombstones, tick_node, unban,
+};
 pub use links::build_proxy_link;
 pub use settings::{GlobalpingSettings, ProxyUser, Settings, SettingsError, SrmdSettings};
 pub use types::{
     EngineKind, Generation, IdError, NodeId, NodeState, OwnerId, Ts, is_public_ipv4, mask_ip,
 };
+pub use votes::{AbstainReason, RoundVerdict, SensorKind, SensorVote, Vote, judge_round};

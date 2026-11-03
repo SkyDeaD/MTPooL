@@ -137,7 +137,7 @@ pub fn failed_conditions(h: &NodeHealth, now: Ts, s: &Settings) -> Vec<FailedCon
 
 /// True when `at` is strictly younger than `max_age_sec`. A timestamp ahead of `now` counts
 /// as fresh.
-fn younger_than(at: Ts, now: Ts, max_age_sec: u32) -> bool {
+pub(crate) fn younger_than(at: Ts, now: Ts, max_age_sec: u32) -> bool {
     now.0.saturating_sub(at.0) < i64::from(max_age_sec) * 1000
 }
 
