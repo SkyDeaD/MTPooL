@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 use crate::auth::tokens;
-use crate::config::{Config, ENV_LOG};
+use crate::config::{Config, DEFAULT_LOG, ENV_LOG};
 use crate::server;
 use crate::store::Store;
 
@@ -43,8 +43,25 @@ pub enum AdminCommand {
     ResetToken,
 }
 
-pub fn init_logging() {
-    let filter = EnvFilter::try_from_env(ENV_LOG).unwrap_or_else(|_| EnvFilter::new("info"));
+/// The filter for `directives` (the `MTPOOL_LOG` value). Directives that do not parse give
+/// `info` and a warning text for the operator.
+pub fn log_filter(directives: &str) -> (EnvFilter, Option<String>) {
+    match EnvFilter::try_new(directives) {
+        Ok(filter) => (filter, None),
+        Err(_) => (
+            EnvFilter::new(DEFAULT_LOG),
+            Some(format!(
+                "warning: {ENV_LOG} value {directives:?} is not a valid log filter and is ignored, using {DEFAULT_LOG:?}"
+            )),
+        ),
+    }
+}
+
+pub fn init_logging(directives: &str) {
+    let (filter, warning) = log_filter(directives);
+    if let Some(warning) = warning {
+        eprintln!("{warning}");
+    }
     // Standard output carries command results (`openapi`, `version`): logs go to standard error.
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -53,7 +70,7 @@ pub fn init_logging() {
         .init();
 }
 
-pub async fn run(cli: Cli) -> ExitCode {
+pub async fn run(cli: Cli, config: Config) -> ExitCode {
     match cli.command {
         CliCommand::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
@@ -64,13 +81,13 @@ pub async fn run(cli: Cli) -> ExitCode {
             println!("{{}}");
             ExitCode::SUCCESS
         }
-        CliCommand::Serve => match serve().await {
+        CliCommand::Serve => match serve(config).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(message) => fail(&message),
         },
         CliCommand::Admin {
             command: AdminCommand::ResetToken,
-        } => match reset_token().await {
+        } => match reset_token(config).await {
             // The token is shown here and nowhere else.
             Ok(token) => {
                 println!("{token}");
@@ -90,8 +107,7 @@ fn fail(message: &str) -> ExitCode {
 
 /// Issues a new admin token: the old ones stop working and every panel session ends. Works on
 /// a stopped or a running registrar, which reads tokens and sessions from the database.
-async fn reset_token() -> Result<String, String> {
-    let config = Config::from_env().map_err(|e| e.to_string())?;
+async fn reset_token(config: Config) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         let store = Store::open(&config.db_path).map_err(|e| e.to_string())?;
         let token = tokens::rotate_admin(&store).map_err(|e| e.to_string());
@@ -102,8 +118,7 @@ async fn reset_token() -> Result<String, String> {
     .map_err(|e| e.to_string())?
 }
 
-async fn serve() -> Result<(), String> {
-    let config = Config::from_env().map_err(|e| e.to_string())?;
+async fn serve(config: Config) -> Result<(), String> {
     let path = config.db_path.clone();
     tracing::info!(db = %path.display(), version = env!("CARGO_PKG_VERSION"), "starting");
     let store = tokio::task::spawn_blocking(move || Store::open(&path))
@@ -141,5 +156,21 @@ mod tests {
             }
         );
         assert!(parse(&["nonsense"]).is_err());
+    }
+
+    #[test]
+    fn invalid_log_filter_falls_back_to_info() {
+        let (filter, warning) = log_filter("info");
+        assert_eq!(filter.to_string(), "info");
+        assert_eq!(warning, None);
+
+        let (filter, warning) = log_filter("mtpool_registrar=nonsense_level");
+        assert_eq!(filter.to_string(), "info");
+        let warning = warning.expect("a bad directive is reported");
+        assert!(warning.contains("MTPOOL_LOG"), "{warning}");
+        assert!(
+            warning.contains("mtpool_registrar=nonsense_level"),
+            "{warning}"
+        );
     }
 }

@@ -1,9 +1,10 @@
 //! HTTP server and the service lifecycle: start, serve, stop.
 
-use std::future::Future;
+use std::future::{Future, IntoFuture};
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::extract::State;
@@ -12,6 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use listenfd::ListenFd;
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::actor::{Actor, ActorHandle, EffectDriver};
@@ -105,13 +107,29 @@ pub async fn shutdown(actor: &ActorHandle, store: &Store) -> Result<(), StoreErr
     .unwrap_or(Err(StoreError::WriterStopped))
 }
 
-/// Runs the service on `listener` until `stop` completes: restore the state, start the actor,
-/// serve, and on stop wait for requests in flight, stop the actor and flush the store.
+/// How long requests in flight may take after the stop signal. Past it the service stops
+/// anyway: flushing the store never waits on an open connection.
+pub const DRAIN_DEADLINE: Duration = Duration::from_secs(10);
+
+/// `run_with` and the standard drain deadline.
 pub async fn run(
     store: Store,
     listener: TcpListener,
     drivers: Vec<Arc<dyn EffectDriver>>,
     stop: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), RunError> {
+    run_with(store, listener, drivers, stop, DRAIN_DEADLINE).await
+}
+
+/// Runs the service on `listener` until `stop` completes: restore the state, start the actor,
+/// serve, and on stop wait up to `drain_deadline` for requests in flight, stop the actor and
+/// flush the store.
+pub async fn run_with(
+    store: Store,
+    listener: TcpListener,
+    drivers: Vec<Arc<dyn EffectDriver>>,
+    stop: impl Future<Output = ()> + Send + 'static,
+    drain_deadline: Duration,
 ) -> Result<(), RunError> {
     let loader = store.clone();
     let state = tokio::task::spawn_blocking(move || loader.load()).await??;
@@ -125,13 +143,34 @@ pub async fn run(
         tracing::info!(%addr, "listening");
     }
     // The peer address is what tells whether `X-Forwarded-For` comes from the local proxy.
-    let served = axum::serve(
+    let (stop_fired, stop_seen) = oneshot::channel::<()>();
+    let stop = async move {
+        stop.await;
+        let _ = stop_fired.send(());
+    };
+    let serving = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(stop)
-    .await
-    .map_err(RunError::Serve);
+    .into_future();
+    let drain_expired = async move {
+        if stop_seen.await.is_ok() {
+            tokio::time::sleep(drain_deadline).await;
+        } else {
+            std::future::pending::<()>().await;
+        }
+    };
+    let served = tokio::select! {
+        result = serving => result.map_err(RunError::Serve),
+        () = drain_expired => {
+            tracing::warn!(
+                deadline_secs = drain_deadline.as_secs_f32(),
+                "requests still open at the drain deadline, stopping anyway"
+            );
+            Ok(())
+        }
+    };
     tracing::info!("stopping");
     let stored = shutdown(&actor, &store).await;
     served?;

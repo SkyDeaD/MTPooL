@@ -268,10 +268,10 @@ impl Actor {
     ) {
         let id = ReplyId(self.next_reply);
         self.next_reply += 1;
-        let command = if caller.is_some() {
-            with_reply_id(command, id)
+        let (command, expects_reply) = if caller.is_some() {
+            claim_reply_id(command, id)
         } else {
-            command
+            (command, false)
         };
         let now = self.now();
         let effects = apply(&mut self.state, command, now);
@@ -291,6 +291,9 @@ impl Actor {
                     self.dispatch(other);
                 }
             }
+        }
+        if expects_reply && answer.is_none() {
+            tracing::error!(?id, "a command with a reply id produced no reply");
         }
         if let Some(to) = caller {
             replies.push((to, answer.unwrap_or(Reply::Ok)));
@@ -316,8 +319,9 @@ pub fn clock_jump_ms(prev_wall: Ts, wall: Ts, monotonic_elapsed: Duration) -> i6
     (wall.0 - prev_wall.0).saturating_sub(mono)
 }
 
-fn with_reply_id(command: Command, id: ReplyId) -> Command {
-    match command {
+/// Puts `id` into the command if it carries a reply id; the flag tells whether it does.
+fn claim_reply_id(command: Command, id: ReplyId) -> (Command, bool) {
+    let command = match command {
         Command::Enroll(mut r) => {
             r.reply = id;
             Command::Enroll(r)
@@ -346,6 +350,68 @@ fn with_reply_id(command: Command, id: ReplyId) -> Command {
             r.reply = id;
             Command::SrmdManual(r)
         }
-        other => other,
+        other => return (other, false),
+    };
+    (command, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use mtpool_core::{
+        EngineKind, EnrollRequest, Generation, HeartbeatRequest, NodeAction, NodeId, OwnerId,
+        ReportRequest, SrmdManualAction, SrmdManualRequest, Vote,
+    };
+
+    use super::*;
+
+    #[test]
+    fn claim_reply_id_covers_every_command_with_a_reply() {
+        let node = NodeId::parse("alpha-00001").unwrap();
+        let action = || NodeAction {
+            reply: ReplyId(0),
+            node: node.clone(),
+        };
+        let with_reply = [
+            Command::Enroll(EnrollRequest {
+                reply: ReplyId(0),
+                node_id: node.clone(),
+                owner: OwnerId(1),
+                ip: Ipv4Addr::LOCALHOST,
+                port: 443,
+                engine: EngineKind::Telemt,
+            }),
+            Command::Heartbeat(HeartbeatRequest {
+                reply: ReplyId(0),
+                node: node.clone(),
+                ip: Ipv4Addr::LOCALHOST,
+            }),
+            Command::Report(ReportRequest {
+                reply: ReplyId(0),
+                node: node.clone(),
+                generation: Generation(0),
+                metrics_ok: true,
+                globalping: Vote::Clear,
+                traffic: None,
+                clients: None,
+            }),
+            Command::Retire(action()),
+            Command::AdminUnban(action()),
+            Command::Recheck(action()),
+            Command::SrmdManual(SrmdManualRequest {
+                reply: ReplyId(0),
+                domain: "d.example.com".to_owned(),
+                action: SrmdManualAction::Take,
+            }),
+        ];
+        for command in with_reply {
+            let (claimed, carries) = claim_reply_id(command.clone(), ReplyId(77));
+            assert!(carries, "{command:?}");
+            assert_ne!(claimed, command, "the reply id was not replaced");
+        }
+        for command in [Command::Tick, Command::SettingsChanged(Default::default())] {
+            assert!(!claim_reply_id(command, ReplyId(77)).1);
+        }
     }
 }

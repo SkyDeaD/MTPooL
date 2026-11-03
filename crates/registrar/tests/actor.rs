@@ -5,7 +5,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use common::*;
-use mtpool_core::{Command, Effect, PoolState, Reply, Settings, Ts};
+use mtpool_core::{
+    Command, Effect, NodeAction, PoolState, Refusal, Reply, ReplyId, Settings, SrmdManualAction,
+    SrmdManualRequest, Ts,
+};
 use mtpool_registrar::actor::{
     Actor, ActorHandle, ActorOptions, Clock, DriverFuture, EffectDriver,
 };
@@ -59,6 +62,7 @@ async fn no_node_expires_during_first_ttl_after_restart() {
 
 struct SlowDns {
     started: Arc<AtomicBool>,
+    finished: Arc<AtomicBool>,
 }
 
 impl EffectDriver for SlowDns {
@@ -68,9 +72,11 @@ impl EffectDriver for SlowDns {
 
     fn run(&self, _effect: Effect, _results: ActorHandle) -> DriverFuture {
         let started = Arc::clone(&self.started);
+        let finished = Arc::clone(&self.finished);
         Box::pin(async move {
             started.store(true, Ordering::SeqCst);
             tokio::time::sleep(Duration::from_secs(10)).await;
+            finished.store(true, Ordering::SeqCst);
         })
     }
 }
@@ -88,12 +94,18 @@ async fn slow_driver_does_not_block_commands() {
     let state = state_with(healthy_node("alpha-00001", now, 0), settings);
     let (_dir, store) = open_store();
     let started = Arc::new(AtomicBool::new(false));
+    let finished = Arc::new(AtomicBool::new(false));
     let driver = SlowDns {
         started: Arc::clone(&started),
+        finished: Arc::clone(&finished),
     };
     let handle = Actor::spawn(state, store, vec![Arc::new(driver)]);
 
-    handle.call(Command::Tick).await.expect("tick");
+    // An actor that awaited the driver inline would take 10 s here.
+    tokio::time::timeout(Duration::from_millis(500), handle.call(Command::Tick))
+        .await
+        .expect("the tick is answered while the driver is still working")
+        .expect("tick");
     let waited = Instant::now();
     while !started.load(Ordering::SeqCst) {
         assert!(
@@ -111,6 +123,68 @@ async fn slow_driver_does_not_block_commands() {
     .expect("heartbeat answers while the driver sleeps")
     .expect("actor runs");
     assert_eq!(answer, Reply::Ok);
+    assert!(
+        started.load(Ordering::SeqCst) && !finished.load(Ordering::SeqCst),
+        "the driver is still sleeping when the heartbeat is answered"
+    );
+}
+
+#[tokio::test]
+async fn each_call_gets_its_own_reply() {
+    let (_dir, store) = open_store();
+    let handle = Actor::spawn(PoolState::default(), store, vec![]);
+    let alpha = "alpha-00001";
+    let ip = [45, 33, 1, 5];
+
+    // `join!` polls in order, so the commands queue up in this order and the actor applies
+    // them as one batch or several; every future must still get the reply of its own command.
+    let (
+        enrolled,
+        unknown_beat,
+        not_banned,
+        not_rechecknable,
+        unknown_domain,
+        unknown_retire,
+        retired,
+        beat_after,
+    ) = tokio::join!(
+        handle.call(enroll(alpha, ip)),
+        handle.call(barrier()),
+        handle.call(Command::AdminUnban(node_action(alpha))),
+        handle.call(Command::Recheck(node_action(alpha))),
+        handle.call(Command::SrmdManual(SrmdManualRequest {
+            reply: ReplyId(0),
+            domain: "nowhere.example.com".to_owned(),
+            action: SrmdManualAction::Take,
+        })),
+        handle.call(Command::Retire(node_action("ghost-00000"))),
+        handle.call(Command::Retire(node_action(alpha))),
+        handle.call(heartbeat(alpha, ip)),
+    );
+    assert!(matches!(enrolled.unwrap(), Reply::Enrolled { .. }));
+    assert_eq!(unknown_beat.unwrap(), Reply::UnknownNode);
+    assert_eq!(not_banned.unwrap(), Reply::Refused(Refusal::NotBanned));
+    assert_eq!(
+        not_rechecknable.unwrap(),
+        Reply::Refused(Refusal::NotRecheckable)
+    );
+    assert_eq!(
+        unknown_domain.unwrap(),
+        Reply::Refused(Refusal::UnknownDomain)
+    );
+    assert_eq!(unknown_retire.unwrap(), Reply::UnknownNode);
+    assert_eq!(retired.unwrap(), Reply::Ok);
+    assert!(
+        matches!(beat_after.unwrap(), Reply::Terminate(_)),
+        "the retired node is told to stop"
+    );
+}
+
+fn node_action(name: &str) -> NodeAction {
+    NodeAction {
+        reply: ReplyId(0),
+        node: node_id(name),
+    }
 }
 
 #[tokio::test]

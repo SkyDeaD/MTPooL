@@ -5,7 +5,7 @@ use axum::http::{Request, StatusCode, header};
 use common::*;
 use mtpool_core::{Event, EventKind, PoolState, Ts};
 use mtpool_registrar::actor::Actor;
-use mtpool_registrar::server::{AppState, router, shutdown};
+use mtpool_registrar::server::{AppState, router, run_with, shutdown};
 use mtpool_registrar::store::{Store, WriteHealth};
 use tower::ServiceExt;
 
@@ -136,4 +136,49 @@ async fn graceful_shutdown_flushes() {
         .get(&node_id("alpha-00001"))
         .expect("node stored");
     assert_eq!(node.health.last_heartbeat, Ts(5_000_000));
+}
+
+#[tokio::test]
+async fn graceful_shutdown_does_not_wait_for_a_stuck_connection() {
+    use std::io::Write;
+    use std::time::{Duration, Instant};
+
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let service = tokio::spawn(run_with(
+        store.clone(),
+        listener,
+        vec![],
+        async move {
+            let _ = stopped.await;
+        },
+        Duration::from_millis(300),
+    ));
+
+    // A request that never ends: the headers are not finished.
+    let mut stuck = std::net::TcpStream::connect(addr).unwrap();
+    stuck
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n")
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let begun = Instant::now();
+    stop.send(()).unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), service)
+        .await
+        .expect("shutdown does not wait for the open connection")
+        .expect("task");
+    outcome.expect("service ends cleanly");
+    assert!(
+        begun.elapsed() >= Duration::from_millis(250),
+        "the drain deadline was honoured"
+    );
+    assert!(
+        store.close().is_ok(),
+        "the store was closed by the shutdown"
+    );
+    drop(stuck);
 }
