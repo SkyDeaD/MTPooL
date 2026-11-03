@@ -9,6 +9,8 @@ use mtpool_core::{SensorKind, SensorVote};
 
 pub mod cheburcheck;
 pub mod globalping;
+pub mod redflag;
+pub mod round;
 
 /// What a sensor looks at: one node.
 #[derive(Clone, PartialEq, Eq)]

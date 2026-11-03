@@ -1,0 +1,17 @@
+{
+  "_source": "documented shape, not a recording",
+  "status": "MT_DEAD",
+  "checked_at": "2026-11-03T12:00:00Z",
+  "local": {
+    "tcp": true,
+    "handshake": true,
+    "data": false,
+    "latency_ms": 50
+  },
+  "remote": {
+    "tcp": true,
+    "handshake": true,
+    "data": false,
+    "latency_ms": 33
+  }
+}

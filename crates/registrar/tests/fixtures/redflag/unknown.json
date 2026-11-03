@@ -1,0 +1,17 @@
+{
+  "_source": "documented shape, not a recording",
+  "status": "UNKNOWN",
+  "checked_at": "2026-11-03T12:00:00Z",
+  "local": {
+    "tcp": true,
+    "handshake": false,
+    "data": false,
+    "latency_ms": 60
+  },
+  "remote": {
+    "tcp": true,
+    "handshake": false,
+    "data": false,
+    "latency_ms": 35
+  }
+}

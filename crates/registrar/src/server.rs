@@ -28,9 +28,13 @@ use crate::api::webhook_url::{Resolver, SystemResolver};
 use crate::auth::{AuthState, session};
 use crate::config::Config;
 use crate::secrets;
+use crate::sensors::Sensor;
+use crate::sensors::cheburcheck::CheburcheckSensor;
 use crate::sensors::globalping::{
-    GlobalpingClient, GlobalpingVerifier, SharedSettings, TokenSource,
+    GlobalpingClient, GlobalpingSensor, GlobalpingVerifier, SharedSettings, TokenSource,
 };
+use crate::sensors::redflag::RedFlagSensor;
+use crate::sensors::round::RoundRunner;
 use crate::snapshot::SnapshotStore;
 use crate::store::{Store, StoreError, WriteHealth};
 use crate::verifier::{MeasurementVerifier, NoVerifier};
@@ -257,7 +261,23 @@ pub async fn run_with(
     let token: TokenSource = Arc::new(move || secrets::secret(&token_store, "globalping_token"));
     let globalping = GlobalpingClient::new(GlobalpingClient::default_base(), token)
         .map_err(RunError::HttpClient)?;
-    let verifier = GlobalpingVerifier::new(globalping, gp_settings.clone());
+    let verifier = GlobalpingVerifier::new(globalping.clone(), gp_settings.clone());
+    // The three sensors of a round. RedFlag's key is asked for on every call too.
+    let redflag_store = store.clone();
+    let redflag_key: TokenSource =
+        Arc::new(move || secrets::secret(&redflag_store, "redflag_api_key"));
+    let sensors: Vec<Arc<dyn Sensor>> = vec![
+        Arc::new(GlobalpingSensor::new(globalping, gp_settings.clone())),
+        Arc::new(
+            CheburcheckSensor::new(CheburcheckSensor::default_base())
+                .map_err(RunError::HttpClient)?,
+        ),
+        Arc::new(
+            RedFlagSensor::new(RedFlagSensor::default_base(), redflag_key)
+                .map_err(RunError::HttpClient)?,
+        ),
+    ];
+    drivers.push(Arc::new(RoundRunner::new(sensors)));
     let actor = Actor::spawn(state, store.clone(), drivers);
     let app = router(
         AppState::new(store.clone(), actor.clone(), actor.snapshots())

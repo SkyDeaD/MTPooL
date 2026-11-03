@@ -24,7 +24,7 @@ pub use lifecycle::{
     Tombstone, apply_round, decide_enroll, is_alive, needs_sensors, next_round_at, record_prune,
     reset_tombstones, tick_node, unban,
 };
-pub use links::build_proxy_link;
+pub use links::{build_proxy_link, link_secret};
 pub use selection::{Assignments, MasterChange, SelectionResult, Slot, queue_order, select};
 pub use settings::{GlobalpingSettings, ProxyUser, Settings, SettingsError, SrmdSettings};
 pub use srmd::{

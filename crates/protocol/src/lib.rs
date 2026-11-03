@@ -7,7 +7,7 @@ pub mod problem;
 pub mod public;
 
 use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
+use time::format_description::well_known::{Rfc2822, Rfc3339};
 
 /// A Unix time in milliseconds as an RFC 3339 string in UTC (`2026-11-03T12:00:00Z`). A value
 /// outside the range the calendar covers gives the Unix epoch rather than an error: a
@@ -27,9 +27,28 @@ pub fn parse_rfc3339(text: &str) -> Option<i64> {
     i64::try_from(parsed.unix_timestamp_nanos().div_euclid(1_000_000)).ok()
 }
 
+/// An HTTP date (`Wed, 21 Oct 2015 07:28:00 GMT`, the form of `Retry-After` and `Date`) as Unix
+/// milliseconds. `None` when the text is not a date or lies outside the range of `i64`
+/// milliseconds.
+pub fn parse_http_date(text: &str) -> Option<i64> {
+    let parsed = OffsetDateTime::parse(text.trim(), &Rfc2822).ok()?;
+    i64::try_from(parsed.unix_timestamp_nanos().div_euclid(1_000_000)).ok()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_rfc3339, rfc3339};
+    use super::{parse_http_date, parse_rfc3339, rfc3339};
+
+    #[test]
+    fn parses_http_dates() {
+        assert_eq!(
+            parse_http_date("Tue, 14 Nov 2023 22:13:20 GMT"),
+            Some(1_700_000_000_000)
+        );
+        assert_eq!(parse_http_date("120"), None);
+        assert_eq!(parse_http_date("soon"), None);
+        assert_eq!(parse_http_date(""), None);
+    }
 
     #[test]
     fn formats_utc_with_optional_milliseconds() {
