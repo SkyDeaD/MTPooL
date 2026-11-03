@@ -13,9 +13,9 @@
 //! | `Refused`            | 409 `refused`                                       |
 //! | `EnrollRejected`     | 429 `enroll_paused` with `Retry-After`              |
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::body::Bytes;
@@ -60,16 +60,62 @@ const VERIFY_TIMEOUT: Duration = Duration::from_secs(30);
 /// Tries at a free node id before enrollment gives up.
 const ID_ATTEMPTS: usize = 8;
 
+/// A `ClockSkew` event is written at most this often per node.
+const SKEW_EVENT_EVERY_MS: i64 = 60 * 60 * 1000;
+/// `Retry-After` of a measured report refused because the last one is still being verified.
+const VERIFY_BUSY_RETRY_SEC: u64 = 30;
+
 /// The measurement ids claimed lately. Claiming is atomic, so two reports that name the same
 /// id cannot both pass, whichever nodes they come from.
 #[derive(Default)]
 pub struct Ledger {
     seen: Mutex<HashMap<String, Ts>>,
+    /// Nodes with a measured report being verified: one at a time per node.
+    in_flight: Mutex<HashSet<NodeId>>,
+    /// When a `ClockSkew` event was last written for a node.
+    skew_logged: Mutex<HashMap<NodeId, Ts>>,
+}
+
+/// The verification slot of a node; frees it on drop, a panic of the task included.
+struct VerifySlot {
+    ledger: Arc<Ledger>,
+    node: NodeId,
+}
+
+impl Drop for VerifySlot {
+    fn drop(&mut self) {
+        let mut busy = self
+            .ledger
+            .in_flight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        busy.remove(&self.node);
+    }
 }
 
 impl Ledger {
     pub fn new() -> Ledger {
         Ledger::default()
+    }
+
+    /// The node's verification slot, or `None` while one of its measurements is being verified.
+    fn take_slot(self: &Arc<Ledger>, node: &NodeId) -> Option<VerifySlot> {
+        let mut busy = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+        busy.insert(node.clone()).then(|| VerifySlot {
+            ledger: Arc::clone(self),
+            node: node.clone(),
+        })
+    }
+
+    /// Whether a `ClockSkew` event for `node` is due now (and notes it): at most one an hour.
+    fn skew_event_due(&self, node: &NodeId, now: Ts) -> bool {
+        let mut logged = self.skew_logged.lock().unwrap_or_else(|e| e.into_inner());
+        logged.retain(|_, at| now.0.saturating_sub(at.0) < SKEW_EVENT_EVERY_MS);
+        if logged.contains_key(node) {
+            return false;
+        }
+        logged.insert(node.clone(), now);
+        true
     }
 
     /// Whether `id` is new. Forgets what is older than `LEDGER_KEEP_MS` first.
@@ -713,7 +759,13 @@ async fn claim_measurement(
 
 /// Verifies the measurement and hands the report to `core` with the verified vote. Runs after
 /// the agent got its answer: the measurement service may take seconds.
-async fn settle_measured(app: AppState, settled: Settled, id: String, expect: GpExpect) {
+async fn settle_measured(
+    app: AppState,
+    settled: Settled,
+    id: String,
+    expect: GpExpect,
+    _slot: VerifySlot,
+) {
     let verified = tokio::time::timeout(VERIFY_TIMEOUT, app.verifier.verify(&id, &expect)).await;
     let vote = match verified {
         Ok(Ok(sensor_vote)) => sensor_vote.vote,
@@ -724,7 +776,15 @@ async fn settle_measured(app: AppState, settled: Settled, id: String, expect: Gp
                     AbstainReason::UnknownAnswer
                 }
             };
-            tracing::info!(node = %settled.node, %rejected, "measurement not used");
+            match rejected {
+                // A node named a measurement that was not made against it.
+                GpRejected::UnknownMeasurement | GpRejected::Mismatch => {
+                    tracing::warn!(node = %settled.node, %rejected, "measurement refused")
+                }
+                GpRejected::Unavailable | GpRejected::Stale => {
+                    tracing::info!(node = %settled.node, %rejected, "measurement not used")
+                }
+            }
             Vote::Abstain(reason)
         }
         Err(_) => {
@@ -756,6 +816,8 @@ async fn settle_measured(app: AppState, settled: Settled, id: String, expect: Gp
         (status = 400, description = "Not the document this route takes (unknown fields included)", body = Problem, content_type = "application/problem+json"),
         (status = 401, description = "No valid node token", body = Problem, content_type = "application/problem+json"),
         (status = 403, description = "The node is out of the pool: `{\"terminate\": true, ...}`", body = Terminate),
+        (status = 429, description = "A measurement of this node is still being verified; retry after the `Retry-After` seconds (`rate_limited`)", body = Problem, content_type = "application/problem+json",
+            headers(("Retry-After" = u64, description = "Seconds until the next measured report may be sent"))),
         (status = 409, description = "`clock_skew` (the report is dated outside the window of 10 minutes back and 1 minute ahead), `report_mismatch` (address, port or SNI are not the node's), `measurement_reused`, or `stale`", body = Problem, content_type = "application/problem+json"),
         (status = 410, description = "The registrar does not know the node; enroll again", body = Problem, content_type = "application/problem+json"),
         (status = 413, description = "The body is larger than 256 KiB", body = Problem, content_type = "application/problem+json"),
@@ -775,17 +837,19 @@ pub async fn report(
     let now = (app.clock)();
     let skew_ms = checked_at.saturating_sub(now.0);
     if !(-CHECKED_AT_PAST_MS..=CHECKED_AT_FUTURE_MS).contains(&skew_ms) {
-        app.store.send(Event {
-            kind: EventKind::ClockSkew,
-            at: now,
-            node: Some(auth.node_id.clone()),
-            domain: None,
-            detail: json!({
-                "checked_at": rfc3339(checked_at),
-                "server_now": rfc3339(now.0),
-                "skew_sec": skew_ms / 1000,
-            }),
-        });
+        if app.ledger.skew_event_due(&auth.node_id, now) {
+            app.store.send(Event {
+                kind: EventKind::ClockSkew,
+                at: now,
+                node: Some(auth.node_id.clone()),
+                domain: None,
+                detail: json!({
+                    "checked_at": rfc3339(checked_at),
+                    "server_now": rfc3339(now.0),
+                    "skew_sec": skew_ms / 1000,
+                }),
+            });
+        }
         return Err(problem(
             StatusCode::CONFLICT,
             "clock_skew",
@@ -831,6 +895,10 @@ pub async fn report(
             if request.sni != node.tls_domain {
                 return Err(mismatch("SNI"));
             }
+            // The slot first: a report refused for being too soon burns no measurement id.
+            let Some(slot) = app.ledger.take_slot(&auth.node_id) else {
+                return Err(ApiError::rate_limited(VERIFY_BUSY_RETRY_SEC).into());
+            };
             if !claim_measurement(&app, id.clone(), auth.node_id, now).await? {
                 return Err(problem(
                     StatusCode::CONFLICT,
@@ -845,7 +913,7 @@ pub async fn report(
                 sni: node.tls_domain,
                 reported_at: Ts(checked_at),
             };
-            tokio::spawn(settle_measured(app, settled, id, expect));
+            tokio::spawn(settle_measured(app, settled, id, expect, slot));
             Ok(empty_ok())
         }
     }

@@ -958,7 +958,8 @@ async fn report_clock_skew_409_and_event_explains_skew() {
         }
     }
 
-    // Each refusal left an event that says how far off the agent is.
+    // The first refusal left an event that says how far off the agent is; the second, within
+    // the hour, left none.
     env.store.flush().unwrap();
     let conn = env.store.read();
     let mut stmt = conn
@@ -969,7 +970,7 @@ async fn report_clock_skew_409_and_event_explains_skew() {
         .unwrap()
         .map(Result::unwrap)
         .collect();
-    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows.len(), 1, "{rows:?}");
     let detail = |i: usize| serde_json::from_str::<Value>(&rows[i].2).unwrap();
     for row in &rows {
         assert_eq!(row.0, NOW);
@@ -979,8 +980,112 @@ async fn report_clock_skew_409_and_event_explains_skew() {
     assert_eq!(behind["skew_sec"], -601, "{behind}");
     assert_eq!(behind["checked_at"], rfc3339(NOW - 10 * minute - 1_000));
     assert_eq!(behind["server_now"], rfc3339(NOW));
-    let ahead = detail(1);
-    assert_eq!(ahead["skew_sec"], 61, "{ahead}");
+}
+
+#[tokio::test]
+async fn clock_skew_event_once_per_hour() {
+    let env = env(pool(vec![alpha(), beta()]));
+    let token = node_token(&env, "alpha-00001");
+    let other = node_token(&env, "beta-00002");
+    let events = |env: &Env| {
+        count(
+            env,
+            "SELECT count(*) FROM events WHERE kind = 'clock_skew' AND node = 'alpha-00001'",
+        )
+    };
+    let hour = 60 * 60 * 1000;
+
+    for _ in 0..2 {
+        let resp = report(&env, &token, report_at(NOW - 20 * 60_000, no_data())).await;
+        assert_problem(&resp, StatusCode::CONFLICT, "clock_skew");
+    }
+    assert_eq!(events(&env), 1, "two skewed reports, one event");
+
+    // The answer stays the same just under the hour, and another node is not held back.
+    env.clock.store(NOW + hour - 1, Ordering::SeqCst);
+    let resp = report(&env, &token, report_at(NOW - 20 * 60_000, no_data())).await;
+    assert_problem(&resp, StatusCode::CONFLICT, "clock_skew");
+    assert_eq!(events(&env), 1);
+    let resp = post(
+        &env,
+        "/api/v1/agent/report",
+        "198.51.100.9",
+        &other,
+        Some(report_at(NOW - 20 * 60_000, no_data())),
+    )
+    .await;
+    assert_problem(&resp, StatusCode::CONFLICT, "clock_skew");
+    assert_eq!(
+        count(
+            &env,
+            "SELECT count(*) FROM events WHERE kind = 'clock_skew'"
+        ),
+        2,
+        "the limit is per node"
+    );
+
+    env.clock.store(NOW + hour, Ordering::SeqCst);
+    let resp = report(&env, &token, report_at(NOW - 20 * 60_000, no_data())).await;
+    assert_problem(&resp, StatusCode::CONFLICT, "clock_skew");
+    assert_eq!(events(&env), 2, "an hour on, a second event");
+}
+
+#[tokio::test]
+async fn second_measured_report_while_one_is_verified_is_429() {
+    let env = env(pool(vec![alpha()]));
+    let token = node_token(&env, "alpha-00001");
+    let gate = env.verifier.gate();
+    env.verifier.answer(Ok(SensorVote {
+        vote: Vote::Clear,
+        evidence: json!({}),
+    }));
+    env.clock.store(NOW + 1_000, Ordering::SeqCst);
+    let at = NOW + 1_000;
+
+    let first = report(&env, &token, report_at(at, measured("m-first"))).await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.body);
+
+    // The first measurement is still being verified.
+    let second = report(&env, &token, report_at(at, measured("m-second"))).await;
+    assert_problem(&second, StatusCode::TOO_MANY_REQUESTS, "rate_limited");
+    assert_eq!(
+        second
+            .headers
+            .get("retry-after")
+            .map(|v| v.to_str().unwrap()),
+        Some("30")
+    );
+    assert_eq!(
+        count(
+            &env,
+            "SELECT count(*) FROM gp_measurements WHERE id = 'm-second'"
+        ),
+        0,
+        "a refused report claims no measurement id"
+    );
+    // A report with no measurement is not held back.
+    let plain = report(&env, &token, report_at(at, no_data())).await;
+    assert_eq!(plain.status, StatusCode::OK, "{}", plain.body);
+
+    gate.notify_one();
+    wait_for(&env, "alpha-00001", |n| {
+        matches!(n.health.gp, GpStatus::Ok { .. })
+    })
+    .await;
+
+    // The slot is free again, and the id that was refused is still usable.
+    let mut third = None;
+    for _ in 0..100 {
+        let resp = report(&env, &token, report_at(at, measured("m-second"))).await;
+        if resp.status != StatusCode::TOO_MANY_REQUESTS {
+            third = Some(resp);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let third = third.expect("the slot is freed once the verification ends");
+    assert_eq!(third.status, StatusCode::OK, "{}", third.body);
+    gate.notify_one();
 }
 
 #[tokio::test]

@@ -338,6 +338,26 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "A measurement of this node is still being verified; retry after the `Retry-After` seconds (`rate_limited`)",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the next measured report may be sent"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         },
         "security": [
