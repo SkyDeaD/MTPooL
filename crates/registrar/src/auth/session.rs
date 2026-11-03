@@ -2,7 +2,7 @@
 //!
 //! The cookie value is 32 random bytes; the database keeps only its SHA-256, plus a CSRF token
 //! the page sends in `X-CSRF-Token` on every change. `POST /api/v1/admin/session` logs in,
-//! `DELETE` logs out.
+//! `GET` returns the session's CSRF token again, `DELETE` logs out.
 
 use axum::Router;
 use axum::body::Bytes;
@@ -28,7 +28,10 @@ pub const SESSION_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 const MAX_AGE_SECONDS: i64 = SESSION_TTL_MS / 1000;
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/api/v1/admin/session", post(login).delete(logout))
+    Router::new().route(
+        "/api/v1/admin/session",
+        post(login).get(current).delete(logout),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +54,7 @@ pub fn lookup(conn: &Connection, hash: &TokenHash) -> Result<Option<SessionRow>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LoginBody {
     token: String,
 }
@@ -97,8 +101,27 @@ async fn login(
     Ok(response)
 }
 
+/// The CSRF token of the session the cookie belongs to, for a panel that was reloaded and lost
+/// the one login returned. A bearer token has no session, so there is nothing to return.
+async fn current(admin: AdminAuth) -> Response {
+    match admin.via {
+        AdminVia::Session { csrf, .. } => {
+            let mut response =
+                (StatusCode::OK, json!({ "csrf": csrf }).to_string()).into_response();
+            let headers = response.headers_mut();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response
+        }
+        AdminVia::Token { .. } => StatusCode::NO_CONTENT.into_response(),
+    }
+}
+
 async fn logout(State(app): State<AppState>, admin: AdminAuth) -> Result<Response, AuthError> {
-    if let AdminVia::Session { hash } = admin.via {
+    if let AdminVia::Session { hash, .. } = admin.via {
         commit(
             &app.store,
             AuthOp::DeleteSession {

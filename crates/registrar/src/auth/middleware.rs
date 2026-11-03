@@ -152,7 +152,7 @@ pub enum AdminVia {
     /// `Authorization: Bearer <admin token>`: for the command line and API clients.
     Token { token_id: i64 },
     /// The panel's session cookie, with the CSRF token checked on changes.
-    Session { hash: TokenHash },
+    Session { hash: TokenHash, csrf: String },
 }
 
 /// An admin: the admin token as a bearer, or a panel session.
@@ -216,7 +216,10 @@ where
             }
         }
         Ok(AdminAuth {
-            via: AdminVia::Session { hash },
+            via: AdminVia::Session {
+                hash,
+                csrf: session.csrf,
+            },
         })
     }
 }

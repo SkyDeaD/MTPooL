@@ -678,6 +678,74 @@ async fn login_rejects_bad_tokens() {
     );
     let none = send(&app, post(&wrong)).await;
     assert!(none.headers().get(header::SET_COOKIE).is_none());
+
+    // Unknown fields are refused as a bad request, and are not counted as failed guesses.
+    let admin = rotate_admin(&store).unwrap();
+    let extra = format!(r#"{{"token":"{admin}","x":1}}"#);
+    for _ in 0..12 {
+        let resp = send(
+            &app,
+            request(
+                "POST",
+                "/api/v1/admin/session",
+                "10.0.0.2",
+                &[("content-type", "application/json")],
+                Some(&extra),
+            ),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(resp.headers().get(header::SET_COOKIE).is_none());
+    }
+    let ok = format!(r#"{{"token":"{admin}"}}"#);
+    let resp = send(
+        &app,
+        request(
+            "POST",
+            "/api/v1/admin/session",
+            "10.0.0.2",
+            &[("content-type", "application/json")],
+            Some(&ok),
+        ),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "bad bodies did not use up the limit"
+    );
+}
+
+#[tokio::test]
+async fn get_session_returns_csrf_for_a_live_session() {
+    let (_dir, store) = open_store();
+    let app = test_app(app_state(&store));
+    let admin = rotate_admin(&store).unwrap();
+    let (value, csrf, _) = login(&app, "10.0.0.1", &admin).await;
+    let get = |headers: &[(&str, &str)]| {
+        request("GET", "/api/v1/admin/session", "10.0.0.1", headers, None)
+    };
+
+    // A live cookie gets its CSRF token back, without a CSRF header, and nothing is cached.
+    let resp = send(&app, get(&[("cookie", &cookie_header(&value))])).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers()[header::CACHE_CONTROL], "no-store");
+    let body = to_bytes(resp.into_body(), 4096).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["csrf"], csrf);
+
+    // A bearer admin token has no session: 204, nothing to return.
+    let (k, v) = bearer(&admin);
+    let resp = send(&app, get(&[(k, &v)])).await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // No credentials, or a cookie that matches no session: 401.
+    assert_eq!(
+        send(&app, get(&[])).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let resp = send(&app, get(&[("cookie", &cookie_header("nope"))])).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
