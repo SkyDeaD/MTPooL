@@ -594,6 +594,14 @@ proptest! {
                 if silent {
                     continue;
                 }
+                // A reverify node that fails its round is `Banned` too, and says so with its own
+                // event: the webhook of a ban must not repeat with every registration.
+                let reverify_failed = before.reverify
+                    && after.state == NodeState::Banned
+                    && announced(step.effects, id, EventKind::NodeReverifyFailed);
+                if reverify_failed {
+                    continue;
+                }
                 let expected = match (before.state, after.state) {
                     (_, NodeState::Quarantine) => EventKind::NodeQuarantined,
                     (_, NodeState::Healthy) => EventKind::NodeRecovered,

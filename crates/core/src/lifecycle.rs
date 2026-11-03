@@ -256,6 +256,8 @@ pub enum LifecycleEvent {
     /// A reverify round was not clean: the block stays and the registration gets a 429.
     ReverifyFailed {
         retry_after_sec: u32,
+        /// The votes of the round that did not prove the IP clean.
+        votes: Vec<(SensorKind, Vote)>,
     },
 }
 
@@ -555,6 +557,7 @@ fn reverify_round(
     n.enter_final(NodeState::Banned, now);
     vec![LifecycleEvent::ReverifyFailed {
         retry_after_sec: s.reverify_pause_sec,
+        votes: result.votes.clone(),
     }]
 }
 
@@ -1384,7 +1387,8 @@ mod tests {
             assert_eq!(
                 apply_round(&mut n, &r, &mut blocks, now, &s()),
                 vec![LifecycleEvent::ReverifyFailed {
-                    retry_after_sec: 900
+                    retry_after_sec: 900,
+                    votes: votes.to_vec(),
                 }]
             );
             assert_eq!(

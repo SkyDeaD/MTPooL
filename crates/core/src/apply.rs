@@ -221,6 +221,16 @@ fn announce(
                 }
             }
             LifecycleEvent::Banned { votes } => {
+                persist(
+                    out,
+                    PersistOp::RecordBan {
+                        ip: node.ip,
+                        node: node.id.clone(),
+                        at: now,
+                        votes: votes.clone(),
+                        reverify: false,
+                    },
+                );
                 emit_node(
                     out,
                     now,
@@ -229,13 +239,28 @@ fn announce(
                     json!({ "votes": votes_json(&votes) }),
                 );
             }
-            LifecycleEvent::ReverifyFailed { retry_after_sec } => {
+            LifecycleEvent::ReverifyFailed {
+                retry_after_sec,
+                votes,
+            } => {
+                persist(
+                    out,
+                    PersistOp::RecordBan {
+                        ip: node.ip,
+                        node: node.id.clone(),
+                        at: now,
+                        votes,
+                        reverify: true,
+                    },
+                );
+                // Not `NodeBanned`: the agent registers again every few minutes from a
+                // blocked IP, and each failed round must not become a webhook.
                 emit_node(
                     out,
                     now,
-                    EventKind::NodeBanned,
+                    EventKind::NodeReverifyFailed,
                     &node.id,
-                    json!({ "reverify": true, "retry_after_sec": retry_after_sec }),
+                    json!({ "retry_after_sec": retry_after_sec }),
                 );
             }
             LifecycleEvent::Dead => {
@@ -252,6 +277,14 @@ fn announce(
                 emit_node(out, now, EventKind::NodePruned, &node.id, json!({}));
             }
             LifecycleEvent::BanLifted => {
+                persist(
+                    out,
+                    PersistOp::LiftBan {
+                        ip: node.ip,
+                        at: now,
+                        admin: false,
+                    },
+                );
                 emit_node(out, now, EventKind::BanLifted, &node.id, json!({}));
             }
         }
@@ -372,10 +405,6 @@ fn enroll(state: &mut PoolState, r: EnrollRequest, now: Ts, out: &mut Out) -> An
     }
 
     let generation = record.generation;
-    if reverify {
-        // The decisive round starts at once; no report is waited for.
-        record.last_round_at = Some(now);
-    }
     persist(out, PersistOp::UpsertNode(record.clone()));
     state.stats.insert(r.node_id.clone(), NodeStats::default());
     persist(
@@ -392,15 +421,8 @@ fn enroll(state: &mut PoolState, r: EnrollRequest, now: Ts, out: &mut Out) -> An
         &r.node_id,
         json!({ "reverify": reverify, "replaced": displaced }),
     );
-    if reverify {
-        out.push(Effect::RunRound {
-            node: r.node_id.clone(),
-            generation,
-            ip: record.ip,
-            port: record.port,
-            fresh_gp: None,
-        });
-    }
+    // A reverify node starts its decisive round with the first measurement of the agent, which
+    // the agent makes right after registering (see `report`); the tick is the fallback.
     state.nodes.insert(r.node_id.clone(), record);
     (
         r.reply,
@@ -548,6 +570,16 @@ fn report(state: &mut PoolState, r: ReportRequest, now: Ts, out: &mut Out) -> An
             },
         );
     }
+
+    // The first verdict of the agent on a reverify node is the vote of its decisive round.
+    if node.reverify
+        && is_live(node.state)
+        && node.last_round_at.is_none()
+        && !matches!(r.globalping, Vote::Abstain(_))
+    {
+        run_round(node, now, settings, out);
+        persist(out, PersistOp::UpsertNode(node.clone()));
+    }
     (r.reply, Reply::Ok)
 }
 
@@ -659,6 +691,14 @@ fn admin_unban(state: &mut PoolState, a: NodeAction, now: Ts, out: &mut Out) -> 
         return (a.reply, Reply::Refused(Refusal::NotBanned));
     }
     persist(out, PersistOp::UpsertNode(node.clone()));
+    persist(
+        out,
+        PersistOp::LiftBan {
+            ip: node.ip,
+            at: now,
+            admin: true,
+        },
+    );
     emit_node(
         out,
         now,
@@ -765,8 +805,16 @@ fn tick_nodes(state: &mut PoolState, now: Ts, out: &mut Out) {
         let before = node.clone();
         let events = tick_node(node, now, settings);
         announce(out, tombstones, node, before.state, events, now);
+        // A reverify node waits for the measurement of its agent; without one, the round
+        // starts when a report would have gone stale.
+        let waits_for_report = node.reverify && node.last_round_at.is_none();
+        let wait_over = add_ms(
+            node.state_since,
+            i64::from(settings.report_max_age_sec) * 1000,
+        );
         let round_due = needs_sensors(node, now, settings)
-            && next_round_at(node, settings).is_some_and(|at| at <= now);
+            && next_round_at(node, settings).is_some_and(|at| at <= now)
+            && (!waits_for_report || wait_over <= now);
         if round_due {
             run_round(node, now, settings, out);
         }
@@ -1609,10 +1657,10 @@ mod tests {
                 .iter()
                 .any(|op| matches!(op, PersistOp::DeleteNode(n) if *n == id("n1")))
         );
-        assert!(effects.iter().any(|e| matches!(
-            e,
-            Effect::RunRound { node, fresh_gp: None, .. } if *node == id("n2")
-        )));
+        assert!(
+            !effects.iter().any(|e| matches!(e, Effect::RunRound { .. })),
+            "the round waits for the measurement of the agent"
+        );
         // A second registration does not start a second round.
         let effects = p.enroll("n3", ip(1));
         assert!(matches!(
@@ -1632,6 +1680,162 @@ mod tests {
             persists(&effects)
                 .iter()
                 .any(|op| matches!(op, PersistOp::DeleteIpBlock { ip: a } if *a == ip(1)))
+        );
+    }
+
+    /// A banned IP, and a new node on it that waits for its reverify round.
+    fn reverify_pool() -> Pool {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.quarantine("n1");
+        p.round("n1", &blocked());
+        assert_eq!(p.state_of("n1"), NodeState::Banned);
+        p.enroll("n2", ip(1));
+        assert!(p.state.nodes[&id("n2")].reverify);
+        p
+    }
+
+    fn run_rounds(effects: &[Effect]) -> Vec<&Option<SensorVote>> {
+        effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::RunRound { fresh_gp, .. } => Some(fresh_gp),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_reverify_round_starts_with_the_first_measurement_of_the_agent() {
+        let mut p = reverify_pool();
+        // A report without a verdict does not start it.
+        let effects = p.report("n2", Vote::Abstain(AbstainReason::NoData));
+        assert!(run_rounds(&effects).is_empty());
+        assert_eq!(p.state.nodes[&id("n2")].last_round_at, None);
+
+        let effects = p.report("n2", Vote::Clear);
+        let rounds = run_rounds(&effects);
+        assert_eq!(rounds.len(), 1);
+        assert!(matches!(
+            rounds[0],
+            Some(SensorVote {
+                vote: Vote::Clear,
+                ..
+            })
+        ));
+        assert_eq!(
+            effects.last().map(|e| matches!(e, Effect::Reply(..))),
+            Some(true),
+            "the reply is still last"
+        );
+        // The round is out: the next report does not start another one.
+        p.advance(SEC);
+        let effects = p.report("n2", Vote::Clear);
+        assert!(run_rounds(&effects).is_empty());
+    }
+
+    #[test]
+    fn a_blocked_measurement_of_the_agent_is_the_vote_of_the_reverify_round() {
+        let mut p = reverify_pool();
+        let effects = p.report("n2", Vote::Blocked);
+        let rounds = run_rounds(&effects);
+        assert!(matches!(
+            rounds[..],
+            [Some(SensorVote {
+                vote: Vote::Blocked,
+                ..
+            })]
+        ));
+    }
+
+    #[test]
+    fn without_a_report_the_tick_starts_the_reverify_round_after_the_report_age() {
+        let mut p = reverify_pool();
+        let max_age = i64::from(p.state.settings.report_max_age_sec) * SEC;
+        p.advance(max_age - SEC);
+        p.beat("n2");
+        assert!(run_rounds(&p.run(Command::Tick)).is_empty());
+        p.advance(SEC);
+        p.beat("n2");
+        let effects = p.run(Command::Tick);
+        assert!(matches!(run_rounds(&effects)[..], [None]));
+        // Once started it is paced like any round.
+        p.advance(SEC);
+        p.beat("n2");
+        assert!(run_rounds(&p.run(Command::Tick)).is_empty());
+    }
+
+    #[test]
+    fn a_failed_reverify_is_logged_but_is_not_a_ban_event() {
+        let mut p = reverify_pool();
+        p.report("n2", Vote::Blocked);
+        let effects = p.round("n2", &blocked());
+        assert_eq!(
+            kinds(&effects),
+            [EventKind::SensorRound, EventKind::NodeReverifyFailed]
+        );
+        assert_eq!(EventKind::NodeReverifyFailed.webhook_name(), None);
+        let detail = effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::Emit(ev) if ev.kind == EventKind::NodeReverifyFailed => Some(&ev.detail),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(detail["retry_after_sec"], 900);
+        let record = persists(&effects)
+            .into_iter()
+            .find(|op| matches!(op, PersistOp::RecordBan { .. }))
+            .expect("the failed reverify is recorded");
+        assert!(matches!(
+            record,
+            PersistOp::RecordBan { ip: a, node, reverify: true, votes, .. }
+                if *a == ip(1) && *node == id("n2") && votes.len() == 2
+        ));
+    }
+
+    #[test]
+    fn a_ban_is_recorded_with_its_votes_and_lifted_ways_are_recorded() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.quarantine("n1");
+        let effects = p.round("n1", &blocked());
+        let record = persists(&effects)
+            .into_iter()
+            .find(|op| matches!(op, PersistOp::RecordBan { .. }))
+            .expect("the ban is recorded");
+        assert!(matches!(
+            record,
+            PersistOp::RecordBan { ip: a, node, at, votes, reverify: false }
+                if *a == ip(1)
+                    && *node == id("n1")
+                    && *at == p.now
+                    && votes[..] == [
+                        (SensorKind::Globalping, Vote::Blocked),
+                        (SensorKind::Cheburcheck, Vote::Blocked),
+                    ]
+        ));
+
+        // An admin lifts it.
+        let action = p.node_action("n1");
+        let effects = p.run(Command::AdminUnban(action));
+        assert!(persists(&effects).iter().any(|op| matches!(
+            op,
+            PersistOp::LiftBan { ip: a, at, admin: true } if *a == ip(1) && *at == p.now
+        )));
+
+        // A clean reverify lifts another one.
+        let mut p = reverify_pool();
+        p.report("n2", Vote::Clear);
+        let effects = p.round("n2", &clean());
+        assert!(persists(&effects).iter().any(|op| matches!(
+            op,
+            PersistOp::LiftBan { ip: a, admin: false, .. } if *a == ip(1)
+        )));
+        assert!(
+            !persists(&effects)
+                .iter()
+                .any(|op| matches!(op, PersistOp::RecordBan { .. }))
         );
     }
 

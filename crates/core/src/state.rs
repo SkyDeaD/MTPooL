@@ -203,6 +203,21 @@ pub enum PersistOp {
         verdict: RoundVerdict,
         votes: Vec<(SensorKind, SensorVote)>,
     },
+    /// A ban for the `bans` table: the votes that confirmed it, or the votes of the reverify
+    /// round that failed to lift it.
+    RecordBan {
+        ip: Ipv4Addr,
+        node: NodeId,
+        at: Ts,
+        votes: Vec<(SensorKind, Vote)>,
+        reverify: bool,
+    },
+    /// The ban of an IP ended: a clean reverify round, or an admin.
+    LiftBan {
+        ip: Ipv4Addr,
+        at: Ts,
+        admin: bool,
+    },
     UpsertIpBlock(IpBlock),
     DeleteIpBlock {
         ip: Ipv4Addr,
@@ -249,6 +264,9 @@ pub enum EventKind {
     NodeQuarantined,
     NodeRecovered,
     NodeBanned,
+    /// A reverify round did not prove the IP clean. For the event log of the panel only: the
+    /// agent registers again every few minutes, a webhook for each would be noise.
+    NodeReverifyFailed,
     NodeDead,
     NodePruned,
     BanLifted,
