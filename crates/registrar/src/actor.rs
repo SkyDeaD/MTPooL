@@ -33,9 +33,6 @@ use crate::store::Store;
 
 /// How often `Command::Tick` (master selection, node timers, DNS planning) goes to `core`.
 pub const SELECTION_TICK: Duration = Duration::from_secs(3);
-/// Placeholder for the outside TCP probe cadence. The probe itself is not part of the state
-/// owner and is added together with the sensors; nothing runs on this interval yet.
-pub const TCP_PROBE_TICK: Duration = Duration::from_secs(5);
 /// How often the wall clock is compared with the monotonic one.
 pub const CLOCK_CHECK_TICK: Duration = Duration::from_secs(30);
 /// A wall clock that moved this far against the monotonic one is worth a warning.

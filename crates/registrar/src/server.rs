@@ -29,6 +29,7 @@ use crate::auth::{AuthState, session};
 use crate::config::Config;
 use crate::dns::cloudflare::CloudflareDns;
 use crate::dns::worker::DnsWorker;
+use crate::prober::Prober;
 use crate::secrets;
 use crate::sensors::Sensor;
 use crate::sensors::cheburcheck::CheburcheckSensor;
@@ -40,6 +41,7 @@ use crate::sensors::round::RoundRunner;
 use crate::snapshot::SnapshotStore;
 use crate::store::{Store, StoreError, WriteHealth};
 use crate::verifier::{MeasurementVerifier, NoVerifier};
+use crate::webhooks::{WebhookFanOut, WebhookSender};
 use arc_swap::ArcSwap;
 use mtpool_core::{GlobalpingSettings, NodeId, Ts};
 
@@ -140,6 +142,8 @@ pub fn router(state: AppState) -> Router {
     // The bot and admin routes take a token of their own kind and are not behind it either.
     let (bot, _) = api::bot::routes().split_for_parts();
     let (admin, _) = api::admin::routes().split_for_parts();
+    // /metrics takes a metrics token and sits outside the API prefix.
+    let (metrics, _) = crate::metrics::routes().split_for_parts();
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
@@ -148,6 +152,7 @@ pub fn router(state: AppState) -> Router {
         .merge(agent)
         .merge(bot)
         .merge(admin)
+        .merge(metrics)
         .fallback(api::not_found)
         .method_not_allowed_fallback(api::method_not_allowed)
         .with_state(state)
@@ -287,7 +292,18 @@ pub async fn run_with(
     let dns = CloudflareDns::new(CloudflareDns::default_base(), dns_token)
         .map_err(RunError::HttpClient)?;
     drivers.push(Arc::new(DnsWorker::new(Arc::new(dns))));
+    // Webhooks: every event becomes delivery rows; the sender posts what is due.
+    drivers.push(Arc::new(WebhookFanOut::new(store.clone())));
     let actor = Actor::spawn(state, store.clone(), drivers);
+    // The prober and the sender end on their own when the state owner is gone; the handles let
+    // the shutdown cut a round that is still running.
+    let workers = [
+        tokio::spawn(Prober::new().run(actor.clone())),
+        tokio::spawn(
+            WebhookSender::new(store.clone(), Arc::new(SystemResolver), system_clock())
+                .run(actor.clone()),
+        ),
+    ];
     let app = router(
         AppState::new(store.clone(), actor.clone(), actor.snapshots())
             .with_events(fan.clone())
@@ -331,6 +347,9 @@ pub async fn run_with(
     };
     tracing::info!("stopping");
     let stored = shutdown(&actor, &store).await;
+    for worker in &workers {
+        worker.abort();
+    }
     served?;
     stored?;
     Ok(())

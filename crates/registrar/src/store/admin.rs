@@ -36,6 +36,17 @@ pub enum AdminOp {
         payload: String,
         at: Ts,
     },
+    /// The outcome of one send of a delivery.
+    DeliveryResult {
+        id: i64,
+        /// `pending`, `delivered` or `failed`.
+        status: String,
+        attempt: i64,
+        response_code: Option<i64>,
+        /// A short fixed code (`http_500`, `connect_error`, ...), never text of the receiver.
+        last_error: Option<String>,
+        next_at: Option<Ts>,
+    },
     SetSecret {
         name: String,
         value: String,
@@ -70,6 +81,7 @@ pub(super) fn name(op: &AdminOp) -> &'static str {
         AdminOp::InsertWebhook { .. } => "insert_webhook",
         AdminOp::DeleteWebhook { .. } => "delete_webhook",
         AdminOp::InsertDelivery { .. } => "insert_delivery",
+        AdminOp::DeliveryResult { .. } => "delivery_result",
         AdminOp::SetSecret { .. } => "set_secret",
         AdminOp::DeleteSecret { .. } => "delete_secret",
         AdminOp::UpdateOwner { .. } => "update_owner",
@@ -128,6 +140,28 @@ pub(super) fn apply(conn: &Connection, op: &AdminOp) -> Result<i64, StoreError> 
             )?
             .execute(params![webhook_id, event_id, event, payload, at.0])?;
             Ok(conn.last_insert_rowid())
+        }
+        AdminOp::DeliveryResult {
+            id,
+            status,
+            attempt,
+            response_code,
+            last_error,
+            next_at,
+        } => {
+            conn.prepare_cached(
+                "UPDATE webhook_deliveries SET status = ?2, attempt = ?3, response_code = ?4, \
+                 last_error = ?5, next_at = ?6 WHERE id = ?1",
+            )?
+            .execute(params![
+                id,
+                status,
+                attempt,
+                response_code,
+                last_error,
+                next_at.map(|t| t.0)
+            ])?;
+            Ok(0)
         }
         AdminOp::SetSecret { name, value, at } => {
             conn.prepare_cached(

@@ -30,6 +30,8 @@ pub struct Snapshot {
     pub node_docs: BTreeMap<String, PublicNode>,
     /// The Telegram link of each `ProxyLink::id`, for the QR codes.
     pub link_index: BTreeMap<String, String>,
+    /// How many masters each configured domain has now (0 for a domain without one).
+    pub master_counts: BTreeMap<String, usize>,
 }
 
 fn node_state(state: CoreState) -> NodeState {
@@ -177,6 +179,11 @@ impl Snapshot {
             etag,
             node_docs: nodes.into_iter().map(|n| (n.id.clone(), n)).collect(),
             link_index,
+            master_counts: settings
+                .domains
+                .iter()
+                .map(|d| (d.clone(), state.assignments.0.get(d).map_or(0, Vec::len)))
+                .collect(),
         }
     }
 }

@@ -2873,6 +2873,51 @@
           }
         }
       }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "ops"
+        ],
+        "operationId": "get_metrics",
+        "responses": {
+          "200": {
+            "description": "The pool in Prometheus text format 0.0.4",
+            "content": {
+              "text/plain; version=0.0.4; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid metrics token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A token of another kind",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -4515,6 +4560,10 @@
     {
       "name": "admin",
       "description": "Routes of the panel and the admin; they need the admin token (`mtp_admin_...`) or a panel session"
+    },
+    {
+      "name": "ops",
+      "description": "Monitoring; needs a metrics token (`mtp_metrics_...`)"
     }
   ]
 }

@@ -220,6 +220,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .merge(agent::routes())
         .merge(bot::routes())
         .merge(admin::routes())
+        .merge(crate::metrics::routes())
 }
 
 /// The OpenAPI document, pretty-printed: what `mtpool-registrar openapi` prints (plus a
