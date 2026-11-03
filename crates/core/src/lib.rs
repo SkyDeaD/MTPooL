@@ -1,5 +1,6 @@
 //! Pure pool logic without I/O.
 
+pub mod apply;
 pub mod dns;
 pub mod health;
 pub mod lifecycle;
@@ -7,9 +8,12 @@ pub mod links;
 pub mod selection;
 pub mod settings;
 pub mod srmd;
+pub mod state;
+pub mod traffic;
 pub mod types;
 pub mod votes;
 
+pub use apply::apply;
 pub use dns::{
     DnsOp, DnsPlanError, DnsState, LiveRecord, NewRecord, RecordKind, RecordValue, backoff,
     plan_changes,
@@ -26,6 +30,12 @@ pub use settings::{GlobalpingSettings, ProxyUser, Settings, SettingsError, SrmdS
 pub use srmd::{
     SrmdAction, SrmdError, SrmdState, rebalance, release, required_domains, set_clients, take,
 };
+pub use state::{
+    Command, Durability, Effect, EnrollRequest, Event, EventKind, HeartbeatRequest, NodeAction,
+    NodeStats, PersistOp, PoolState, Refusal, Reply, ReplyId, ReportRequest, SrmdManualAction,
+    SrmdManualRequest, TerminateReason,
+};
+pub use traffic::{TrafficCounters, traffic_delta};
 pub use types::{
     EngineKind, Generation, IdError, NodeId, NodeState, OwnerId, Ts, is_public_ipv4, mask_ip,
 };
