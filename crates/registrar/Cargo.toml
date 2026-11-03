@@ -39,6 +39,6 @@ utoipa-axum.workspace = true
 http-body-util.workspace = true
 rqrr.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["io-util", "test-util"] }
 tower = { workspace = true, features = ["util"] }
 wiremock.workspace = true

@@ -7,6 +7,7 @@ use std::net::Ipv4Addr;
 use async_trait::async_trait;
 use mtpool_core::{SensorKind, SensorVote};
 
+pub mod cheburcheck;
 pub mod globalping;
 
 /// What a sensor looks at: one node.
