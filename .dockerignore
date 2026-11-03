@@ -1,0 +1,11 @@
+# The images build from the Cargo workspace only: no dotfiles, documents, web or deploy trees.
+.*
+*.md
+docs
+tmp
+target
+web
+deploy
+e2e/compose.yml
+rust-toolchain.toml
+**/node_modules
