@@ -17,6 +17,8 @@ use crate::votes::{RoundVerdict, SensorKind, Vote, judge_round};
 const PRUNE_PAUSES_SEC: [u32; 5] = [900, 1800, 3600, 7200, 10_800];
 /// A tombstone is forgotten this long after its last update.
 const TOMBSTONE_TTL_MS: i64 = 7 * 24 * 3600 * 1000;
+/// Retry hint while a reverify round for the same IP is running.
+const REVERIFY_IN_FLIGHT_RETRY_SEC: u32 = 60;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeRecord {
@@ -44,6 +46,10 @@ pub struct NodeRecord {
     pub undecided_rounds: u32,
     /// Counted clean rounds in a row.
     pub clean_rounds: u32,
+    /// This quarantine has entered the sensor path: the node was alive while its Globalping
+    /// check was unproven (unknown, failed or aged out). Stays set until the node leaves
+    /// `Quarantine`; only counted clean rounds, not a fresh measurement, end it.
+    pub suspected: bool,
     /// Registered from a blocked IP: a decisive round must lift the block before the node
     /// may proceed.
     pub reverify: bool,
@@ -83,6 +89,7 @@ impl NodeRecord {
             last_round_at: None,
             undecided_rounds: 0,
             clean_rounds: 0,
+            suspected: false,
             reverify: false,
         }
     }
@@ -138,16 +145,18 @@ impl NodeRecord {
         self.last_round_at = None;
         self.undecided_rounds = 0;
         self.clean_rounds = 0;
+        self.suspected = false;
         self.reverify = false;
     }
 
     /// Enters `Quarantine`: the node leaves the masters and the prune timer starts.
-    fn enter_quarantine(&mut self, now: Ts) {
+    fn enter_quarantine(&mut self, now: Ts, suspected: bool) {
         self.state = NodeState::Quarantine;
         self.state_since = now;
         self.last_round_at = None;
         self.undecided_rounds = 0;
         self.clean_rounds = 0;
+        self.suspected = suspected;
     }
 
     /// Enters `Healthy` and the back of the master queue.
@@ -158,6 +167,7 @@ impl NodeRecord {
         self.last_round_at = None;
         self.undecided_rounds = 0;
         self.clean_rounds = 0;
+        self.suspected = false;
     }
 
     fn enter_final(&mut self, state: NodeState, now: Ts) {
@@ -266,6 +276,8 @@ pub enum RejectReason {
     PrunePause,
     /// The IP is blocked and the last reverify was not clean.
     ReverifyPause,
+    /// The IP is blocked and a reverify node for it is already being checked.
+    ReverifyInFlight,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -290,6 +302,16 @@ pub fn decide_enroll(
     tombstones: &[Tombstone],
     now: Ts,
 ) -> EnrollDecision {
+    // A second registration must not start a second round and spend sensor quota.
+    if existing
+        .iter()
+        .any(|n| n.ip == req.ip && n.reverify && is_live_state(n.state))
+    {
+        return EnrollDecision::Reject {
+            retry_after_sec: REVERIFY_IN_FLIGHT_RETRY_SEC,
+            reason: RejectReason::ReverifyInFlight,
+        };
+    }
     if let Some(block) = blocks.iter().find(|b| b.ip == req.ip) {
         return match block.next_reverify_at {
             Some(retry_at) if now < retry_at => EnrollDecision::Reject {
@@ -330,8 +352,8 @@ pub fn is_alive(n: &NodeRecord, now: Ts, s: &Settings) -> bool {
 ///
 /// A reverify node always needs its decisive round. A node in `Quarantine` needs sensors only
 /// while it is alive (a dead server is not a blocked one) and its last Globalping check is
-/// failed, missing or aged out, or while it is partway through a clean streak. Alive with a
-/// good Globalping check and another condition failing: no sensors.
+/// failed, missing or aged out, or the quarantine is already `suspected`. Alive with a good
+/// Globalping check throughout and another condition failing: no sensors.
 pub fn needs_sensors(n: &NodeRecord, now: Ts, s: &Settings) -> bool {
     match n.state {
         NodeState::Pending => n.reverify,
@@ -339,12 +361,17 @@ pub fn needs_sensors(n: &NodeRecord, now: Ts, s: &Settings) -> bool {
             if !is_alive(n, now, s) {
                 return false;
             }
-            let check_unproven = matches!(n.health.gp, GpStatus::Unknown | GpStatus::Failed { .. })
-                || failed_conditions(&n.health, now, s).contains(&FailedCondition::ReportStale);
-            check_unproven || n.clean_rounds > 0
+            n.suspected || globalping_unproven(&n.health, &failed_conditions(&n.health, now, s))
         }
         _ => false,
     }
+}
+
+/// The last Globalping check is failed, missing or aged out. `failed` is the node's failed
+/// conditions at the same moment.
+fn globalping_unproven(h: &NodeHealth, failed: &[FailedCondition]) -> bool {
+    matches!(h.gp, GpStatus::Unknown | GpStatus::Failed { .. })
+        || failed.contains(&FailedCondition::ReportStale)
 }
 
 /// When the next round is due, if the node runs rounds at all.
@@ -396,7 +423,19 @@ pub fn tick_node(n: &mut NodeRecord, now: Ts, s: &Settings) -> Vec<LifecycleEven
         NodeState::Pending | NodeState::Healthy => {
             let failed = failed_conditions(&n.health, now, s);
             if !failed.is_empty() {
-                n.enter_quarantine(now);
+                // A new node needs time to raise its TCP and metrics latches: that alone is
+                // not a reason to quarantine it (and to send a webhook) during the grace.
+                let only_latches = failed
+                    .iter()
+                    .all(|c| matches!(c, FailedCondition::Tcp | FailedCondition::Metrics));
+                if n.state == NodeState::Pending
+                    && only_latches
+                    && !elapsed_at_least(n.state_since, now, s.report_max_age_sec)
+                {
+                    return Vec::new();
+                }
+                let suspected = is_alive(n, now, s) && globalping_unproven(&n.health, &failed);
+                n.enter_quarantine(now, suspected);
                 return vec![LifecycleEvent::Quarantined { reason: failed }];
             }
             if n.state == NodeState::Pending {
@@ -411,10 +450,14 @@ pub fn tick_node(n: &mut NodeRecord, now: Ts, s: &Settings) -> Vec<LifecycleEven
 }
 
 fn tick_quarantine(n: &mut NodeRecord, now: Ts, s: &Settings) -> Vec<LifecycleEvent> {
-    if failed_conditions(&n.health, now, s).is_empty() {
-        // Conditions hold again. Unless a clean streak is under way (it needs its second
-        // round), the node returns at once.
-        if n.clean_rounds == 0 {
+    let failed = failed_conditions(&n.health, now, s);
+    if is_alive(n, now, s) && globalping_unproven(&n.health, &failed) {
+        n.suspected = true;
+    }
+    if failed.is_empty() {
+        // Conditions hold again. A node whose Globalping was fine throughout returns at once;
+        // a suspected one needs its clean rounds, one good measurement proves nothing.
+        if !n.suspected {
             n.enter_healthy(now);
             return vec![LifecycleEvent::Recovered];
         }
@@ -818,13 +861,106 @@ mod tests {
         assert!(!needs_sensors(&down, T0, &s()), "not alive: no sensors");
         let mut silent = n.clone();
         assert!(!needs_sensors(&silent, at(61), &s()), "heartbeat expired");
+        // A fresh measurement does not end a suspected quarantine: clean rounds do.
         silent.health.gp = GpStatus::Ok { at: T0 };
-        assert!(!needs_sensors(&silent, T0, &s()));
+        assert!(needs_sensors(&silent, T0, &s()));
 
         let healthy_node = healthy(T0);
         assert!(!needs_sensors(&healthy_node, T0, &s()));
         let waiting = pending("node-aaaaa", "95.216.0.1", T0);
         assert!(!needs_sensors(&waiting, T0, &s()));
+    }
+
+    #[test]
+    fn gp_failed_then_ok_needs_two_clean_rounds() {
+        let mut n = quarantined_gp_failed(T0);
+        assert!(n.suspected);
+        let mut blocks = Vec::new();
+
+        // One good measurement: every condition holds again, but the block suspicion is open.
+        n.health = good_health(at(10));
+        assert!(tick_node(&mut n, at(10), &s()).is_empty());
+        assert_eq!(n.state, NodeState::Quarantine);
+        assert!(needs_sensors(&n, at(10), &s()));
+
+        // A clean round after it counts, one is not enough.
+        let r = round(&n, &clean_votes());
+        assert!(apply_round(&mut n, &r, &mut blocks, at(10), &s()).is_empty());
+        assert_eq!(n.clean_rounds, 1);
+        n.health = good_health(at(20));
+        assert!(tick_node(&mut n, at(20), &s()).is_empty());
+        assert_eq!(n.state, NodeState::Quarantine);
+        assert!(needs_sensors(&n, at(20), &s()));
+
+        n.health = good_health(at(310));
+        let r = round(&n, &clean_votes());
+        assert_eq!(
+            apply_round(&mut n, &r, &mut blocks, at(310), &s()),
+            vec![LifecycleEvent::Recovered]
+        );
+        assert_eq!(n.state, NodeState::Healthy);
+        assert!(!n.suspected, "leaving quarantine clears the suspicion");
+    }
+
+    #[test]
+    fn report_stale_then_fresh_ok_still_needs_clean_rounds() {
+        let mut n = healthy(T0);
+        let now = at(16 * 60);
+        beat(&mut n, now);
+        assert_eq!(
+            tick_node(&mut n, now, &s()),
+            vec![LifecycleEvent::Quarantined {
+                reason: vec![FailedCondition::ReportStale]
+            }]
+        );
+        assert!(n.suspected);
+
+        let later = at(17 * 60);
+        n.health = good_health(later);
+        assert!(tick_node(&mut n, later, &s()).is_empty());
+        assert_eq!(n.state, NodeState::Quarantine);
+        assert!(needs_sensors(&n, later, &s()));
+
+        let mut blocks = Vec::new();
+        for (i, now) in [later, at(22 * 60)].into_iter().enumerate() {
+            n.health = good_health(now);
+            let r = round(&n, &clean_votes());
+            let events = apply_round(&mut n, &r, &mut blocks, now, &s());
+            if i == 0 {
+                assert!(events.is_empty());
+            } else {
+                assert_eq!(events, vec![LifecycleEvent::Recovered]);
+            }
+        }
+        assert_eq!(n.state, NodeState::Healthy);
+    }
+
+    #[test]
+    fn gp_ok_throughout_does_not_become_suspected() {
+        let mut n = healthy(T0);
+        n.health.metrics = Latch::new();
+        tick_node(&mut n, T0, &s());
+        assert!(!n.suspected);
+        n.health.metrics = up();
+        assert_eq!(
+            tick_node(&mut n, at(5), &s()),
+            vec![LifecycleEvent::Recovered]
+        );
+    }
+
+    #[test]
+    fn gp_failing_while_quarantined_marks_the_node_suspected() {
+        let mut n = healthy(T0);
+        n.health.port_ok = false;
+        tick_node(&mut n, T0, &s());
+        assert!(!n.suspected);
+
+        n.health.gp = GpStatus::Failed { at: at(5) };
+        tick_node(&mut n, at(5), &s());
+        assert!(n.suspected);
+        n.health.gp = GpStatus::Ok { at: at(10) };
+        tick_node(&mut n, at(10), &s());
+        assert!(n.suspected, "stays set until the node leaves quarantine");
     }
 
     #[test]
@@ -1435,5 +1571,84 @@ mod tests {
         assert_eq!(n.state, NodeState::Quarantine);
         assert_eq!(n.state_since, at(20));
         assert!(needs_sensors(&n, at(20), &s()));
+    }
+
+    /// A node that reports, with the metrics latch not yet risen.
+    fn pending_with_unrisen_metrics(report_at: Ts) -> NodeRecord {
+        let mut n = pending("node-aaaaa", "95.216.0.1", T0);
+        n.health = good_health(report_at);
+        n.health.metrics = Latch::new();
+        n
+    }
+
+    #[test]
+    fn pending_waits_for_latches_without_quarantine() {
+        let mut n = pending_with_unrisen_metrics(at(20));
+        assert!(tick_node(&mut n, at(20), &s()).is_empty());
+        assert_eq!(n.state, NodeState::Pending);
+
+        let now = at(899);
+        n.health.last_heartbeat = now;
+        n.health.last_report = now;
+        assert!(tick_node(&mut n, now, &s()).is_empty());
+        assert_eq!(n.state, NodeState::Pending);
+
+        n.health.metrics = up();
+        assert_eq!(
+            tick_node(&mut n, now, &s()),
+            vec![LifecycleEvent::Recovered]
+        );
+    }
+
+    #[test]
+    fn pending_latches_never_rising_quarantine_after_grace() {
+        let mut n = pending_with_unrisen_metrics(at(20));
+        let now = at(900);
+        n.health.last_heartbeat = now;
+        n.health.last_report = now;
+        assert_eq!(
+            tick_node(&mut n, now, &s()),
+            vec![LifecycleEvent::Quarantined {
+                reason: vec![FailedCondition::Metrics]
+            }]
+        );
+        assert!(!n.suspected, "Globalping is fine, no sensors");
+    }
+
+    #[test]
+    fn pending_port_mismatch_quarantines_at_once() {
+        let mut n = pending("node-aaaaa", "95.216.0.1", T0);
+        n.health = good_health(at(20));
+        n.health.port_ok = false;
+        assert_eq!(
+            tick_node(&mut n, at(20), &s()),
+            vec![LifecycleEvent::Quarantined {
+                reason: vec![FailedCondition::Port]
+            }]
+        );
+    }
+
+    #[test]
+    fn second_enroll_during_reverify_is_rejected() {
+        let (node, blocks) = blocked_ip_with_reverify_node(at(100));
+        let second = EnrollInput {
+            node_id: id("node-ccccc"),
+            ip: ip("95.216.0.1"),
+        };
+        assert_eq!(
+            decide_enroll(&second, &[&node], &blocks, &[], at(110)),
+            EnrollDecision::Reject {
+                retry_after_sec: 60,
+                reason: RejectReason::ReverifyInFlight
+            }
+        );
+
+        // A reverify record that is no longer live does not hold the IP.
+        let mut failed = node.clone();
+        failed.state = NodeState::Banned;
+        assert_eq!(
+            decide_enroll(&second, &[&failed], &blocks, &[], at(110)),
+            EnrollDecision::Reverify
+        );
     }
 }
