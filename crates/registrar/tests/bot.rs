@@ -271,6 +271,31 @@ async fn webhook_test_and_deliveries_endpoints() {
     .await;
     assert_eq!(limited.json().as_array().unwrap().len(), 1);
 
+    // The stored body has the shape of every real delivery, so one parser serves both.
+    let payload: String = env
+        .store
+        .read()
+        .query_row(
+            "SELECT payload FROM webhook_deliveries WHERE event_id = ?1",
+            [&first_event],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    assert_eq!(
+        payload,
+        json!({
+            "id": first_event,
+            "event": "webhook.test",
+            "at": mtpool_protocol::rfc3339(env.clock.load(std::sync::atomic::Ordering::SeqCst) - 1000),
+            "node": null,
+            "domain": null,
+            "detail": { "webhook_id": id },
+        })
+    );
+    let hex = first_event.strip_prefix("evt_").expect("evt_ prefix");
+    assert_eq!(hex.len(), 16);
+
     // Someone else's webhook looks like a missing one.
     for (method, path) in [
         ("POST", format!("/api/v1/me/webhooks/{id}/test")),

@@ -2527,7 +2527,7 @@
         },
         "responses": {
           "202": {
-            "description": "A `webhook.test` delivery is queued",
+            "description": "A `webhook.test` delivery is queued. Its body has the shape of every delivery: `{\"id\": \"evt_...\", \"event\": \"webhook.test\", \"at\": <RFC 3339>, \"node\": null, \"domain\": null, \"detail\": {\"webhook_id\": <id>}}`; `id` equals the `event_id` of this answer",
             "content": {
               "application/json": {
                 "schema": {

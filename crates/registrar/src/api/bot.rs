@@ -48,6 +48,7 @@ use crate::auth::tokens::SCOPE_POOL_READ;
 use crate::server::AppState;
 use crate::snapshot::public_node_of;
 use crate::store::AdminOp;
+use crate::webhooks;
 
 /// A node is re-checked at most this often through the bot API.
 pub const RECHECK_EVERY_MS: i64 = 10 * 60 * 1000;
@@ -531,7 +532,7 @@ pub async fn delete_webhook(
     params(("id" = String, Path, description = "The webhook id")),
     request_body(content = EmptyRequest, description = "Empty, or `{}`"),
     responses(
-        (status = 202, description = "A `webhook.test` delivery is queued", body = WebhookTest),
+        (status = 202, description = "A `webhook.test` delivery is queued. Its body has the shape of every delivery: `{\"id\": \"evt_...\", \"event\": \"webhook.test\", \"at\": <RFC 3339>, \"node\": null, \"domain\": null, \"detail\": {\"webhook_id\": <id>}}`; `id` equals the `event_id` of this answer", body = WebhookTest),
         (status = 400, description = "Bad body", body = Problem, content_type = "application/problem+json"),
         (status = 401, description = "No valid bot token", body = Problem, content_type = "application/problem+json"),
         (status = 404, description = "No such webhook of this owner", body = Problem, content_type = "application/problem+json"),
@@ -546,18 +547,20 @@ pub async fn test_webhook(
     parse_empty(&body_bytes(body)?)?;
     let id = own_webhook(&app, &auth, &id).await?;
     let at = (app.clock)();
-    let event_id = format!("evt_{}", random_hex(12));
-    let payload = json!({
-        "event": TEST_EVENT,
-        "event_id": event_id,
-        "at": rfc3339(at.0),
-        "webhook_id": id,
-    });
+    let event_id = webhooks::new_event_id();
+    let payload = webhooks::payload(
+        &event_id,
+        TEST_EVENT,
+        at,
+        None,
+        None,
+        &json!({ "webhook_id": id }),
+    );
     let op = AdminOp::InsertDelivery {
         webhook_id: id,
         event_id: event_id.clone(),
         event: TEST_EVENT.to_owned(),
-        payload: payload.to_string(),
+        payload,
         at,
     };
     let store = app.store.clone();

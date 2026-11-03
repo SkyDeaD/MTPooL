@@ -51,6 +51,32 @@ pub fn sign(secret: &str, ts: i64, body: &str) -> String {
     format!("t={ts},v1={}", HEXLOWER.encode(&digest))
 }
 
+/// A fresh event id: `evt_` and 16 hex digits.
+pub(crate) fn new_event_id() -> String {
+    format!("evt_{}", random_hex(8))
+}
+
+/// The body of every delivery, the test one included: `{id, event, at, node, domain, detail}`.
+/// One parser serves a receiver whatever the event.
+pub(crate) fn payload(
+    event_id: &str,
+    name: &str,
+    at: Ts,
+    node: Option<&str>,
+    domain: Option<&str>,
+    detail: &serde_json::Value,
+) -> String {
+    json!({
+        "id": event_id,
+        "event": name,
+        "at": rfc3339(at.0),
+        "node": node,
+        "domain": domain,
+        "detail": detail,
+    })
+    .to_string()
+}
+
 /// Turns events into delivery rows.
 #[derive(Clone)]
 pub struct WebhookFanOut {
@@ -129,16 +155,15 @@ fn enqueue(
         return Ok(0);
     }
     // One event, one id, whatever the number of hooks and the number of tries.
-    let event_id = format!("evt_{}", random_hex(8));
-    let payload = json!({
-        "id": event_id,
-        "event": name,
-        "at": rfc3339(event.at.0),
-        "node": event.node.as_ref().map(NodeId::as_str),
-        "domain": event.domain,
-        "detail": event.detail,
-    })
-    .to_string();
+    let event_id = new_event_id();
+    let payload = payload(
+        &event_id,
+        name,
+        event.at,
+        event.node.as_ref().map(NodeId::as_str),
+        event.domain.as_deref(),
+        &event.detail,
+    );
     for hook in &hooks {
         store
             .admin(AdminOp::InsertDelivery {
