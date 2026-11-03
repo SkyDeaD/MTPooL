@@ -12,6 +12,7 @@ publish.workspace = true
 mtpool-core.workspace = true
 mtpool-protocol.workspace = true
 arc-swap.workspace = true
+async-trait.workspace = true
 axum.workspace = true
 clap = { workspace = true, features = ["derive"] }
 data-encoding.workspace = true
@@ -20,6 +21,7 @@ futures-core.workspace = true
 listenfd.workspace = true
 mimalloc.workspace = true
 rand.workspace = true
+reqwest = { workspace = true, features = ["rustls"] }
 rusqlite = { workspace = true, features = ["bundled"] }
 serde.workspace = true
 serde_json.workspace = true
@@ -39,3 +41,4 @@ rqrr.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tower = { workspace = true, features = ["util"] }
+wiremock.workspace = true
