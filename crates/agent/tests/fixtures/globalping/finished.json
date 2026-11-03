@@ -1,0 +1,24 @@
+{
+  "id": "2BSGWjCSdcIMKXZfj00021RC5",
+  "type": "http",
+  "status": "finished",
+  "createdAt": "2026-11-03T18:57:27.508Z",
+  "updatedAt": "2026-11-03T18:57:28.618Z",
+  "target": "104.16.132.229",
+  "probesCount": 20,
+  "locations": [
+    {
+      "country": "RU",
+      "tags": [
+        "eyeball-network"
+      ],
+      "limit": 20
+    }
+  ],
+  "measurementOptions": {
+    "port": 443,
+    "request": {
+      "host": "example.com"
+    }
+  }
+}

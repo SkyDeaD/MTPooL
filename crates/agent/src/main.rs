@@ -9,16 +9,17 @@ use clap::{Parser, Subcommand};
 use mtpool_agent::client::RegistrarClient;
 use mtpool_agent::config::{DEFAULT_CONFIG_PATH, LocalConfig};
 use mtpool_agent::engine::http::ReqwestHttp;
-use mtpool_agent::engine::telemt::{
-    DEFAULT_CONFIG_PATH as TELEMT_CONFIG, DEFAULT_UNIT, TelemtEngine,
-};
+use mtpool_agent::engine::select::{AnyEngine, select_engine};
+use mtpool_agent::gp::{DEFAULT_BASE, GpLoop};
 use mtpool_agent::host::TokioRunner;
+use mtpool_agent::ip_detect::IpWatch;
 use mtpool_agent::lifecycle::{
-    ConfigSink, DetectedEngine, EngineProbe, Hooks, Lifecycle, NoReports, system_jitter,
+    ConfigSink, DetectedEngine, EngineProbe, Hooks, Lifecycle, system_jitter,
 };
+use mtpool_agent::local_health::LocalTcp;
+use mtpool_agent::report::{ChecksSetup, ConfigMemory, NodeChecks, Remembering};
 use mtpool_agent::state_files::RealFs;
 use mtpool_protocol::agent::AgentConfig;
-use mtpool_protocol::public::Engine;
 use tracing_subscriber::EnvFilter;
 
 const ENV_LOG: &str = "MTPOOL_AGENT_LOG";
@@ -76,31 +77,31 @@ async fn shutdown_signal() {
     }
 }
 
-type Telemt = TelemtEngine<TokioRunner, ReqwestHttp>;
+type Chosen = AnyEngine<TokioRunner, ReqwestHttp>;
 
-/// The one telemt adapter, as the engine the lifecycle detects and as the sink it hands the
-/// config to. A port in the local config wins over the one in telemt's own file.
+/// The engine the host runs, as the engine the lifecycle detects and as the sink it hands the
+/// config to. A port in the local config wins over the one in the engine's own file.
 #[derive(Clone)]
-struct SharedTelemt {
-    telemt: Arc<Telemt>,
+struct SharedEngine {
+    engine: Arc<Chosen>,
     port: Option<u16>,
 }
 
-impl EngineProbe for SharedTelemt {
+impl EngineProbe for SharedEngine {
     async fn detect(&self) -> Option<DetectedEngine> {
         match self.port {
             Some(port) => Some(DetectedEngine {
-                engine: Engine::Telemt,
+                engine: mtpool_agent::engine::Engine::kind(&*self.engine),
                 port,
             }),
-            None => self.telemt.detect().await,
+            None => self.engine.detect().await,
         }
     }
 }
 
-impl ConfigSink for SharedTelemt {
+impl ConfigSink for SharedEngine {
     async fn apply(&self, config: &AgentConfig) {
-        self.telemt.apply(config).await;
+        self.engine.apply(config).await;
     }
 }
 
@@ -126,22 +127,49 @@ async fn run(config_path: PathBuf) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let http = Arc::new(http);
     let fs = Arc::new(RealFs);
-    let telemt = SharedTelemt {
-        telemt: Arc::new(TelemtEngine::new(
-            PathBuf::from(TELEMT_CONFIG),
-            DEFAULT_UNIT,
+    let engine = Arc::new(
+        select_engine(
             config.state_dir.clone(),
             Arc::new(TokioRunner),
             fs.clone(),
-            Arc::new(http),
-        )),
+            http.clone(),
+        )
+        .await,
+    );
+    tracing::info!(engine = ?mtpool_agent::engine::Engine::kind(&*engine), "proxy engine picked");
+    let shared = SharedEngine {
+        engine: engine.clone(),
         port: config.port,
     };
+
+    let ports = Arc::new(LocalTcp);
+    let gp = match GpLoop::new(DEFAULT_BASE, ports.clone()) {
+        Ok(gp) => gp,
+        Err(error) => {
+            tracing::error!("cannot build the HTTP client for Globalping: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let gp_task = tokio::spawn(gp.clone().run());
+    let memory = ConfigMemory::new();
+    let checks = NodeChecks::new(ChecksSetup {
+        engine,
+        port: config.port,
+        ports,
+        fs: fs.clone(),
+        ip: IpWatch::new(http, fs.clone(), config.state_dir.clone()),
+        gp,
+        memory: memory.clone(),
+    });
     let hooks = Hooks {
-        engine: telemt.clone(),
-        reports: NoReports,
-        sink: telemt,
+        engine: shared.clone(),
+        reports: checks,
+        sink: Remembering {
+            memory,
+            inner: shared,
+        },
     };
     let lifecycle = match Lifecycle::new(&config, client, fs, hooks, system_jitter()) {
         Ok(lifecycle) => lifecycle,
@@ -154,7 +182,9 @@ async fn run(config_path: PathBuf) -> ExitCode {
         }
     };
     tracing::info!(version = env!("CARGO_PKG_VERSION"), name = %config.name, "mtpool-agent starts");
-    match lifecycle.run(shutdown_signal()).await {
+    let outcome = lifecycle.run(shutdown_signal()).await;
+    gp_task.abort();
+    match outcome {
         Ok(()) => {
             tracing::info!("mtpool-agent stops");
             ExitCode::SUCCESS

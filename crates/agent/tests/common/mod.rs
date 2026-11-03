@@ -2,18 +2,25 @@
 //! recording hooks. The values here are made up for the tests.
 #![allow(dead_code)]
 
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use mtpool_agent::client::RegistrarClient;
 use mtpool_agent::config::LocalConfig;
+use mtpool_agent::engine::{
+    ApplyOutcome, DesiredConfig, Engine as EngineTrait, EngineError, EngineHealth, EngineKind,
+};
 use mtpool_agent::lifecycle::{
     ConfigSink, DetectedEngine, Hooks, Jitter, Lifecycle, ReportSource, StaticEngine,
 };
+use mtpool_agent::local_health::PortCheck;
 use mtpool_agent::state_files::{Fs, MemFs, StateFiles};
 use mtpool_protocol::agent::{
-    AgentConfig, AgentUser, EnrollResponse, GpReport, Intervals, MetricsReport, ReportRequest,
-    Terminate, TerminateReason,
+    AgentConfig, AgentUser, Dc2Report, EnrollResponse, GpReport, Intervals, MetricsReport,
+    ReportRequest, Terminate, TerminateReason,
 };
 use mtpool_protocol::public::Engine;
 use serde_json::{Value, json};
@@ -29,6 +36,7 @@ pub const ENROLL: &str = "/api/v1/agent/enroll";
 pub const HEARTBEAT: &str = "/api/v1/agent/heartbeat";
 pub const REPORT: &str = "/api/v1/agent/report";
 pub const CONFIG: &str = "/api/v1/agent/config";
+pub const RETIRE: &str = "/api/v1/agent/retire";
 
 /// A jitter that always gives the same factor.
 pub struct FixedJitter(pub f64);
@@ -243,5 +251,98 @@ impl Harness {
 
     pub async fn total_requests(&self) -> usize {
         self.server.received_requests().await.unwrap().len()
+    }
+}
+
+/// An engine that answers what it is told to.
+pub struct FakeEngine {
+    pub port: Mutex<Option<u16>>,
+    pub health: Mutex<EngineHealth>,
+    /// `None`: the engine does not answer.
+    pub metrics: Mutex<Option<MetricsReport>>,
+    pub dc2: Mutex<Option<Dc2Report>>,
+}
+
+impl FakeEngine {
+    pub fn new() -> Arc<FakeEngine> {
+        Arc::new(FakeEngine {
+            port: Mutex::new(Some(443)),
+            health: Mutex::new(EngineHealth {
+                ok: true,
+                reason: None,
+            }),
+            metrics: Mutex::new(Some(MetricsReport {
+                ok: true,
+                from_client_total: 10,
+                to_client_total: 20,
+                clients: Some(3),
+            })),
+            dc2: Mutex::new(Some(Dc2Report {
+                ok: true,
+                reason: None,
+            })),
+        })
+    }
+
+    pub fn set_health(&self, ok: bool, reason: Option<&str>) {
+        *self.health.lock().unwrap() = EngineHealth {
+            ok,
+            reason: reason.map(str::to_owned),
+        };
+    }
+}
+
+#[async_trait]
+impl EngineTrait for FakeEngine {
+    fn kind(&self) -> EngineKind {
+        EngineKind::Telemt
+    }
+    fn port(&self) -> Option<u16> {
+        *self.port.lock().unwrap()
+    }
+    async fn metrics(&self) -> mtpool_agent::engine::Result<MetricsReport> {
+        self.metrics
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| EngineError::Http("no answer".into()))
+    }
+    async fn dc2(&self) -> Option<Dc2Report> {
+        self.dc2.lock().unwrap().clone()
+    }
+    async fn health(&self) -> EngineHealth {
+        self.health.lock().unwrap().clone()
+    }
+    async fn apply_config(
+        &self,
+        _desired: &DesiredConfig,
+    ) -> mtpool_agent::engine::Result<ApplyOutcome> {
+        Ok(ApplyOutcome::Unchanged)
+    }
+}
+
+/// A port check that says what it is told to and remembers what it was asked.
+pub struct FakePorts {
+    pub open: AtomicBool,
+    pub asked: Mutex<Vec<(u16, Option<Ipv4Addr>)>>,
+}
+
+impl FakePorts {
+    pub fn new(open: bool) -> Arc<FakePorts> {
+        Arc::new(FakePorts {
+            open: AtomicBool::new(open),
+            asked: Mutex::new(Vec::new()),
+        })
+    }
+    pub fn set(&self, open: bool) {
+        self.open.store(open, Ordering::SeqCst);
+    }
+}
+
+#[async_trait]
+impl PortCheck for FakePorts {
+    async fn listening(&self, port: u16, also: Option<Ipv4Addr>) -> bool {
+        self.asked.lock().unwrap().push((port, also));
+        self.open.load(Ordering::SeqCst)
     }
 }

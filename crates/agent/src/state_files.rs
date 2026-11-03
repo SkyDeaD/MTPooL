@@ -12,6 +12,13 @@ pub const NODE_ID_FILE: &str = "node_id";
 pub const NODE_TOKEN_FILE: &str = "node_token";
 pub const ENROLL_TOKEN_FILE: &str = "enroll_token";
 
+/// The size of a file system and how much of it is in use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiskUsage {
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+}
+
 /// The few file operations the agent needs.
 pub trait Fs: Send + Sync {
     /// The content of the file, `None` if it does not exist.
@@ -27,6 +34,13 @@ pub trait Fs: Send + Sync {
     fn exists(&self, path: &Path) -> io::Result<bool>;
     /// Removes the file; one that is not there is not an error.
     fn remove(&self, path: &Path) -> io::Result<()>;
+    /// The size and use of the file system `path` is on (`statvfs`).
+    fn disk_usage(&self, _path: &Path) -> io::Result<DiskUsage> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this file system cannot say how full it is",
+        ))
+    }
 }
 
 /// The real file system.
@@ -141,17 +155,38 @@ impl Fs for RealFs {
             Err(e) => Err(e),
         }
     }
+
+    fn disk_usage(&self, path: &Path) -> io::Result<DiskUsage> {
+        let stat = rustix::fs::statvfs(path)?;
+        // Like `df`: the size is what the file system has, "used" is what is not free (the part
+        // kept back for root counts as used).
+        let total = stat.f_blocks.saturating_mul(stat.f_frsize);
+        let free = stat.f_bfree.saturating_mul(stat.f_frsize);
+        Ok(DiskUsage {
+            total_bytes: total,
+            used_bytes: total.saturating_sub(free),
+        })
+    }
 }
 
 /// Files in memory, for tests.
 #[derive(Debug, Default)]
 pub struct MemFs {
     files: Mutex<BTreeMap<PathBuf, Vec<u8>>>,
+    disk: Mutex<Option<DiskUsage>>,
 }
 
 impl MemFs {
     pub fn new() -> MemFs {
         MemFs::default()
+    }
+
+    /// What `disk_usage` answers (for any path); without it the answer is an error.
+    pub fn set_disk_usage(&self, usage: DiskUsage) {
+        *self
+            .disk
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(usage);
     }
 
     fn files(&self) -> std::sync::MutexGuard<'_, BTreeMap<PathBuf, Vec<u8>>> {
@@ -186,6 +221,13 @@ impl Fs for MemFs {
     fn remove(&self, path: &Path) -> io::Result<()> {
         self.files().remove(path);
         Ok(())
+    }
+    fn disk_usage(&self, _path: &Path) -> io::Result<DiskUsage> {
+        (*self
+            .disk
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "no disk sample"))
     }
 }
 

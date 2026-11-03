@@ -13,6 +13,7 @@ pub mod http;
 pub mod meko;
 pub mod mtproxyl;
 pub mod prom;
+pub mod select;
 pub mod telemt;
 
 pub use mtpool_protocol::public::Engine as EngineKind;

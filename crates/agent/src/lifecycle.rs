@@ -29,6 +29,9 @@ pub enum AgentPhase {
     Terminated,
     /// The registrar answered 429: nothing is sent until `Retry-After` has passed.
     Silent,
+    /// The node found itself dead for too long and left the pool (`/agent/retire`); it enrolls
+    /// again when its checks come back.
+    Retired,
 }
 
 /// Why the agent ends instead of retrying.
@@ -144,10 +147,40 @@ impl EngineProbe for StaticEngine {
     }
 }
 
-/// Builds the report of the round; Task 23 implements it.
+/// How the node's own checks see its proxy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Health {
+    /// Fine, or not known to be otherwise.
+    #[default]
+    Good,
+    /// Bad for long enough to say nothing: heartbeats and reports pause, the pool's TTL does the
+    /// rest.
+    Silent,
+    /// Bad for so long that the node leaves the pool by itself.
+    Dead,
+}
+
+/// What the node's checks have to say at one moment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Watch {
+    /// The public address of the node is no longer the one it is registered under.
+    pub ip_changed: bool,
+    pub health: Health,
+}
+
+/// The node's own checks: builds the report of the round and watches the node between reports.
 pub trait ReportSource: Send + Sync {
     /// `None`: nothing to report now.
     fn build(&self) -> impl Future<Output = Option<ReportRequest>> + Send;
+
+    /// Runs the checks that are due at `now` (once per heartbeat interval) and says what they
+    /// found. The default finds nothing.
+    fn watch(&self, _now: Instant) -> impl Future<Output = Watch> + Send {
+        async { Watch::default() }
+    }
+
+    /// The node has just enrolled (for the first time or again).
+    fn enrolled(&self) {}
 }
 
 /// Reports nothing.
@@ -249,6 +282,8 @@ pub struct Lifecycle<E, S, K> {
     heartbeat: Job,
     sync: Job,
     report: Job,
+    /// The node's checks say it is sick: heartbeats and reports pause, the config sync goes on.
+    quiet: bool,
 }
 
 impl<E: EngineProbe, S: ReportSource, K: ConfigSink> Lifecycle<E, S, K> {
@@ -284,6 +319,7 @@ impl<E: EngineProbe, S: ReportSource, K: ConfigSink> Lifecycle<E, S, K> {
             heartbeat: Job::default(),
             sync: Job::default(),
             report: Job::default(),
+            quiet: false,
         })
     }
 
@@ -317,6 +353,7 @@ impl<E: EngineProbe, S: ReportSource, K: ConfigSink> Lifecycle<E, S, K> {
                 _ => self.try_enroll(now).await,
             },
             AgentPhase::Active => self.work(now).await,
+            AgentPhase::Retired => self.retired(now).await,
             // Cannot happen: the silence was ended above.
             AgentPhase::Silent => Step::Wait(Duration::from_secs(1)),
         }
@@ -388,6 +425,7 @@ impl<E: EngineProbe, S: ReportSource, K: ConfigSink> Lifecycle<E, S, K> {
         }
         self.credentials = None;
         self.phase = AgentPhase::Enrolling;
+        self.quiet = false;
         self.enroll.restart();
         Step::Wait(Duration::ZERO)
     }
@@ -423,10 +461,12 @@ impl<E: EngineProbe, S: ReportSource, K: ConfigSink> Lifecycle<E, S, K> {
                 self.credentials = Some(credentials);
                 self.phase = AgentPhase::Active;
                 self.retry_at = None;
+                self.quiet = false;
                 self.enroll.restart();
                 self.heartbeat.restart();
                 self.sync.restart();
                 self.report.restart();
+                self.hooks.reports.enrolled();
                 Step::Wait(Duration::ZERO)
             }
             Answer::Unauthorized => Step::Stop(StopReason::EnrollTokenRevoked { path: token_path }),
@@ -490,7 +530,27 @@ impl<E: EngineProbe, S: ReportSource, K: ConfigSink> Lifecycle<E, S, K> {
             return Step::Wait(Duration::ZERO);
         };
 
-        if self.heartbeat.due(now) {
+        let beat_due = self.heartbeat.due(now);
+        if beat_due {
+            let watch = self.hooks.reports.watch(now).await;
+            if watch.ip_changed {
+                tracing::warn!("the public address changed; enrolling again");
+                return self.start_enrolling(true);
+            }
+            self.quiet = watch.health != Health::Good;
+            if watch.health == Health::Dead
+                && let Some(step) = self.retire(now, &token).await
+            {
+                return step;
+            }
+        }
+
+        if self.quiet {
+            // Nothing is said while the proxy is sick; the pool's TTL does the rest.
+            if beat_due {
+                self.heartbeat.skipped(now, self.intervals.heartbeat_sec);
+            }
+        } else if beat_due {
             let answer = self.client.heartbeat(&token).await;
             match self.outcome(now, answer) {
                 Outcome::Ok(_) => self.heartbeat.succeeded(now, self.intervals.heartbeat_sec),
@@ -512,7 +572,9 @@ impl<E: EngineProbe, S: ReportSource, K: ConfigSink> Lifecycle<E, S, K> {
             }
         }
 
-        if self.report.due(now) {
+        if self.report.due(now) && self.quiet {
+            self.report.skipped(now, self.intervals.metrics_sec);
+        } else if self.report.due(now) {
             match self.hooks.reports.build().await {
                 None => self.report.succeeded(now, self.intervals.metrics_sec),
                 Some(request) => {
@@ -537,6 +599,42 @@ impl<E: EngineProbe, S: ReportSource, K: ConfigSink> Lifecycle<E, S, K> {
             .filter_map(|job| job.next_at)
             .min();
         Step::Wait(soonest.map_or(Duration::ZERO, |at| at.saturating_duration_since(now)))
+    }
+}
+
+impl<E: EngineProbe, S: ReportSource, K: ConfigSink> Lifecycle<E, S, K> {
+    /// The node has been dead for too long: it leaves the pool. `None` if the call did not go
+    /// through (the node stays and tries again at the next check).
+    async fn retire(&mut self, now: Instant, token: &str) -> Option<Step> {
+        match self.client.retire(token).await {
+            // 403 and 410 say the node is out already; 401 says the token is no good anyway.
+            Answer::Ok(_) | Answer::Terminate(_) | Answer::Unknown | Answer::Unauthorized => {
+                tracing::warn!("the proxy has been dead too long: the node left the pool");
+                self.phase = AgentPhase::Retired;
+                self.quiet = true;
+                self.heartbeat.skipped(now, self.intervals.heartbeat_sec);
+                Some(Step::Wait(seconds(self.intervals.heartbeat_sec)))
+            }
+            Answer::Paused { retry_after } => Some(self.go_silent(now, retry_after)),
+            Answer::Problem(_) | Answer::Transport(_) => {
+                tracing::warn!("the node could not leave the pool; trying again");
+                None
+            }
+        }
+    }
+
+    /// A retired node sends nothing; it only watches its proxy and enrolls again when it is back.
+    async fn retired(&mut self, now: Instant) -> Step {
+        if self.heartbeat.due(now) {
+            let watch = self.hooks.reports.watch(now).await;
+            self.heartbeat.skipped(now, self.intervals.heartbeat_sec);
+            if watch.health == Health::Good {
+                tracing::info!("the proxy is back; enrolling again");
+                return self.start_enrolling(true);
+            }
+        }
+        let at = self.heartbeat.next_at.unwrap_or(now);
+        Step::Wait(at.saturating_duration_since(now))
     }
 }
 

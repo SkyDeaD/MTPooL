@@ -1,0 +1,9 @@
+{
+  "error": {
+    "type": "not_found",
+    "message": "Couldn't find the requested measurement."
+  },
+  "links": {
+    "documentation": "https://globalping.io/docs/api.globalping.io#get-/v1/measurements/-id-"
+  }
+}

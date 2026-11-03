@@ -14,10 +14,12 @@ async-trait.workspace = true
 clap = { workspace = true, features = ["derive"] }
 rand.workspace = true
 reqwest = { workspace = true, features = ["json", "rustls"] }
+rustix = { workspace = true, features = ["fs", "std"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "time"] }
+time = { workspace = true, features = ["formatting"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 toml_edit = { workspace = true, features = ["serde"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
