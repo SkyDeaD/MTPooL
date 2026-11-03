@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/protocol", "crates/registrar", "crates/agent"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+repository = "https://github.com/SkyDeaD/MTPooL"
+publish = false
+
+[workspace.dependencies]
+mtpool-core = { path = "crates/core" }
+mtpool-protocol = { path = "crates/protocol" }
+arc-swap = "1.9.3"
+axum = "0.8.9"
+fast_qr = "0.14.0"
+hyper = "1.12.0"
+mimalloc = "0.1.52"
+minisign = "0.10.0"
+minisign-verify = "0.3.0"
+proptest = "1.12.0"
+reqwest = { version = "0.13.5", default-features = false }
+rusqlite = "0.41.1"
+rust-embed = "8.13.0"
+rustls = { version = "0.23.46", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = "1.54.1"
+toml_edit = "0.25.17"
+tower-http = "0.7.1"
+utoipa = "6.0.0"
+utoipa-axum = "0.3.0"
+wiremock = "0.6.5"

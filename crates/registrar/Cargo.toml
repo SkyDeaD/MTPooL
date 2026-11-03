@@ -1,0 +1,9 @@
+[package]
+name = "mtpool-registrar"
+description = "Pool registrar"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true

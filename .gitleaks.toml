@@ -1,0 +1,7 @@
+[extend]
+useDefault = true
+
+# Well-known fake proxy secret used in tests and docs.
+[allowlist]
+description = "test fixture proxy secret"
+regexes = ['''ee00112233445566778899aabbccddeeff''']
