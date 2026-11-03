@@ -19,6 +19,8 @@ pub(super) enum Msg {
     /// Writes the batch, then answers: everything sent before is on disk.
     Flush(Reply),
     Retain(Ts, Reply),
+    /// One admin op, answered with the id of the row it inserted.
+    Admin(Box<super::AdminOp>, Sender<Result<i64, StoreError>>),
     /// Writes the batch, answers and stops the thread.
     Close(Reply),
 }
@@ -78,6 +80,9 @@ impl Writer {
                     self.flush_batch();
                     let _ = reply.send(self.take_failures());
                 }
+                Ok(Msg::Admin(op, reply)) => {
+                    let _ = reply.send(self.admin_call(&op));
+                }
                 Ok(Msg::Retain(now, reply)) => {
                     let result = super::queries::retain(&self.conn, now);
                     if let Err(e) = &result {
@@ -110,6 +115,9 @@ impl Writer {
             WriteOp::Auth(op) => {
                 self.write_immediate(super::auth::name(&op), |conn| super::auth::apply(conn, &op))
             }
+            WriteOp::Admin(op) => self.write_immediate(super::admin::name(&op), |conn| {
+                super::admin::apply(conn, &op).map(|_| ())
+            }),
             WriteOp::Report(op) => self.write_immediate(super::reports::name(&op), |conn| {
                 super::reports::apply(conn, &op)
             }),
@@ -133,6 +141,30 @@ impl Writer {
                 }
             },
         }
+    }
+
+    /// An admin op whose caller waits: the error goes to the caller and not into the failures
+    /// of the next flush. A constraint violation is the caller's mistake; any other error is the
+    /// disk's and makes the store unhealthy.
+    fn admin_call(&mut self, op: &super::AdminOp) -> Result<i64, StoreError> {
+        let name = super::admin::name(op);
+        let result = self.set_sync(true).and_then(|()| {
+            let tx = self.conn.transaction()?;
+            let id = super::admin::apply(&tx, op)?;
+            tx.commit()?;
+            Ok(id)
+        });
+        if let Err(e) = &result
+            && !matches!(
+                e,
+                StoreError::Sqlite(rusqlite::Error::SqliteFailure(f, _))
+                    if f.code == rusqlite::ErrorCode::ConstraintViolation
+            )
+        {
+            self.record_failure(format!("{name}: {e}"));
+            self.failed.pop();
+        }
+        result
     }
 
     /// One transaction with `synchronous=FULL`.

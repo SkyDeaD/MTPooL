@@ -1,6 +1,8 @@
 //! API types shared by the registrar and the agent.
 
+pub mod admin;
 pub mod agent;
+pub mod bot;
 pub mod problem;
 pub mod public;
 

@@ -188,6 +188,11 @@ impl ActorHandle {
         self.tx.is_closed()
     }
 
+    /// Completes when the actor is gone. For long-lived connections that must end with it.
+    pub async fn stopped(&self) {
+        self.tx.closed().await;
+    }
+
     /// Stops the actor after the commands queued before this call and waits until it is gone.
     /// Idempotent.
     pub async fn stop(&self) {

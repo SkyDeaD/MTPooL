@@ -120,7 +120,12 @@ pub struct NewToken {
     /// Required for node tokens, none for the others.
     pub node: Option<NodeId>,
     pub expires_at: Option<Ts>,
+    /// Extra rights of a bot token, such as `pool:read`. Empty for none.
+    pub scope: String,
 }
+
+/// The scope that lets a bot token register pool-wide webhooks.
+pub const SCOPE_POOL_READ: &str = "pool:read";
 
 fn invalid(msg: &str) -> StoreError {
     StoreError::InvalidData(msg.to_owned())
@@ -134,6 +139,7 @@ fn row_for(kind: TokenKind, token: &str, hash: TokenHash) -> NewTokenRow {
         owner_id: None,
         node_id: None,
         expires_at: None,
+        scope: String::new(),
         created_at: now(),
     }
 }
@@ -151,7 +157,7 @@ pub fn issue(store: &Store, new: NewToken) -> Result<String, StoreError> {
     }
     if let Some(owner) = new.owner {
         let known: bool = store.read().query_row(
-            "SELECT EXISTS(SELECT 1 FROM owners WHERE id = ?1)",
+            "SELECT EXISTS(SELECT 1 FROM owners WHERE id = ?1 AND deleted_at IS NULL)",
             [owner.0],
             |r| r.get(0),
         )?;
@@ -164,6 +170,7 @@ pub fn issue(store: &Store, new: NewToken) -> Result<String, StoreError> {
     row.owner_id = new.owner.map(|o| o.0);
     row.node_id = new.node.map(|n| n.as_str().to_owned());
     row.expires_at = new.expires_at;
+    row.scope = new.scope;
     store.send(AuthOp::InsertToken(row));
     store.flush()?;
     Ok(token)
@@ -223,6 +230,7 @@ pub struct TokenRow {
     pub expires_at: Option<Ts>,
     pub revoked_at: Option<Ts>,
     pub last_used_at: Option<Ts>,
+    pub scope: String,
 }
 
 impl TokenRow {
@@ -236,7 +244,7 @@ impl TokenRow {
 pub fn lookup(conn: &Connection, hash: &TokenHash) -> Result<Option<TokenRow>, StoreError> {
     let raw = conn
         .prepare_cached(
-            "SELECT id, kind, hash, owner_id, node_id, expires_at, revoked_at, last_used_at \
+            "SELECT id, kind, hash, owner_id, node_id, expires_at, revoked_at, last_used_at, scope \
              FROM tokens WHERE hash = ?1",
         )?
         .query_row([hash.as_bytes().as_slice()], |r| {
@@ -249,10 +257,11 @@ pub fn lookup(conn: &Connection, hash: &TokenHash) -> Result<Option<TokenRow>, S
                 r.get::<_, Option<i64>>(5)?,
                 r.get::<_, Option<i64>>(6)?,
                 r.get::<_, Option<i64>>(7)?,
+                r.get::<_, String>(8)?,
             ))
         })
         .optional()?;
-    let Some((id, kind, stored, owner, node, expires, revoked, used)) = raw else {
+    let Some((id, kind, stored, owner, node, expires, revoked, used, scope)) = raw else {
         return Ok(None);
     };
     let stored: [u8; 32] = stored
@@ -276,6 +285,7 @@ pub fn lookup(conn: &Connection, hash: &TokenHash) -> Result<Option<TokenRow>, S
         expires_at: expires.map(Ts),
         revoked_at: revoked.map(Ts),
         last_used_at: used.map(Ts),
+        scope,
     }))
 }
 

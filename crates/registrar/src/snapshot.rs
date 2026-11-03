@@ -80,6 +80,27 @@ fn public_node(n: &NodeRecord, masters_of: &HashMap<&str, Vec<String>>) -> Publi
     }
 }
 
+/// One node as the public API shows it, with the domains it is master of now.
+pub(crate) fn public_node_of(state: &PoolState, n: &NodeRecord) -> PublicNode {
+    let mut masters_of: HashMap<&str, Vec<String>> = HashMap::new();
+    for domain in &state.settings.domains {
+        if state
+            .assignments
+            .0
+            .get(domain)
+            .into_iter()
+            .flatten()
+            .any(|slot| slot.node == n.id)
+        {
+            masters_of
+                .entry(n.id.as_str())
+                .or_default()
+                .push(domain.clone());
+        }
+    }
+    public_node(n, &masters_of)
+}
+
 impl Snapshot {
     pub fn build(state: &PoolState) -> Snapshot {
         let settings = &state.settings;

@@ -17,6 +17,7 @@ pub struct NewTokenRow {
     pub owner_id: Option<i64>,
     pub node_id: Option<String>,
     pub expires_at: Option<Ts>,
+    pub scope: String,
     pub created_at: Ts,
 }
 
@@ -72,8 +73,8 @@ pub(super) fn name(op: &AuthOp) -> &'static str {
 
 fn insert_token(conn: &Connection, t: &NewTokenRow) -> Result<(), StoreError> {
     conn.prepare_cached(
-        "INSERT INTO tokens(kind, hash, prefix, owner_id, node_id, expires_at, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO tokens(kind, hash, prefix, owner_id, node_id, expires_at, scope, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )?
     .execute(params![
         t.kind,
@@ -82,6 +83,7 @@ fn insert_token(conn: &Connection, t: &NewTokenRow) -> Result<(), StoreError> {
         t.owner_id,
         t.node_id,
         t.expires_at.map(|e| e.0),
+        t.scope,
         t.created_at.0,
     ])?;
     Ok(())

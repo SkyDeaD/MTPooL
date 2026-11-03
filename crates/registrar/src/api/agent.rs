@@ -150,7 +150,7 @@ impl Modify for AgentSecurity {
                 HttpBuilder::new()
                     .scheme(HttpAuthScheme::Bearer)
                     .description(Some(
-                        "`mtp_enroll_...` for enrollment, `mtp_node_...` for everything else",
+                        "`mtp_enroll_...` to enroll and `mtp_node_...` for the rest of the agent routes; `mtp_bot_...` for `/me`; `mtp_admin_...` for `/admin`",
                     ))
                     .build(),
             ),
@@ -173,7 +173,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
 // ----- answers -------------------------------------------------------------------------------
 
 /// An error answer of a handler: a problem, or the terminate document.
-pub struct Failure(Box<Response>);
+pub struct Failure(pub(crate) Box<Response>);
 
 impl IntoResponse for Failure {
     fn into_response(self) -> Response {
@@ -187,11 +187,11 @@ impl From<ApiError> for Failure {
     }
 }
 
-fn problem(status: StatusCode, code: &str, title: &str, detail: &str) -> Failure {
+pub(crate) fn problem(status: StatusCode, code: &str, title: &str, detail: &str) -> Failure {
     ApiError::new(status, code, title, detail).into()
 }
 
-fn json_response(status: StatusCode, body: String) -> Response {
+pub(crate) fn json_response(status: StatusCode, body: String) -> Response {
     let mut response = (status, body).into_response();
     response.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -200,7 +200,7 @@ fn json_response(status: StatusCode, body: String) -> Response {
     response
 }
 
-fn empty_ok() -> Response {
+pub(crate) fn empty_ok() -> Response {
     json_response(StatusCode::OK, "{}".to_owned())
 }
 
@@ -253,7 +253,7 @@ fn unknown_node() -> Failure {
     )
 }
 
-fn actor_stopped() -> Failure {
+pub(crate) fn actor_stopped() -> Failure {
     tracing::error!("agent API: the state owner is not running");
     ApiError::internal().into()
 }
@@ -288,7 +288,7 @@ fn reply_response(reply: Reply) -> Response {
 // ----- request helpers -------------------------------------------------------------------------
 
 /// The body as bytes. Too large is the 413 problem, anything else a bad request.
-fn body_bytes(body: Result<Bytes, BytesRejection>) -> Result<Bytes, Failure> {
+pub(crate) fn body_bytes(body: Result<Bytes, BytesRejection>) -> Result<Bytes, Failure> {
     body.map_err(|rejection| {
         if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
             payload_too_large()
@@ -308,7 +308,7 @@ pub fn payload_too_large() -> Failure {
     )
 }
 
-fn parse<T: DeserializeOwned>(bytes: &Bytes) -> Result<T, Failure> {
+pub(crate) fn parse<T: DeserializeOwned>(bytes: &Bytes) -> Result<T, Failure> {
     serde_json::from_slice(bytes).map_err(|e| {
         tracing::debug!(error = %e, "agent API: bad request body");
         ApiError::bad_request("The body is not the JSON document this route takes.").into()
@@ -316,7 +316,7 @@ fn parse<T: DeserializeOwned>(bytes: &Bytes) -> Result<T, Failure> {
 }
 
 /// `{}` or nothing at all.
-fn parse_empty(bytes: &Bytes) -> Result<(), Failure> {
+pub(crate) fn parse_empty(bytes: &Bytes) -> Result<(), Failure> {
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return Ok(());
     }
@@ -357,7 +357,7 @@ fn node_address(ip: IpAddr) -> Result<Ipv4Addr, Failure> {
 }
 
 /// A job off the async threads.
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, Failure> {
     tokio::task::spawn_blocking(work).await.map_err(|e| {
@@ -576,6 +576,7 @@ pub async fn enroll(
                         owner: None,
                         node: Some(for_node),
                         expires_at: None,
+                        scope: String::new(),
                     },
                 )
             })
@@ -838,7 +839,7 @@ pub async fn report(
     let skew_ms = checked_at.saturating_sub(now.0);
     if !(-CHECKED_AT_PAST_MS..=CHECKED_AT_FUTURE_MS).contains(&skew_ms) {
         if app.ledger.skew_event_due(&auth.node_id, now) {
-            app.store.send(Event {
+            let event = Event {
                 kind: EventKind::ClockSkew,
                 at: now,
                 node: Some(auth.node_id.clone()),
@@ -848,7 +849,10 @@ pub async fn report(
                     "server_now": rfc3339(now.0),
                     "skew_sec": skew_ms / 1000,
                 }),
-            });
+            };
+            // Raised here and not by the state owner, so it reaches the panels from here.
+            app.events.publish(&event);
+            app.store.send(event);
         }
         return Err(problem(
             StatusCode::CONFLICT,

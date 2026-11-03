@@ -16,6 +16,7 @@ axum.workspace = true
 clap = { workspace = true, features = ["derive"] }
 data-encoding.workspace = true
 fast_qr = { workspace = true, features = ["svg"] }
+futures-core.workspace = true
 listenfd.workspace = true
 mimalloc.workspace = true
 rand.workspace = true

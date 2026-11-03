@@ -229,6 +229,8 @@ where
 pub struct BotAuth {
     pub token_id: i64,
     pub owner_id: OwnerId,
+    /// The scope of the token, empty for none.
+    pub scope: String,
 }
 
 impl<S> FromRequestParts<S> for BotAuth
@@ -244,6 +246,7 @@ where
         Ok(BotAuth {
             token_id: row.id,
             owner_id,
+            scope: row.scope,
         })
     }
 }

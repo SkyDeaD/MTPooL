@@ -128,7 +128,7 @@ pub async fn get_node(
 }
 
 /// The latest sensor round of `node`. No evidence and no measurement id leave the database.
-fn last_round(conn: &Connection, node: &str) -> rusqlite::Result<Option<LastRound>> {
+pub(crate) fn last_round(conn: &Connection, node: &str) -> rusqlite::Result<Option<LastRound>> {
     let round: Option<(i64, i64, String)> = conn
         .prepare_cached(
             "SELECT id, at, verdict FROM sensor_rounds WHERE node = ?1 ORDER BY at DESC, id DESC LIMIT 1",

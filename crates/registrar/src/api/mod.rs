@@ -18,11 +18,16 @@ use utoipa_axum::routes;
 
 use crate::server::AppState;
 
+pub mod admin;
 pub mod agent;
+pub mod bot;
 pub mod public;
 pub mod qr;
 pub mod ratelimit;
 pub mod stats;
+pub mod stream;
+pub mod util;
+pub mod webhook_url;
 
 /// An error answer: `application/problem+json` with a stable `code`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,7 +194,7 @@ pub(crate) fn json(body: String) -> Response {
     info(
         title = "MTPooL API",
         version = "1",
-        description = "The public read-only view of the proxy pool: nodes, domains, Telegram links, bans and statistics. No credentials needed; node addresses are masked and measurement ids are never shown. The agent routes under `/api/v1/agent` take a bearer token. Errors are application/problem+json with a stable `code`."
+        description = "The public read-only view of the proxy pool: nodes, domains, Telegram links, bans and statistics. No credentials needed; node addresses are masked and measurement ids are never shown. The agent routes under `/api/v1/agent`, the bot routes under `/api/v1/me` and the admin routes under `/api/v1/admin` take a bearer token. Errors are application/problem+json with a stable `code`."
     ),
     tags((name = "public", description = "Public read-only routes"))
 )]
@@ -209,9 +214,12 @@ pub fn public_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(public::openapi_document))
 }
 
-/// Every documented route: the public API and the agent API.
+/// Every documented route: the public, agent, bot and admin APIs.
 pub fn routes() -> OpenApiRouter<AppState> {
-    public_routes().merge(agent::routes())
+    public_routes()
+        .merge(agent::routes())
+        .merge(bot::routes())
+        .merge(admin::routes())
 }
 
 /// The OpenAPI document, pretty-printed: what `mtpool-registrar openapi` prints (plus a

@@ -191,6 +191,7 @@ fn token(env: &Env, kind: TokenKind, owner: Option<OwnerId>, node: Option<&str>)
             owner,
             node: node.map(node_id),
             expires_at: None,
+            scope: String::new(),
         },
     )
     .expect("token")

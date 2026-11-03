@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "MTPooL API",
-    "description": "The public read-only view of the proxy pool: nodes, domains, Telegram links, bans and statistics. No credentials needed; node addresses are masked and measurement ids are never shown. The agent routes under `/api/v1/agent` take a bearer token. Errors are application/problem+json with a stable `code`.",
+    "description": "The public read-only view of the proxy pool: nodes, domains, Telegram links, bans and statistics. No credentials needed; node addresses are masked and measurement ids are never shown. The agent routes under `/api/v1/agent`, the bot routes under `/api/v1/me` and the admin routes under `/api/v1/admin` take a bearer token. Errors are application/problem+json with a stable `code`.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -10,6 +10,1270 @@
     "version": "1"
   },
   "paths": {
+    "/api/v1/admin/audit": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "list_audit",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1 to 200, default 50",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Only entries with a smaller id",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit entries, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditEntry"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad query",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/domains": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "list_domains",
+        "responses": {
+          "200": {
+            "description": "The proxy domains",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "add_domain",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DomainRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The domain is added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainRequest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad body or a domain name that is not valid",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The domain is there already (`domain_exists`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/domains/{domain}": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "remove_domain",
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "path",
+            "description": "The domain",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The domain is removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "It is the last domain (`invalid_settings`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such domain",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/events": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "list_events",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1 to 200, default 50",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Only events with a smaller id",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "Only events of this kind, such as `node_dead`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "node",
+            "in": "query",
+            "description": "Only events of this node",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Events, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EventEntry"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad query",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/nodes/{id}/recheck": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "recheck_node",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The node id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Empty, or `{}`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A sensor round is asked for",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No round is due for the node (`not_recheckable`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/nodes/{id}/retire": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "retire_node",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The node id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Empty, or `{}`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The node is out of the pool",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/nodes/{id}/unban": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "unban_node",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The node id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Empty, or `{}`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The ban is lifted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The node is not banned (`not_banned`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/owners": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "list_owners",
+        "responses": {
+          "200": {
+            "description": "The owners",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Owner"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "create_owner",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewOwner"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Owner"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad body",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An owner with this name exists (`owner_exists`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/owners/{id}": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "delete_owner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The owner id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The owner is gone; its tokens are revoked and its webhooks deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such owner",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The owner still has nodes in the pool (`owner_has_nodes`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "patch_owner",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The owner id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnerPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The owner after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Owner"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad body",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such owner",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The name is taken (`owner_exists`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/settings": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "get_settings",
+        "responses": {
+          "200": {
+            "description": "The settings document and `secrets`: for each secret whether a value is available (never the value)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "patch_settings",
+        "requestBody": {
+          "description": "A partial settings document; `secrets` maps a secret name to a value or null",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The new settings document and `secrets`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown field or secret, wrong type (`bad_request`) or a value settings do not allow (`invalid_settings`); nothing was changed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/srmd/{domain}/release": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "srmd_release",
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "path",
+            "description": "The domain",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Empty, or `{}`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "SRMD lets go of the domain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such domain",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not managed by SRMD (`not_managed`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/srmd/{domain}/take": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "srmd_take",
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "path",
+            "description": "The domain",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Empty, or `{}`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "SRMD takes the domain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such domain",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Taken already (`already_managed`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/stream": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "stream",
+        "responses": {
+          "200": {
+            "description": "Server-sent events: one `event: <kind>` frame per pool event with `id` and a JSON `data` line, and a `: keepalive` comment every 15 seconds. The `id` counts the frames of this registrar run; there is no replay. The answer carries `X-Accel-Buffering: no` so the proxy passes frames at once.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/tokens": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "list_tokens",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "query",
+            "description": "Only the tokens of this owner",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1 to 200, default 50",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Only tokens with a smaller id",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Token metadata, newest first; never the token or its hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TokenMeta"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad query",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "create_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The token; its value is shown only here",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewTokenCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad body, a kind that cannot be issued here (`bad_request`) or an owner that does not exist (`unknown_owner`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/tokens/{id}": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "revoke_token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The token id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The token is revoked (already revoked is fine)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/agent/config": {
       "get": {
         "tags": [
@@ -710,6 +1974,606 @@
         }
       }
     },
+    "/api/v1/me": {
+      "get": {
+        "tags": [
+          "bot"
+        ],
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "description": "The owner and the token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bot token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A token of another kind",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/nodes": {
+      "get": {
+        "tags": [
+          "bot"
+        ],
+        "operationId": "list_nodes",
+        "responses": {
+          "200": {
+            "description": "The owner's nodes, with full addresses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OwnNode"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bot token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A token of another kind",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/nodes/{id}/recheck": {
+      "post": {
+        "tags": [
+          "bot"
+        ],
+        "operationId": "recheck_node",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The node id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Empty, or `{}`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A sensor round is asked for",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad body",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bot token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node of this owner",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No round is due for the node (`not_recheckable`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Asked less than 10 minutes ago",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the next one is allowed"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/nodes/{id}/retire": {
+      "post": {
+        "tags": [
+          "bot"
+        ],
+        "operationId": "retire_node",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The node id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Empty, or `{}`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The node is out of the pool",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad body",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bot token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node of this owner",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/webhooks": {
+      "get": {
+        "tags": [
+          "bot"
+        ],
+        "operationId": "list_webhooks",
+        "responses": {
+          "200": {
+            "description": "The owner's webhooks, without secrets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Webhook"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bot token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "bot"
+        ],
+        "operationId": "create_webhook",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWebhook"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The webhook; the secret is shown only here",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad body, unknown event (`bad_request`) or a URL that is refused (`webhook_url`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bot token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Scope `pool` needs the token scope `pool:read`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/webhooks/{id}": {
+      "delete": {
+        "tags": [
+          "bot"
+        ],
+        "operationId": "delete_webhook",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The webhook id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The webhook and its deliveries are gone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bot token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such webhook of this owner",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/webhooks/{id}/deliveries": {
+      "get": {
+        "tags": [
+          "bot"
+        ],
+        "operationId": "list_deliveries",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The webhook id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1 to 200, default 50",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Only deliveries with a smaller id",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deliveries, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Delivery"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad query",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bot token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such webhook of this owner",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/webhooks/{id}/test": {
+      "post": {
+        "tags": [
+          "bot"
+        ],
+        "operationId": "test_webhook",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The webhook id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Empty, or `{}`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "A `webhook.test` delivery is queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookTest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad body",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bot token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such webhook of this owner",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/nodes": {
       "get": {
         "tags": [
@@ -1064,6 +2928,45 @@
           }
         }
       },
+      "AuditEntry": {
+        "type": "object",
+        "description": "An entry of the audit log.",
+        "required": [
+          "id",
+          "at",
+          "actor",
+          "action",
+          "detail"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "example": "owner.create"
+          },
+          "actor": {
+            "type": "string",
+            "description": "`token:<id>` or `session`."
+          },
+          "at": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          },
+          "detail": {
+            "type": "object",
+            "description": "What changed. Never a secret: settings changes list field names only."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "BanRecord": {
         "type": "object",
         "description": "One entry of the ban log. `reverify` entries record a failed attempt to lift a ban, not a\nnew ban: they carry no `lifetime_sec` and no `gap_sec`.",
@@ -1146,6 +3049,47 @@
           }
         }
       },
+      "CreateWebhook": {
+        "type": "object",
+        "description": "`POST /me/webhooks`.",
+        "required": [
+          "url",
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`node.registered`, `node.quarantined`, `node.recovered`, `node.banned`, `node.dead`,\n`node.pruned`, `ban.lifted` or `master.changed`."
+          },
+          "scope": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookScope",
+                "description": "`owner` (default) or `pool`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The key deliveries are signed with. Generated when absent."
+          },
+          "url": {
+            "type": "string",
+            "description": "`https` only, at most 2048 characters, a name (not an address) that resolves to public\naddresses only.",
+            "example": "https://hooks.example.com/mtpool"
+          }
+        },
+        "additionalProperties": false
+      },
       "Dc2Report": {
         "type": "object",
         "description": "The check of the second Telegram data center.",
@@ -1164,6 +3108,62 @@
           }
         },
         "additionalProperties": false
+      },
+      "Delivery": {
+        "type": "object",
+        "description": "One delivery attempt series of an event to a webhook.",
+        "required": [
+          "id",
+          "event_id",
+          "event",
+          "status",
+          "attempt",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          },
+          "attempt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "event": {
+            "type": "string"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the next attempt is due. RFC 3339, UTC."
+          },
+          "response_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending`, `delivered` or `failed`."
+          }
+        }
       },
       "DnsRecord": {
         "type": "object",
@@ -1191,6 +3191,19 @@
           "A",
           "CNAME"
         ]
+      },
+      "DomainRequest": {
+        "type": "object",
+        "description": "`POST /admin/domains`.",
+        "required": [
+          "domain"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "Empty": {
         "type": "object",
@@ -1269,6 +3282,45 @@
           "reverify": {
             "type": "boolean",
             "description": "The address was blocked: a decisive check decides whether the node may stay."
+          }
+        }
+      },
+      "EventEntry": {
+        "type": "object",
+        "description": "An entry of the event log.",
+        "required": [
+          "id",
+          "at",
+          "kind",
+          "detail"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          },
+          "detail": {
+            "type": "object"
+          },
+          "domain": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "type": "string",
+            "example": "node_dead"
+          },
+          "node": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -1435,6 +3487,22 @@
           }
         }
       },
+      "Me": {
+        "type": "object",
+        "description": "`GET /me`.",
+        "required": [
+          "owner",
+          "token"
+        ],
+        "properties": {
+          "owner": {
+            "$ref": "#/components/schemas/OwnerInfo"
+          },
+          "token": {
+            "$ref": "#/components/schemas/TokenInfo"
+          }
+        }
+      },
       "MetricsReport": {
         "type": "object",
         "description": "What the engine's metrics said.",
@@ -1471,6 +3539,113 @@
         },
         "additionalProperties": false
       },
+      "NewOwner": {
+        "type": "object",
+        "description": "`POST /admin/owners`.",
+        "required": [
+          "name",
+          "node_limit"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "node_limit": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewToken": {
+        "type": "object",
+        "description": "`POST /admin/tokens`.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`enroll`, `bot` or `metrics`."
+          },
+          "owner_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Required for `enroll` and `bot`."
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`pool:read` lets a bot token register pool-wide webhooks."
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewTokenCreated": {
+        "type": "object",
+        "description": "The answer to `POST /admin/tokens`: the only time the value is shown.",
+        "required": [
+          "id",
+          "kind",
+          "prefix",
+          "scope",
+          "created_at",
+          "token"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string",
+            "description": "Shown once; it cannot be read again."
+          }
+        }
+      },
       "NodeState": {
         "type": "string",
         "enum": [
@@ -1481,6 +3656,155 @@
           "dead",
           "pruned"
         ]
+      },
+      "OwnNode": {
+        "type": "object",
+        "description": "A node of the owner, with its full address.",
+        "required": [
+          "id",
+          "state",
+          "engine",
+          "ip",
+          "port",
+          "registered_at",
+          "state_since",
+          "is_master",
+          "domains"
+        ],
+        "properties": {
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "engine": {
+            "$ref": "#/components/schemas/Engine"
+          },
+          "id": {
+            "type": "string",
+            "example": "alpha-a1b2c"
+          },
+          "ip": {
+            "type": "string",
+            "description": "The full address.",
+            "example": "203.0.113.7"
+          },
+          "is_master": {
+            "type": "boolean"
+          },
+          "last_round": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LastRound",
+                "description": "The latest sensor round; `null` when there was none."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "registered_at": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          },
+          "state": {
+            "$ref": "#/components/schemas/NodeState"
+          },
+          "state_since": {
+            "type": "string",
+            "description": "When the node entered its current state. RFC 3339, UTC."
+          }
+        }
+      },
+      "Owner": {
+        "type": "object",
+        "description": "An owner of nodes.",
+        "required": [
+          "id",
+          "name",
+          "node_limit",
+          "note",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "node_limit": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      },
+      "OwnerInfo": {
+        "type": "object",
+        "description": "The owner a bot token belongs to.",
+        "required": [
+          "id",
+          "name",
+          "node_limit",
+          "note"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "node_limit": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Most nodes the owner may have in the pool at once."
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      },
+      "OwnerPatch": {
+        "type": "object",
+        "description": "`PATCH /admin/owners/{id}`: the fields that are present change.",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "node_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "Problem": {
         "type": "object",
@@ -1952,6 +4276,90 @@
           "address_refused"
         ]
       },
+      "TokenInfo": {
+        "type": "object",
+        "description": "The token a request was made with. The token itself is never shown.",
+        "required": [
+          "id",
+          "prefix",
+          "created_at",
+          "scope"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "prefix": {
+            "type": "string",
+            "description": "The first characters of the token, to tell tokens apart."
+          },
+          "scope": {
+            "type": "string",
+            "description": "Extra rights of the token (`pool:read`); empty for none."
+          }
+        }
+      },
+      "TokenMeta": {
+        "type": "object",
+        "description": "A token as the admin sees it: never the value, never the hash.",
+        "required": [
+          "id",
+          "kind",
+          "prefix",
+          "scope",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`admin`, `enroll`, `node`, `bot` or `metrics`."
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          }
+        }
+      },
       "Verdict": {
         "type": "string",
         "enum": [
@@ -1968,13 +4376,126 @@
           "clear",
           "abstain"
         ]
+      },
+      "Webhook": {
+        "type": "object",
+        "description": "A webhook subscription. The secret is not part of it.",
+        "required": [
+          "id",
+          "url",
+          "events",
+          "scope",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          },
+          "disabled_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339, UTC; set when the sender gave up on the webhook."
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/WebhookScope"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "WebhookCreated": {
+        "type": "object",
+        "description": "The answer to `POST /me/webhooks`: the only time the secret is shown.",
+        "required": [
+          "id",
+          "url",
+          "events",
+          "scope",
+          "created_at",
+          "secret"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "disabled_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/WebhookScope"
+          },
+          "secret": {
+            "type": "string",
+            "description": "Shown once; it cannot be read again."
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "WebhookScope": {
+        "type": "string",
+        "description": "Who a webhook is for.",
+        "enum": [
+          "owner",
+          "pool"
+        ]
+      },
+      "WebhookTest": {
+        "type": "object",
+        "description": "The answer to `POST /me/webhooks/{id}/test`.",
+        "required": [
+          "event",
+          "status",
+          "event_id"
+        ],
+        "properties": {
+          "event": {
+            "type": "string",
+            "description": "Always `webhook.test`."
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending`: the sender delivers it like any other event."
+          }
+        }
       }
     },
     "securitySchemes": {
       "bearer": {
         "type": "http",
         "scheme": "bearer",
-        "description": "`mtp_enroll_...` for enrollment, `mtp_node_...` for everything else"
+        "description": "`mtp_enroll_...` to enroll and `mtp_node_...` for the rest of the agent routes; `mtp_bot_...` for `/me`; `mtp_admin_...` for `/admin`"
       }
     }
   },
@@ -1986,6 +4507,14 @@
     {
       "name": "agent",
       "description": "Routes of the node agent; they need a node token, enrollment an enroll token"
+    },
+    {
+      "name": "bot",
+      "description": "Routes of an owner's bot; they need a bot token (`mtp_bot_...`)"
+    },
+    {
+      "name": "admin",
+      "description": "Routes of the panel and the admin; they need the admin token (`mtp_admin_...`) or a panel session"
     }
   ]
 }

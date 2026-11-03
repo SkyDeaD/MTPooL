@@ -1,9 +1,10 @@
 //! HTTP server and the service lifecycle: start, serve, stop.
 
+use std::collections::HashMap;
 use std::future::{Future, IntoFuture};
 use std::io;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::Router;
@@ -14,7 +15,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use listenfd::ListenFd;
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::sync::{Mutex as AsyncMutex, oneshot};
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::actor::{Actor, ActorHandle, Clock, EffectDriver, system_clock};
@@ -22,11 +23,14 @@ use crate::api;
 use crate::api::agent::Ledger;
 use crate::api::ratelimit::{self as request_limit, RequestLimiter};
 use crate::api::stats::StatsCache;
+use crate::api::stream::EventFan;
+use crate::api::webhook_url::{Resolver, SystemResolver};
 use crate::auth::{AuthState, session};
 use crate::config::Config;
 use crate::snapshot::SnapshotStore;
 use crate::store::{Store, StoreError, WriteHealth};
 use crate::verifier::{MeasurementVerifier, NoVerifier};
+use mtpool_core::{NodeId, Ts};
 
 /// Largest request body any route accepts.
 pub const MAX_BODY_BYTES: usize = 256 * 1024;
@@ -44,6 +48,15 @@ pub struct AppState {
     pub verifier: Arc<dyn MeasurementVerifier>,
     /// The measurement ids claimed lately, before they reach the database.
     pub ledger: Arc<Ledger>,
+    /// The live event stream of the panel.
+    pub events: EventFan,
+    /// Resolves the host of a webhook URL.
+    pub resolver: Arc<dyn Resolver>,
+    /// Held while the settings are read, changed and handed to the state owner, so that two
+    /// edits do not overwrite each other.
+    pub settings_lock: Arc<AsyncMutex<()>>,
+    /// When a re-check of a node was last asked for through the bot API (kept in memory).
+    pub rechecks: Arc<Mutex<HashMap<NodeId, Ts>>>,
 }
 
 impl AppState {
@@ -67,7 +80,23 @@ impl AppState {
             stats: StatsCache::new(),
             verifier: Arc::new(NoVerifier),
             ledger: Arc::new(Ledger::new()),
+            events: EventFan::new(),
+            resolver: Arc::new(SystemResolver),
+            settings_lock: Arc::new(AsyncMutex::new(())),
+            rechecks: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// The same state with `events` as the fan the state owner feeds.
+    pub fn with_events(mut self, events: EventFan) -> AppState {
+        self.events = events;
+        self
+    }
+
+    /// The same state with `resolver` looking up the hosts of webhook URLs.
+    pub fn with_resolver(mut self, resolver: Arc<dyn Resolver>) -> AppState {
+        self.resolver = resolver;
+        self
     }
 
     /// The same state with `verifier` checking the agents' measurements.
@@ -87,12 +116,17 @@ pub fn router(state: AppState) -> Router {
         .split_for_parts();
     // The agent routes are not behind it: agents are held to the failed-attempt limit.
     let (agent, _) = api::agent::routes().split_for_parts();
+    // The bot and admin routes take a token of their own kind and are not behind it either.
+    let (bot, _) = api::bot::routes().split_for_parts();
+    let (admin, _) = api::admin::routes().split_for_parts();
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .merge(session::routes())
         .merge(public)
         .merge(agent)
+        .merge(bot)
+        .merge(admin)
         .fallback(api::not_found)
         .method_not_allowed_fallback(api::method_not_allowed)
         .with_state(state)
@@ -195,19 +229,24 @@ pub async fn run_with(
 ) -> Result<(), RunError> {
     let loader = store.clone();
     let state = tokio::task::spawn_blocking(move || loader.load()).await??;
+    // The fan is a driver of the state owner: every emitted event reaches the open streams.
+    let fan = EventFan::new();
+    let mut drivers = drivers;
+    drivers.push(Arc::new(fan.clone()));
     let actor = Actor::spawn(state, store.clone(), drivers);
-    let app = router(AppState::new(
-        store.clone(),
-        actor.clone(),
-        actor.snapshots(),
-    ));
+    let app = router(
+        AppState::new(store.clone(), actor.clone(), actor.snapshots()).with_events(fan.clone()),
+    );
     if let Ok(addr) = listener.local_addr() {
         tracing::info!(%addr, "listening");
     }
     // The peer address is what tells whether `X-Forwarded-For` comes from the local proxy.
     let (stop_fired, stop_seen) = oneshot::channel::<()>();
+    let closing = fan.clone();
     let stop = async move {
         stop.await;
+        // Open event streams would hold the drain until its deadline.
+        closing.close();
         let _ = stop_fired.send(());
     };
     let serving = axum::serve(

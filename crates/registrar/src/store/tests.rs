@@ -122,7 +122,7 @@ fn migrations_apply_on_empty_db() {
             r.get(0)
         })
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     let mode: String = conn
         .query_row("PRAGMA journal_mode", [], |r| r.get(0))
         .unwrap();
@@ -139,7 +139,7 @@ fn migrations_apply_on_empty_db() {
     // Opening again applies nothing twice.
     let store = Store::open(&path).unwrap();
     store.close().unwrap();
-    assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 3);
+    assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 4);
 }
 
 #[test]
@@ -159,7 +159,7 @@ fn unknown_schema_version_refuses_open() {
             err,
             StoreError::UnknownSchemaVersion {
                 found: 999,
-                supported: 3
+                supported: 4
             }
         ),
         "{err:?}"
@@ -872,6 +872,7 @@ fn token_row(kind: &'static str, seed: u8) -> NewTokenRow {
         owner_id: None,
         node_id: None,
         expires_at: None,
+        scope: String::new(),
         created_at: NOW,
     }
 }

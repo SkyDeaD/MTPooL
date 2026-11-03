@@ -102,6 +102,7 @@ fn issue(store: &Store, kind: TokenKind, owner: Option<OwnerId>, node: Option<&s
             owner,
             node: node.map(node_id),
             expires_at: None,
+            scope: String::new(),
         },
     )
     .expect("issue token")
@@ -338,6 +339,7 @@ async fn expired_and_revoked_rejected() {
             owner: Some(o),
             node: None,
             expires_at: Some(Ts(tokens::now().0 + 60_000)),
+            scope: String::new(),
         },
     )
     .unwrap();
@@ -348,6 +350,7 @@ async fn expired_and_revoked_rejected() {
             owner: Some(o),
             node: None,
             expires_at: Some(Ts(tokens::now().0 - 1)),
+            scope: String::new(),
         },
     )
     .unwrap();

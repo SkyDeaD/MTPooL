@@ -82,3 +82,5 @@ pub fn state_with(node: NodeRecord, settings: Settings) -> PoolState {
 pub fn fixed_clock(ms: i64) -> Clock {
     Arc::new(move || Ts(ms))
 }
+
+pub mod http;

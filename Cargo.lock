@@ -757,6 +757,7 @@ dependencies = [
  "clap",
  "data-encoding",
  "fast_qr",
+ "futures-core",
  "http-body-util",
  "listenfd",
  "mimalloc",

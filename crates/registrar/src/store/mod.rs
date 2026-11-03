@@ -21,9 +21,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use mtpool_core::{Event, PersistOp, PoolState, Ts};
 use rusqlite::{Connection, OpenFlags};
 
+pub use admin::AdminOp;
 pub use auth::{AuthOp, NewTokenRow};
 pub use reports::{ReportOp, measurement_seen};
 
+mod admin;
 mod auth;
 mod queries;
 mod reports;
@@ -44,6 +46,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../../migrations/0001_init.sql")),
     (2, include_str!("../../migrations/0002_auth.sql")),
     (3, include_str!("../../migrations/0003_reports.sql")),
+    (4, include_str!("../../migrations/0004_admin.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -97,14 +100,21 @@ impl Default for StoreOptions {
     }
 }
 
-/// What the writer takes: the ops of `core`, its events, the auth writes and the agent report
-/// writes.
+/// What the writer takes: the ops of `core`, its events, the auth writes, the agent report
+/// writes and the writes of the admin and bot API.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WriteOp {
     Persist(PersistOp),
     Event(Event),
     Auth(AuthOp),
     Report(ReportOp),
+    Admin(AdminOp),
+}
+
+impl From<AdminOp> for WriteOp {
+    fn from(op: AdminOp) -> WriteOp {
+        WriteOp::Admin(op)
+    }
 }
 
 impl From<AuthOp> for WriteOp {
@@ -297,6 +307,18 @@ impl Store {
     /// in order with the other writes.
     pub fn retain(&self, now: Ts) -> Result<(), StoreError> {
         self.request(|reply| writer::Msg::Retain(now, reply))
+    }
+
+    /// Writes one admin op and waits for it: the id of the row an insert made (0 for the other
+    /// ops). A failed write is an error for this caller only; it does not make the store
+    /// unhealthy unless the disk itself failed. Blocks the calling thread.
+    pub fn admin(&self, op: AdminOp) -> Result<i64, StoreError> {
+        let (reply, answer) = mpsc::channel();
+        self.inner
+            .tx
+            .send(writer::Msg::Admin(Box::new(op), reply))
+            .map_err(|_| StoreError::WriterStopped)?;
+        answer.recv().map_err(|_| StoreError::WriterStopped)?
     }
 
     /// Sends a message with a reply channel and waits for the reply.
