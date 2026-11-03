@@ -23,6 +23,8 @@ pub trait Fs: Send + Sync {
     /// of the existing file `like`, so a configuration someone else owns keeps its access rights.
     /// The content goes to `<path>.tmp` first and is renamed. `like` must exist.
     fn write_like(&self, path: &Path, bytes: &[u8], like: &Path) -> io::Result<()>;
+    /// Whether something (a file or a directory) is at `path`.
+    fn exists(&self, path: &Path) -> io::Result<bool>;
     /// Removes the file; one that is not there is not an error.
     fn remove(&self, path: &Path) -> io::Result<()>;
 }
@@ -128,6 +130,10 @@ impl Fs for RealFs {
         Ok(())
     }
 
+    fn exists(&self, path: &Path) -> io::Result<bool> {
+        path.try_exists()
+    }
+
     fn remove(&self, path: &Path) -> io::Result<()> {
         match std::fs::remove_file(path) {
             Ok(()) => Ok(()),
@@ -172,6 +178,10 @@ impl Fs for MemFs {
         }
         self.files().insert(path.to_owned(), bytes.to_vec());
         Ok(())
+    }
+    fn exists(&self, path: &Path) -> io::Result<bool> {
+        // A directory is there if a file is under it.
+        Ok(self.files().keys().any(|file| file.starts_with(path)))
     }
     fn remove(&self, path: &Path) -> io::Result<()> {
         self.files().remove(path);

@@ -1,12 +1,17 @@
 //! The proxy engine on the node. [`Engine`] is what the agent needs from it: its metrics, its
 //! health and a way to apply the pool's users, domain and port. [`telemt::TelemtEngine`] is the
-//! adapter for telemt; the engines MTProxyL and MEKO come later.
+//! adapter for telemt, [`meko::MekoEngine`] runs it on a MEKO host, [`mtproxyl::MtProxyLEngine`]
+//! drives MTProxyL through its command line, and [`detect::detect_engine`] says which of them
+//! the host has.
 
 use async_trait::async_trait;
 use mtpool_protocol::agent::{AgentConfig, Dc2Report, MetricsReport};
 
 pub mod dc2;
+pub mod detect;
 pub mod http;
+pub mod meko;
+pub mod mtproxyl;
 pub mod prom;
 pub mod telemt;
 

@@ -123,6 +123,23 @@ impl TelemtToml {
             .map(str::to_owned)
     }
 
+    /// The TLS domains: `[censorship] tls_domain` first, then the entries of `tls_domains`, each
+    /// once.
+    pub fn tls_domains(&self) -> Vec<String> {
+        let mut domains: Vec<String> = self.tls_domain().into_iter().collect();
+        let listed = self
+            .value_of(&["censorship"], "tls_domains")
+            .and_then(Item::as_array)
+            .into_iter()
+            .flat_map(|array| array.iter().filter_map(Value::as_str));
+        for domain in listed {
+            if !domains.iter().any(|known| known == domain) {
+                domains.push(domain.to_owned());
+            }
+        }
+        domains
+    }
+
     /// `[access.users]`: name and secret, in the order of the file.
     pub fn users(&self) -> Vec<(String, String)> {
         self.table(&["access", "users"])
@@ -277,7 +294,7 @@ impl<R: CommandRunner, H: HttpGet> TelemtEngine<R, H> {
     }
 
     /// The configuration text and what the agent reads from it.
-    fn load(&self) -> Result<(String, TelemtToml)> {
+    pub(crate) fn load(&self) -> Result<(String, TelemtToml)> {
         let text = self.read_file(&self.config_path)?.ok_or_else(|| {
             EngineError::Config(format!("{} does not exist", self.config_path.display()))
         })?;
@@ -291,7 +308,7 @@ impl<R: CommandRunner, H: HttpGet> TelemtEngine<R, H> {
 
     /// The names the pool wrote before. A list that cannot be read is an empty one: the pool
     /// then removes nothing, it does not guess.
-    fn pool_users(&self) -> Vec<String> {
+    pub(crate) fn pool_users(&self) -> Vec<String> {
         let path = self.pool_users_path();
         match self.fs.read(&path) {
             Ok(Some(bytes)) => serde_json::from_slice(&bytes).unwrap_or_else(|_| {
@@ -306,7 +323,7 @@ impl<R: CommandRunner, H: HttpGet> TelemtEngine<R, H> {
         }
     }
 
-    fn remember_pool_users(&self, names: &[String]) {
+    pub(crate) fn remember_pool_users(&self, names: &[String]) {
         let path = self.pool_users_path();
         let bytes = serde_json::to_vec(names).expect("a list of strings is json");
         if let Err(error) = self.fs.write_private(&path, &bytes) {
@@ -349,7 +366,7 @@ impl<R: CommandRunner, H: HttpGet> TelemtEngine<R, H> {
     }
 
     /// Polls until the engine is ready; the reason if it is not within the time.
-    async fn wait_ready(&self) -> std::result::Result<(), String> {
+    pub(crate) async fn wait_ready(&self) -> std::result::Result<(), String> {
         let started = Instant::now();
         loop {
             if self.is_ready().await {
@@ -560,7 +577,7 @@ impl<R: CommandRunner + 'static, H: HttpGet + 'static> ConfigSink for TelemtEngi
 // ---------------------------------------------------------------------------------------------
 
 /// What the pool sends is checked before a byte of the engine's file changes.
-fn validate(desired: &DesiredConfig) -> Result<()> {
+pub(crate) fn validate(desired: &DesiredConfig) -> Result<()> {
     let bad = |what: String| Err(EngineError::Config(what));
     if desired.port == 0 {
         return bad("the port is 0".to_owned());

@@ -183,3 +183,35 @@ fn mem_fs_write_like_behaves_like_the_real_one() {
         b"old"
     );
 }
+
+#[test]
+fn mem_fs_exists_sees_files_and_their_directories() {
+    let fs = MemFs::new();
+    fs.write_private(Path::new("/opt/mtproxyl/mtproxy/config.toml"), b"x")
+        .unwrap();
+    for path in [
+        "/opt/mtproxyl/mtproxy/config.toml",
+        "/opt/mtproxyl/mtproxy",
+        "/opt/mtproxyl",
+        "/opt",
+    ] {
+        assert!(fs.exists(Path::new(path)).unwrap(), "{path}");
+    }
+    for path in [
+        "/opt/mtproxy",
+        "/opt/mtproxyl-old",
+        "/opt/mtproxyl/mtproxy/config",
+    ] {
+        assert!(!fs.exists(Path::new(path)).unwrap(), "{path}");
+    }
+}
+
+#[test]
+fn real_fs_exists_sees_files_and_directories_and_not_what_is_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("a");
+    std::fs::write(&file, b"x").unwrap();
+    assert!(RealFs.exists(&file).unwrap());
+    assert!(RealFs.exists(dir.path()).unwrap());
+    assert!(!RealFs.exists(&dir.path().join("missing")).unwrap());
+}
