@@ -27,10 +27,15 @@ use crate::api::stream::EventFan;
 use crate::api::webhook_url::{Resolver, SystemResolver};
 use crate::auth::{AuthState, session};
 use crate::config::Config;
+use crate::secrets;
+use crate::sensors::globalping::{
+    GlobalpingClient, GlobalpingVerifier, SharedSettings, TokenSource,
+};
 use crate::snapshot::SnapshotStore;
 use crate::store::{Store, StoreError, WriteHealth};
 use crate::verifier::{MeasurementVerifier, NoVerifier};
-use mtpool_core::{NodeId, Ts};
+use arc_swap::ArcSwap;
+use mtpool_core::{GlobalpingSettings, NodeId, Ts};
 
 /// Largest request body any route accepts.
 pub const MAX_BODY_BYTES: usize = 256 * 1024;
@@ -46,6 +51,9 @@ pub struct AppState {
     pub stats: StatsCache,
     /// Checks the measurements agents name in their reports.
     pub verifier: Arc<dyn MeasurementVerifier>,
+    /// The Globalping part of the settings, which the verifier and the sensor read on every
+    /// call. The settings route stores a change here once the state owner has it.
+    pub gp_settings: SharedSettings,
     /// The measurement ids claimed lately, before they reach the database.
     pub ledger: Arc<Ledger>,
     /// The live event stream of the panel.
@@ -79,6 +87,7 @@ impl AppState {
             limiter: Arc::new(RequestLimiter::new()),
             stats: StatsCache::new(),
             verifier: Arc::new(NoVerifier),
+            gp_settings: Arc::new(ArcSwap::from_pointee(GlobalpingSettings::default())),
             ledger: Arc::new(Ledger::new()),
             events: EventFan::new(),
             resolver: Arc::new(SystemResolver),
@@ -96,6 +105,12 @@ impl AppState {
     /// The same state with `resolver` looking up the hosts of webhook URLs.
     pub fn with_resolver(mut self, resolver: Arc<dyn Resolver>) -> AppState {
         self.resolver = resolver;
+        self
+    }
+
+    /// The same state with `gp_settings` as the Globalping settings the settings route updates.
+    pub fn with_gp_settings(mut self, gp_settings: SharedSettings) -> AppState {
+        self.gp_settings = gp_settings;
         self
     }
 
@@ -175,6 +190,8 @@ pub enum RunError {
     Listen(io::Error),
     #[error("server error: {0}")]
     Serve(io::Error),
+    #[error("cannot build the HTTP client: {0}")]
+    HttpClient(reqwest::Error),
     #[error("a background task failed: {0}")]
     Task(#[from] tokio::task::JoinError),
 }
@@ -233,9 +250,20 @@ pub async fn run_with(
     let fan = EventFan::new();
     let mut drivers = drivers;
     drivers.push(Arc::new(fan.clone()));
+    // The token is asked for on every request: a change in the panel applies at once.
+    let gp_settings: SharedSettings =
+        Arc::new(ArcSwap::from_pointee(state.settings.globalping.clone()));
+    let token_store = store.clone();
+    let token: TokenSource = Arc::new(move || secrets::secret(&token_store, "globalping_token"));
+    let globalping = GlobalpingClient::new(GlobalpingClient::default_base(), token)
+        .map_err(RunError::HttpClient)?;
+    let verifier = GlobalpingVerifier::new(globalping, gp_settings.clone());
     let actor = Actor::spawn(state, store.clone(), drivers);
     let app = router(
-        AppState::new(store.clone(), actor.clone(), actor.snapshots()).with_events(fan.clone()),
+        AppState::new(store.clone(), actor.clone(), actor.snapshots())
+            .with_events(fan.clone())
+            .with_gp_settings(gp_settings)
+            .with_verifier(Arc::new(verifier)),
     );
     if let Ok(addr) = listener.local_addr() {
         tracing::info!(%addr, "listening");

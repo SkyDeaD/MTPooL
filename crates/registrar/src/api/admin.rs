@@ -26,6 +26,7 @@
 //! | `GET /admin/stream`                          | `text/event-stream`                     |
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
@@ -169,10 +170,13 @@ fn invalid_settings(e: &SettingsError) -> ApiError {
 /// Hands valid settings to the state owner. Callers hold `settings_lock`.
 async fn commit_settings(app: &AppState, settings: Settings) -> Result<(), Failure> {
     settings.validate().map_err(|e| invalid_settings(&e))?;
+    let globalping = settings.globalping.clone();
     app.actor
         .call(Command::SettingsChanged(settings))
         .await
         .map_err(|_| actor_stopped())?;
+    // The verifier and the sensor read the Globalping settings from here.
+    app.gp_settings.store(Arc::new(globalping));
     Ok(())
 }
 

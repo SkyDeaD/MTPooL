@@ -135,6 +135,30 @@ async fn settings_patch_applies_without_restart() {
 }
 
 #[tokio::test]
+async fn globalping_settings_reach_the_sensor_without_restart() {
+    let env = env(pool(vec![alpha()]));
+    let admin = admin_token(&env);
+    assert_eq!(env.gp_settings.load().success_threshold, 0.5);
+
+    let resp = patch(
+        &env,
+        &admin,
+        json!({ "globalping": { "success_threshold": 0.75, "allow_credits": true } }),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+
+    let live = env.gp_settings.load();
+    assert_eq!(live.success_threshold, 0.75);
+    assert!(live.allow_credits);
+    // The rest of the Globalping settings stays as it was.
+    assert_eq!(
+        live.probe_limit,
+        mtpool_core::GlobalpingSettings::default().probe_limit
+    );
+}
+
+#[tokio::test]
 async fn invalid_settings_rejected_nothing_changed() {
     let env = env(pool(vec![alpha()]));
     let admin = admin_token(&env);

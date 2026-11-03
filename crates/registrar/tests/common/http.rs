@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::ConnectInfo;
@@ -17,6 +18,7 @@ use mtpool_registrar::actor::{Actor, ActorHandle, ActorOptions, Clock};
 use mtpool_registrar::api::stream::EventFan;
 use mtpool_registrar::api::webhook_url::{ResolveFuture, Resolver};
 use mtpool_registrar::auth::tokens::{self, NewToken, TokenKind};
+use mtpool_registrar::sensors::globalping::SharedSettings;
 use mtpool_registrar::server::{AppState, router};
 use mtpool_registrar::store::Store;
 use serde_json::{Value, json};
@@ -65,6 +67,8 @@ pub struct Env {
     pub clock: Arc<AtomicI64>,
     pub events: EventFan,
     pub resolver: Arc<FakeResolver>,
+    /// The Globalping settings the verifier and the sensor read.
+    pub gp_settings: SharedSettings,
     pub _dir: tempfile::TempDir,
 }
 
@@ -151,10 +155,12 @@ pub fn env_with_keepalive(state: PoolState, keepalive: Duration) -> Env {
         },
     );
     let resolver = Arc::new(FakeResolver::default());
+    let gp_settings: SharedSettings = Arc::new(ArcSwap::from_pointee(Default::default()));
     let app = router(
         AppState::with_clock(store.clone(), actor.clone(), actor.snapshots(), clock_fn)
             .with_events(events.clone())
-            .with_resolver(resolver.clone()),
+            .with_resolver(resolver.clone())
+            .with_gp_settings(gp_settings.clone()),
     );
     Env {
         app,
@@ -163,6 +169,7 @@ pub fn env_with_keepalive(state: PoolState, keepalive: Duration) -> Env {
         clock,
         events,
         resolver,
+        gp_settings,
         _dir: dir,
     }
 }
