@@ -4,7 +4,23 @@
 
 MTPooL is a pool of MTProto proxies. Servers join the pool with a token. The pool watches their health, picks masters, keeps DNS in Cloudflare, and bans an IP only after independent sensors confirm the block.
 
-Credit for the original idea is in [NOTICE](NOTICE). The documentation in `docs/` is in Russian; this page is the English summary.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/panel-dark.png">
+  <img alt="The pool panel: node states, the clients chart, domains and their masters" src="docs/images/panel-light.png">
+</picture>
+
+Credit for the original idea is in [NOTICE](NOTICE). The documentation in `docs/` is in Russian, and so is the interface; this page is the English summary.
+
+## What it does
+
+- **Token enrollment.** A node joins with one command. The engine (telemt, MTProxyL or MEKO) is detected, and your configuration is added to, not overwritten.
+- **Masters and rotation.** The pool decides which nodes the domains point at and rotates them. A failed master is replaced by the next node.
+- **DNS in Cloudflare.** Pool records carry the comment `MTPooL`; other records in the zone are left alone. It can add domains as the queue grows.
+- **Bans only on confirmation.** An IP is blocked when at least two of three independent sensors see the block. A broken sensor does not vote.
+- **Public pages.** Statistics, proxy links with QR codes and the API reference, open to everyone. Node addresses are partly hidden.
+- **Panel.** Nodes, domains, journal, settings, owners and tokens, updates. Light and dark themes.
+- **Bots and monitoring.** A REST API with an OpenAPI specification, HMAC-signed webhooks, Prometheus metrics.
+- **Signed updates.** The registrar and the agents install releases themselves, `minisign` checks the signature, and a failed version rolls back.
 
 ## How it works
 
@@ -23,6 +39,11 @@ Credit for the original idea is in [NOTICE](NOTICE). The documentation in `docs/
 - **Registrar**: one service, `mtpool-registrar`: HTTP API, SQLite database, sensors, DNS, webhooks, public pages and the panel.
 - **Master**: the node a domain's DNS record points to right now. The pool chooses masters itself and rotates them every 30 minutes by default.
 - **Ban**: only when at least two sensors vote `Blocked`. A broken sensor or an unknown answer gives `Abstain`, which is not a vote.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/public-dark.png">
+  <img alt="The public page: pool summary, the clients chart, domains and masters" src="docs/images/public-light.png">
+</picture>
 
 ## Quick start
 
