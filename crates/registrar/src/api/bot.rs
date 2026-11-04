@@ -345,7 +345,6 @@ fn webhook_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Webhook> {
             WebhookScope::Owner
         },
         created_at: rfc3339(r.get(4)?),
-        disabled_at: r.get::<_, Option<i64>>(5)?.map(rfc3339),
     })
 }
 
@@ -366,7 +365,7 @@ pub async fn list_webhooks(
     let owner = auth.owner_id.0;
     let hooks = read(&app, move |conn| {
         conn.prepare_cached(
-            "SELECT id, url, events, scope, created_at, disabled_at FROM webhooks \
+            "SELECT id, url, events, scope, created_at FROM webhooks \
              WHERE owner_id = ?1 ORDER BY id",
         )?
         .query_map([owner], webhook_row)?
@@ -475,7 +474,6 @@ pub async fn create_webhook(
             events: request.events,
             scope,
             created_at: rfc3339(created_at.0),
-            disabled_at: None,
             secret,
         },
     ))

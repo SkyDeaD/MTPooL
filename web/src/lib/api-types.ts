@@ -260,6 +260,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The CSRF token of the session the cookie belongs to, for a panel that was reloaded and lost
+         *     the one login returned. A bearer token has no session, so there is nothing to return.
+         */
+        get: operations["current"];
+        put?: never;
+        post: operations["login"];
+        delete: operations["logout"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/settings": {
         parameters: {
             query?: never;
@@ -1206,6 +1226,10 @@ export interface components {
             sensor: string;
             vote: components["schemas"]["Vote"];
         };
+        LoginBody: {
+            /** @description The admin token. */
+            token: string;
+        };
         /** @description `GET /me`. */
         Me: {
             owner: components["schemas"]["OwnerInfo"];
@@ -1595,6 +1619,10 @@ export interface components {
             /** @example cheburcheck */
             name: string;
         };
+        /** @description What the panel sends back in `X-CSRF-Token` on every change. */
+        SessionCsrf: {
+            csrf: string;
+        };
         /** @description `GET /admin/srmd`. */
         SrmdOverview: {
             /** @description Domains that are not folded. */
@@ -1789,8 +1817,6 @@ export interface components {
         Webhook: {
             /** @description RFC 3339, UTC. */
             created_at: string;
-            /** @description RFC 3339, UTC; set when the sender gave up on the webhook. */
-            disabled_at?: string | null;
             events: string[];
             /** Format: int64 */
             id: number;
@@ -1800,7 +1826,6 @@ export interface components {
         /** @description The answer to `POST /me/webhooks`: the only time the secret is shown. */
         WebhookCreated: {
             created_at: string;
-            disabled_at?: string | null;
             events: string[];
             /** Format: int64 */
             id: number;
@@ -2675,6 +2700,120 @@ export interface operations {
             };
             /** @description The rollout is not paused (`not_paused`) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    current: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The CSRF token of the session the cookie belongs to */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionCsrf"];
+                };
+            };
+            /** @description Signed in with a bearer token, which has no session */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid admin credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginBody"];
+            };
+        };
+        responses: {
+            /** @description Logged in: the session cookie is set and the CSRF token returned */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionCsrf"];
+                };
+            };
+            /** @description Bad body */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not a valid admin token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many failed attempts from this address */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Logged out; the session cookie is cleared */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid admin credential */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -222,6 +222,7 @@ pub fn public_routes() -> OpenApiRouter<AppState> {
 /// Every documented route: the public, agent, bot and admin APIs.
 pub fn routes() -> OpenApiRouter<AppState> {
     public_routes()
+        .merge(crate::auth::session::routes())
         .merge(agent::routes())
         .merge(bot::routes())
         .merge(admin::routes())

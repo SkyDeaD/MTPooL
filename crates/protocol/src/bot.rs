@@ -94,8 +94,6 @@ pub struct Webhook {
     pub scope: WebhookScope,
     /// RFC 3339, UTC.
     pub created_at: String,
-    /// RFC 3339, UTC; set when the sender gave up on the webhook.
-    pub disabled_at: Option<String>,
 }
 
 /// The answer to `POST /me/webhooks`: the only time the secret is shown.
@@ -106,7 +104,6 @@ pub struct WebhookCreated {
     pub events: Vec<String>,
     pub scope: WebhookScope,
     pub created_at: String,
-    pub disabled_at: Option<String>,
     /// Shown once; it cannot be read again.
     pub secret: String,
 }

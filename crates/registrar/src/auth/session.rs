@@ -4,16 +4,18 @@
 //! the page sends in `X-CSRF-Token` on every change. `POST /api/v1/admin/session` logs in,
 //! `GET` returns the session's CSRF token again, `DELETE` logs out.
 
-use axum::Router;
+use axum::Json;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
 use mtpool_core::Ts;
+use mtpool_protocol::problem::Problem;
 use rusqlite::{Connection, OptionalExtension};
-use serde::Deserialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
 
 use super::middleware::{AdminAuth, AdminVia, ClientIp, verify};
 use super::tokens::{self, TokenHash, TokenKind};
@@ -27,11 +29,8 @@ pub const CSRF_HEADER: &str = "x-csrf-token";
 pub const SESSION_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 const MAX_AGE_SECONDS: i64 = SESSION_TTL_MS / 1000;
 
-pub fn routes() -> Router<AppState> {
-    Router::new().route(
-        "/api/v1/admin/session",
-        post(login).get(current).delete(logout),
-    )
+pub fn routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new().routes(routes!(login, current, logout))
 }
 
 #[derive(Debug, Clone)]
@@ -53,10 +52,25 @@ pub fn lookup(conn: &Connection, hash: &TokenHash) -> Result<Option<SessionRow>,
         .optional()?)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 struct LoginBody {
+    /// The admin token.
     token: String,
+}
+
+/// What the panel sends back in `X-CSRF-Token` on every change.
+#[derive(Serialize, ToSchema)]
+struct SessionCsrf {
+    csrf: String,
+}
+
+fn csrf_answer(csrf: String) -> Response {
+    let mut response = (StatusCode::OK, Json(SessionCsrf { csrf })).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 fn cookie(value: &str, max_age: i64) -> HeaderValue {
@@ -66,6 +80,18 @@ fn cookie(value: &str, max_age: i64) -> HeaderValue {
     HeaderValue::from_str(&text).expect("a cookie of base64url characters is a valid header")
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/session",
+    tag = "admin",
+    request_body = LoginBody,
+    responses(
+        (status = 200, description = "Logged in: the session cookie is set and the CSRF token returned", body = SessionCsrf),
+        (status = 400, description = "Bad body", body = Problem, content_type = "application/problem+json"),
+        (status = 401, description = "Not a valid admin token", body = Problem, content_type = "application/problem+json"),
+        (status = 429, description = "Too many failed attempts from this address", body = Problem, content_type = "application/problem+json"),
+    )
+)]
 async fn login(
     State(app): State<AppState>,
     ClientIp(ip): ClientIp,
@@ -90,36 +116,43 @@ async fn login(
     )
     .await?;
 
-    let mut response = (StatusCode::OK, json!({ "csrf": csrf }).to_string()).into_response();
-    let headers = response.headers_mut();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    headers.insert(header::SET_COOKIE, cookie(&value, MAX_AGE_SECONDS));
+    let mut response = csrf_answer(csrf);
+    response
+        .headers_mut()
+        .insert(header::SET_COOKIE, cookie(&value, MAX_AGE_SECONDS));
     Ok(response)
 }
 
 /// The CSRF token of the session the cookie belongs to, for a panel that was reloaded and lost
 /// the one login returned. A bearer token has no session, so there is nothing to return.
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/session",
+    tag = "admin",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "The CSRF token of the session the cookie belongs to", body = SessionCsrf),
+        (status = 204, description = "Signed in with a bearer token, which has no session"),
+        (status = 401, description = "No valid admin credential", body = Problem, content_type = "application/problem+json"),
+    )
+)]
 async fn current(admin: AdminAuth) -> Response {
     match admin.via {
-        AdminVia::Session { csrf, .. } => {
-            let mut response =
-                (StatusCode::OK, json!({ "csrf": csrf }).to_string()).into_response();
-            let headers = response.headers_mut();
-            headers.insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json"),
-            );
-            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-            response
-        }
+        AdminVia::Session { csrf, .. } => csrf_answer(csrf),
         AdminVia::Token { .. } => StatusCode::NO_CONTENT.into_response(),
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/v1/admin/session",
+    tag = "admin",
+    security(("bearer" = [])),
+    responses(
+        (status = 204, description = "Logged out; the session cookie is cleared"),
+        (status = 401, description = "No valid admin credential", body = Problem, content_type = "application/problem+json"),
+    )
+)]
 async fn logout(State(app): State<AppState>, admin: AdminAuth) -> Result<Response, AuthError> {
     if let AdminVia::Session { hash, .. } = admin.via {
         commit(

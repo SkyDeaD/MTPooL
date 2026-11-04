@@ -1198,6 +1198,129 @@
         ]
       }
     },
+    "/api/v1/admin/session": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "The CSRF token of the session the cookie belongs to, for a panel that was reloaded and lost\nthe one login returned. A bearer token has no session, so there is nothing to return.",
+        "operationId": "current",
+        "responses": {
+          "200": {
+            "description": "The CSRF token of the session the cookie belongs to",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionCsrf"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Signed in with a bearer token, which has no session"
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Logged in: the session cookie is set and the CSRF token returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionCsrf"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad body",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not a valid admin token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many failed attempts from this address",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": "Logged out; the session cookie is cleared"
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/settings": {
       "get": {
         "tags": [
@@ -4749,6 +4872,19 @@
           }
         }
       },
+      "LoginBody": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "The admin token."
+          }
+        },
+        "additionalProperties": false
+      },
       "Me": {
         "type": "object",
         "description": "`GET /me`.",
@@ -5769,6 +5905,18 @@
           }
         }
       },
+      "SessionCsrf": {
+        "type": "object",
+        "description": "What the panel sends back in `X-CSRF-Token` on every change.",
+        "required": [
+          "csrf"
+        ],
+        "properties": {
+          "csrf": {
+            "type": "string"
+          }
+        }
+      },
       "SrmdOverview": {
         "type": "object",
         "description": "`GET /admin/srmd`.",
@@ -6233,13 +6381,6 @@
             "type": "string",
             "description": "RFC 3339, UTC."
           },
-          "disabled_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "RFC 3339, UTC; set when the sender gave up on the webhook."
-          },
           "events": {
             "type": "array",
             "items": {
@@ -6272,12 +6413,6 @@
         "properties": {
           "created_at": {
             "type": "string"
-          },
-          "disabled_at": {
-            "type": [
-              "string",
-              "null"
-            ]
           },
           "events": {
             "type": "array",

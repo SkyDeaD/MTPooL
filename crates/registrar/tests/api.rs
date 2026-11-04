@@ -810,6 +810,19 @@ async fn empty_pool_returns_empty_lists_not_500() {
 }
 
 #[test]
+fn the_admin_session_is_documented() {
+    let doc: Value = serde_json::from_str(mtpool_registrar::api::openapi_pretty()).expect("JSON");
+    let session = &doc["paths"]["/api/v1/admin/session"];
+    for method in ["post", "get", "delete"] {
+        assert!(session[method].is_object(), "{method} is missing");
+    }
+    assert!(
+        session["post"]["requestBody"].is_object(),
+        "login takes the admin token in its body"
+    );
+}
+
+#[test]
 fn operation_ids_are_unique() {
     let doc: Value = serde_json::from_str(mtpool_registrar::api::openapi_pretty()).expect("JSON");
     let mut seen = std::collections::BTreeSet::new();

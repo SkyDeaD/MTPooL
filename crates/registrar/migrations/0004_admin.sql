@@ -24,8 +24,7 @@ CREATE TABLE webhooks (
     url         TEXT NOT NULL,
     secret      TEXT NOT NULL,
     events      TEXT NOT NULL,
-    created_at  INTEGER NOT NULL,
-    disabled_at INTEGER
+    created_at  INTEGER NOT NULL
 );
 CREATE INDEX webhooks_owner ON webhooks(owner_id);
 

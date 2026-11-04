@@ -139,8 +139,7 @@ fn enqueue(
         let conn = store.read();
         let mut statement = conn
             .prepare(
-                "SELECT id FROM webhooks WHERE disabled_at IS NULL \
-                 AND EXISTS (SELECT 1 FROM json_each(webhooks.events) WHERE value = ?1) \
+                "SELECT id FROM webhooks WHERE EXISTS (SELECT 1 FROM json_each(webhooks.events) WHERE value = ?1) \
                  AND (scope = 'pool' OR (scope = 'owner' AND owner_id = ?2)) \
                  ORDER BY id",
             )
@@ -280,7 +279,7 @@ fn load_due(store: &Store, now: Ts) -> Result<Vec<Due>, String> {
         .prepare(
             "SELECT d.id, d.event, d.payload, d.attempt, w.url, w.secret \
              FROM webhook_deliveries d JOIN webhooks w ON w.id = d.webhook_id \
-             WHERE d.status = 'pending' AND d.next_at <= ?1 AND w.disabled_at IS NULL \
+             WHERE d.status = 'pending' AND d.next_at <= ?1 \
              ORDER BY d.next_at, d.id LIMIT ?2",
         )
         .map_err(|e| e.to_string())?;

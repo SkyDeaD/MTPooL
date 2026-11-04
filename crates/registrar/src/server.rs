@@ -182,12 +182,13 @@ pub fn router(state: AppState) -> Router {
     let (bot, _) = api::bot::routes().split_for_parts();
     let (admin, _) = api::admin::routes().split_for_parts();
     let (rollouts, _) = api::rollout::routes().split_for_parts();
+    let (session, _) = session::routes().split_for_parts();
     // /metrics takes a metrics token and sits outside the API prefix.
     let (metrics, _) = crate::metrics::routes().split_for_parts();
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
-        .merge(session::routes())
+        .merge(session)
         .merge(public)
         .merge(agent)
         .merge(bot)

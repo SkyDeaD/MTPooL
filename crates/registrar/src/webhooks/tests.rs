@@ -416,7 +416,7 @@ async fn a_refused_connection_is_a_short_error_without_the_url() {
 }
 
 #[tokio::test]
-async fn disabled_and_deleted_webhooks_are_skipped() {
+async fn deleted_webhooks_are_skipped() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200))
@@ -426,19 +426,14 @@ async fn disabled_and_deleted_webhooks_are_skipped() {
     let owner = env.owner("alice");
     let off = env.webhook(owner, "owner", &url_of(&server), &["node.banned"]);
     let on = env.webhook(owner, "owner", &url_of(&server), &["node.banned"]);
-    let off_row = env.delivery(off, "evt_00000000000000000000000a", "node.banned");
+    env.delivery(off, "evt_00000000000000000000000a", "node.banned");
     let on_row = env.delivery(on, "evt_00000000000000000000000b", "node.banned");
     let conn = rusqlite::Connection::open(&env.db).unwrap();
-    conn.execute(
-        "UPDATE webhooks SET disabled_at = ?1 WHERE id = ?2",
-        [NOW, off],
-    )
-    .unwrap();
+    conn.execute("DELETE FROM webhooks WHERE id = ?1", [off])
+        .unwrap();
     let sender = env.sender(Fixed::of(&[PUBLIC]), *server.address());
     assert_eq!(sender.deliver_due().await, 1);
     assert_eq!(env.row(on_row).status, "delivered");
-    assert_eq!(env.row(off_row).status, "pending");
-    assert_eq!(env.row(off_row).attempt, 0);
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }
 
