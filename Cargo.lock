@@ -1396,6 +1396,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mtpool-loadgen"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "mtpool-protocol",
+ "rand",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "mtpool-protocol"
 version = "0.0.0"
 dependencies = [

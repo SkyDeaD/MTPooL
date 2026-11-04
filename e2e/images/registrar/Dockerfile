@@ -30,6 +30,17 @@ COPY deploy /opt/deploy
 STOPSIGNAL SIGRTMIN+3
 CMD ["/sbin/init"]
 
+# The load generator (`e2e/load.sh`). Built only when asked for: `--target loadgen`.
+FROM build AS build-load
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release --locked -p mtpool-loadgen \
+ && install -D target/release/mtpool-loadgen /out/mtpool-loadgen
+
+FROM alpine:3.21 AS loadgen
+COPY --from=build-load /out/mtpool-loadgen /usr/local/bin/
+ENTRYPOINT ["mtpool-loadgen"]
+
 FROM alpine:3.21
 COPY --from=build /out/mtpool-registrar /out/mtpool-fakes /usr/local/bin/
 RUN mkdir -p /var/lib/mtpool /srv/releases
