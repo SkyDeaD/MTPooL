@@ -1,13 +1,11 @@
 // The connection to the live stream. It is closed while the tab is hidden and opened again when the
 // reader comes back. Nothing depends on it: without it the pages keep polling.
-import { LIVE_STEP_MS, LIVE_STREAM_URL, type LiveTick } from './clients-live';
+import { LIVE_STEP_MS, LIVE_STREAM_URL, readDelay, type LiveTick } from './clients-live';
 
 /** Ten minutes of ticks, the widest window that shows every one of them. */
 const KEEP = Math.ceil(600_000 / LIVE_STEP_MS);
 /** How long after a refused or broken connection the page asks again: the browser will not. */
 const REOPEN_MS = 30_000;
-/** Everyone reads the lists again within this time after a change, not all in the same instant. */
-const SPREAD_MS = 2000;
 
 export interface ClientsLive {
   readonly ticks: readonly LiveTick[];
@@ -30,6 +28,7 @@ export function useClientsLive(onchanged?: () => void, source?: typeof EventSour
     let stream: EventSource | null = null;
     let reopening: ReturnType<typeof setTimeout> | undefined;
     let reading: ReturnType<typeof setTimeout> | undefined;
+    let lastRead: number | null = null;
 
     const close = () => {
       clearTimeout(reopening);
@@ -67,8 +66,9 @@ export function useClientsLive(onchanged?: () => void, source?: typeof EventSour
         if (!onchanged || reading !== undefined) return;
         reading = setTimeout(() => {
           reading = undefined;
+          lastRead = Date.now();
           onchanged();
-        }, Math.random() * SPREAD_MS);
+        }, readDelay(Date.now(), lastRead, Math.random()));
       });
     };
     const onVisibility = () => (document.hidden ? close() : open());

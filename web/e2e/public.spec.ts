@@ -11,10 +11,16 @@ const PAGES: { name: string; path: () => string; heading: RegExp }[] = [
   { name: 'node', path: () => `/node/?id=${stand.ids[stand.roster.healthy[0]]}`, heading: /Доступность/ },
 ];
 
+let reader = 0;
+const readerNo = () => (reader = (reader % 250) + 1);
+
 for (const page of PAGES) {
   for (const theme of THEMES) {
     for (const width of WIDTHS) {
       test(`public ${page.name}, ${theme}, ${width}px`, async ({ page: tab }) => {
+        // Each test is a reader of its own: the request limit is per address, and this run goes
+        // through the pages far faster than a person.
+        await tab.setExtraHTTPHeaders({ 'x-forwarded-for': `198.51.100.${readerNo()}` });
         const external = watchExternal(tab);
         await useTheme(tab, theme);
         await tab.setViewportSize({ width, height: 900 });

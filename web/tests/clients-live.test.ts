@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
-import { mergeLive, withLiveClients, type LiveTick } from '../src/lib/clients-live';
+import { MIN_READ_GAP_MS, mergeLive, readDelay, READ_SPREAD_MS, withLiveClients, type LiveTick } from '../src/lib/clients-live';
 import type { ClientsSeries, PublicDomain, PublicNode } from '../src/lib/types';
 
 const at = (s: number) => new Date(Date.UTC(2026, 10, 5, 12, 0, s)).toISOString();
@@ -36,6 +36,12 @@ describe('live clients', () => {
     expect(out.nodes.map((n) => n.clients)).toEqual([7, 2]);
     expect(out.domains[0].clients).toBe(9);
     expect(withLiveClients(nodes, domains, null).nodes).toBe(nodes);
+  });
+
+  it('reads the lists soon after the first change and rarely after that', () => {
+    expect(readDelay(1000, null, 0.5)).toBe(READ_SPREAD_MS / 2);
+    expect(readDelay(1000, 1000, 0.5)).toBe(MIN_READ_GAP_MS);
+    expect(readDelay(1000 + MIN_READ_GAP_MS * 2, 1000, 0.5)).toBe(READ_SPREAD_MS / 2);
   });
 
   it('keeps the owners users apart and clears them when a node has none left', () => {
