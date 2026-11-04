@@ -13,8 +13,8 @@ COPY e2e/keys/minisign.pub ./deploy/minisign.pub
 # The target directory is a cache shared by every build of this image, and cargo goes by the
 # file's time: a key older than the last build would leave that build's key in the binary.
 RUN touch deploy/minisign.pub
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/src/target,sharing=locked \
     cargo build --release --locked -p mtpool-registrar -p mtpool-fakes \
  && install -D target/release/mtpool-registrar /out/mtpool-registrar \
  && install -D target/release/mtpool-fakes /out/mtpool-fakes
@@ -35,8 +35,8 @@ CMD ["/sbin/init"]
 
 # The load generator (`e2e/load.sh`). Built only when asked for: `--target loadgen`.
 FROM build AS build-load
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/src/target,sharing=locked \
     cargo build --release --locked -p mtpool-loadgen \
  && install -D target/release/mtpool-loadgen /out/mtpool-loadgen
 

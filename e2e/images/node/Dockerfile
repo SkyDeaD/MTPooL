@@ -11,8 +11,8 @@ COPY e2e/keys/minisign.pub ./deploy/minisign.pub
 # The target directory is a cache shared by every build of this image, and cargo goes by the
 # file's time: a key older than the last build would leave that build's key in the binary.
 RUN touch deploy/minisign.pub
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/src/target,sharing=locked \
     cargo build --release --locked -p mtpool-agent \
  && install -D target/release/mtpool-agent /out/mtpool-agent \
  && cp Cargo.toml /tmp/Cargo.toml.orig && cp Cargo.lock /tmp/Cargo.lock.orig \
