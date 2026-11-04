@@ -48,7 +48,7 @@ async fn install_rejects_bad_signature() {
         .expect("the installer runs");
     assert!(!run.success, "the installer must refuse:\n{}", run.output);
     assert!(
-        run.output.to_lowercase().contains("signature"),
+        run.output.to_lowercase().contains("подпись"),
         "it says why:\n{}",
         run.output
     );
@@ -89,8 +89,7 @@ async fn install_rejects_port_mismatch() {
         .expect("the installer runs");
     assert!(!run.success, "the installer must refuse:\n{}", run.output);
     assert!(
-        run.output
-            .contains("engine listens on 8443, the pool expects 443"),
+        run.output.contains("слушает порт 8443, а пул ждёт 443"),
         "it names both ports:\n{}",
         run.output
     );
@@ -172,6 +171,63 @@ async fn token_file_option_works() {
         .wait_state(&id, "healthy", secs(120))
         .await
         .expect("the node is healthy");
+    // It waited for the pool and says where to look next.
+    assert!(
+        run.output.contains(&format!("Готово: {id}")),
+        "it reports a healthy node:\n{}",
+        run.output
+    );
+    assert!(
+        run.output.contains("journalctl -u mtpool-agent -f"),
+        "it says where the logs are:\n{}",
+        run.output
+    );
+    assert!(
+        !run.output.contains('\u{1b}'),
+        "no colors without a terminal:\n{}",
+        run.output
+    );
+    let log = node
+        .exec("stat -c %a /var/log/mtpool/install.log; cat /var/log/mtpool/install.log")
+        .await
+        .unwrap();
+    assert!(log.starts_with("600\n"), "the log is for root alone: {log}");
+    assert!(
+        !log.contains(stand.enroll_token()),
+        "the enroll token is not in the log"
+    );
+}
+
+#[tokio::test]
+#[ignore = "needs Docker and the internet; run with --ignored"]
+async fn install_says_when_the_pool_refuses_the_node() {
+    let stand = Stand::up().await.expect("the stand comes up");
+    offer_release(&stand, &ensure_test_key().expect("the test key")).await;
+    let node = stand.node(1);
+    let run = node
+        .install(&InstallOptions {
+            name: "node-one",
+            token: Token::Env("mtp_enroll_not_a_real_token"),
+            preset: None,
+            port: None,
+        })
+        .await
+        .expect("the installer runs");
+    assert!(
+        !run.success,
+        "a node outside the pool is no success:\n{}",
+        run.output
+    );
+    assert!(
+        run.output.contains("пул не принял ноду"),
+        "it says what happened:\n{}",
+        run.output
+    );
+    assert!(
+        run.output.contains("/var/log/mtpool/install.log"),
+        "it says where the log is:\n{}",
+        run.output
+    );
 }
 
 #[tokio::test]
