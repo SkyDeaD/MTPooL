@@ -123,8 +123,8 @@ pub struct LastVote {
     #[schema(example = "globalping")]
     pub sensor: String,
     pub vote: Vote,
-    /// Why the sensor abstained: `not_configured`, `unavailable`, `rate_limited`, `timeout`,
-    /// `unknown_answer` or `no_data`. Only for `abstain`.
+    /// Why the sensor abstained: `not_configured`, `key_rejected`, `unavailable`, `rate_limited`,
+    /// `timeout`, `unknown_answer` or `no_data`. Only for `abstain`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }

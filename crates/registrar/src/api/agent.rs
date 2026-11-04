@@ -897,8 +897,18 @@ pub async fn report(
     };
     match request.gp {
         GpReport::NoData { reason } => {
+            let abstain = gp_abstain(&reason);
+            // `NoData` is the usual report between measurements. The agent's own word stays out
+            // of the log: only what the registrar knows goes there.
+            if abstain != AbstainReason::NoData {
+                tracing::warn!(
+                    node = %auth.node_id,
+                    reason = ?abstain,
+                    "no Globalping measurement from the node"
+                );
+            }
             let settled = Settled {
-                globalping: Vote::Abstain(gp_abstain(&reason)),
+                globalping: Vote::Abstain(abstain),
                 ..settled
             };
             let reply = app

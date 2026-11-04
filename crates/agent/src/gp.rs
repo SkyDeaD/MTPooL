@@ -165,9 +165,16 @@ impl GpLoop {
 
         let report = match self.measure(&job).await {
             Ok(id) => GpReport::Measured { id },
-            Err(reason) => GpReport::NoData {
-                reason: reason.into(),
-            },
+            Err(reason) => {
+                tracing::warn!(
+                    reason,
+                    next_try_sec = job.interval.as_secs(),
+                    "no Globalping measurement this time"
+                );
+                GpReport::NoData {
+                    reason: reason.into(),
+                }
+            }
         };
         self.put(epoch, report, Some(now + job.interval));
     }

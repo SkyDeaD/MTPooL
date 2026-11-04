@@ -10,7 +10,8 @@
 //!   statement about a block: `Abstain(NoData)`;
 //! * any other word, or an answer that cannot be read, is `Abstain(UnknownAnswer)`.
 //!
-//! Anything that goes wrong on the way is an abstention too. After a 429 the sensor sends
+//! Anything that goes wrong on the way is an abstention too; a 401 or a 403 says the key was not
+//! accepted. After a 429 the sensor sends
 //! nothing until the `Retry-After` time has passed. The pool-wide limit is 20 requests a
 //! minute. The key is read on every call and goes only into the request header: not into the
 //! evidence, not into a log line.
@@ -79,6 +80,7 @@ fn now_ms() -> i64 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Fail {
     NotConfigured(&'static str),
+    KeyRejected(u16),
     RateLimited,
     Unavailable(Option<u16>),
     Timeout,
@@ -89,6 +91,7 @@ impl Fail {
     fn reason(self) -> AbstainReason {
         match self {
             Fail::NotConfigured(_) => AbstainReason::NotConfigured,
+            Fail::KeyRejected(_) => AbstainReason::KeyRejected,
             Fail::RateLimited => AbstainReason::RateLimited,
             Fail::Unavailable(_) => AbstainReason::Unavailable,
             Fail::Timeout => AbstainReason::Timeout,
@@ -99,6 +102,7 @@ impl Fail {
     fn vote(self) -> SensorVote {
         let evidence = match self {
             Fail::NotConfigured(why) | Fail::Unknown(why) => json!({"reason": why}),
+            Fail::KeyRejected(status) => json!({"reason": "key_rejected", "http_status": status}),
             Fail::RateLimited => json!({"reason": "rate_limited"}),
             Fail::Unavailable(Some(status)) => {
                 json!({"reason": "unavailable", "http_status": status})
@@ -297,6 +301,13 @@ impl RedFlagSensor {
                 .and_then(|v| v.to_str().ok());
             self.silence_for(retry_delay(header, now_ms()));
             return Err(Fail::RateLimited);
+        }
+        if matches!(status.as_u16(), 401 | 403) {
+            tracing::warn!(
+                status = status.as_u16(),
+                "redflag does not accept the API key"
+            );
+            return Err(Fail::KeyRejected(status.as_u16()));
         }
         if !status.is_success() {
             return Err(Fail::Unavailable(Some(status.as_u16())));
