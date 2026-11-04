@@ -289,6 +289,17 @@ impl Settings {
                 "proxy_users",
                 "user name must not be empty",
             )?;
+            // The name becomes a key in the engine's config: the agent refuses anything else, and
+            // with it the whole config, on every node.
+            check(
+                user.name.len() <= 64
+                    && user
+                        .name
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+                "proxy_users",
+                "user name must be up to 64 latin letters, digits, - or _",
+            )?;
             check(
                 user.secret_hex.len() == 32
                     && user.secret_hex.bytes().all(|b| b.is_ascii_hexdigit()),
@@ -580,7 +591,11 @@ mod tests {
         };
         let good = "00112233445566778899aabbccddeeff";
         let ok = Settings {
-            proxy_users: vec![user("u1", good), user("u2", good)],
+            proxy_users: vec![
+                user("u1", good),
+                user("U-2_x", good),
+                user(&"a".repeat(64), good),
+            ],
             ..Default::default()
         };
         assert!(ok.validate().is_ok());
@@ -589,6 +604,10 @@ mod tests {
             vec![user("u1", "xyz")],
             vec![user("u1", &good[..30])],
             vec![user("u1", good), user("u1", good)],
+            vec![user("Вася", good)],
+            vec![user("a b", good)],
+            vec![user("a\"b", good)],
+            vec![user(&"a".repeat(65), good)],
         ] {
             assert!(
                 Settings {

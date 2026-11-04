@@ -81,6 +81,39 @@
     renewing = null;
   }
   const masked = (hex: string) => `••••${hex.slice(-4)}`;
+
+  // The same rule as the server's: the name becomes a key in the engine's config.
+  let userName = $state('');
+  let userError = $state<Key | null>(null);
+  async function addUser(event: SubmitEvent): Promise<void> {
+    event.preventDefault();
+    const name = userName.trim();
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) {
+      userError = 'panel.settings.userErrorName';
+      return;
+    }
+    if (users.some((u) => u.name === name)) {
+      userError = 'panel.settings.userErrorTaken';
+      return;
+    }
+    userError = null;
+    busy = true;
+    if (await store.write({ proxy_users: [...users, { name, secret_hex: newSecret() }] })) {
+      toast(t('panel.settings.userAdded', { name }));
+      userName = '';
+    }
+    busy = false;
+  }
+
+  let removing = $state<string | null>(null);
+  async function removeUser(): Promise<void> {
+    if (removing === null) return;
+    const name = removing;
+    busy = true;
+    if (await store.write({ proxy_users: users.filter((u) => u.name !== name) })) toast(t('panel.settings.userDeleted', { name }));
+    busy = false;
+    removing = null;
+  }
 </script>
 
 {#snippet secretRow(name: (typeof SECRETS)[number])}
@@ -155,13 +188,36 @@
                   <tr>
                     <td class="full nm" data-l={t('panel.settings.userName')}>{u.name}</td>
                     <td class="mono sm" data-l={t('panel.settings.userSecret')}>{masked(u.secret_hex)}</td>
-                    <td class="n"><button class="btn s" type="button" onclick={() => (renewing = u.name)}>{t('panel.settings.renew')}</button></td>
+                    <td class="n">
+                      <button class="btn s" type="button" onclick={() => (renewing = u.name)}>{t('panel.settings.renew')}</button>
+                      <button class="btn s dng" type="button" onclick={() => (removing = u.name)}>{t('panel.settings.userDelete')}</button>
+                    </td>
                   </tr>
                 {/each}
               </tbody>
             </table>
           </div>
         {/if}
+        <form class="tb-b" onsubmit={addUser} novalidate>
+          <div class="f">
+            <label for="user-new">{t('panel.settings.userNew')}</label>
+            <div class="user-new">
+              <input
+                class={['inp', 'mono', userError && 'err']}
+                id="user-new"
+                type="text"
+                autocomplete="off"
+                autocapitalize="off"
+                spellcheck="false"
+                bind:value={userName}
+                oninput={() => (userError = null)}
+              />
+              <button class="btn" type="submit" disabled={busy}>{t('panel.settings.userAdd')}</button>
+            </div>
+            <span class="h">{t('panel.settings.userNewHint')}</span>
+            {#if userError}<span class="e"><Icon name="alert" /><span>{t(userError)}</span></span>{/if}
+          </div>
+        </form>
       </section>
     </div>
 
@@ -218,3 +274,26 @@
   {busy}
   onconfirm={renew}
 />
+
+<Confirm
+  bind:open={() => removing !== null, (v) => { if (!v) removing = null; }}
+  title={t('panel.settings.userDeleteTitle', { name: removing ?? '' })}
+  text={t('panel.settings.userDeleteText')}
+  keep={t('common.cancel')}
+  confirm={t('panel.settings.userDelete')}
+  {busy}
+  onconfirm={removeUser}
+/>
+
+<style>
+  .user-new {
+    display: flex;
+    gap: var(--gap);
+    align-items: center;
+  }
+  .user-new input {
+    flex: 1;
+    min-width: 0;
+    max-width: 320px;
+  }
+</style>
