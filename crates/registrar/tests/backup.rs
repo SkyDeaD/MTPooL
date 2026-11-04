@@ -146,3 +146,27 @@ fn backup_works_while_the_store_serves() {
     store.close().expect("close");
     assert!(to.exists());
 }
+
+#[test]
+fn restore_leaves_the_files_with_the_owner_of_their_directory() {
+    use std::os::unix::fs::MetadataExt;
+
+    let (dir, db) = temp_db();
+    seeded(&db);
+    let to = dir.path().join("copy.db");
+    backup::backup(&db, &to).expect("backup");
+    backup::restore(&db, &to).expect("restore");
+
+    let wanted = fs::metadata(dir.path()).expect("dir");
+    for file in [db.clone(), backup::lock_path(&db)] {
+        let meta = fs::metadata(&file).expect("file exists");
+        assert_eq!(
+            (meta.uid(), meta.gid()),
+            (wanted.uid(), wanted.gid()),
+            "{}",
+            file.display()
+        );
+    }
+    // Run on its own, as a no-op when the files already match (and when not root).
+    backup::match_directory_owner(&db).expect("owner already matches");
+}

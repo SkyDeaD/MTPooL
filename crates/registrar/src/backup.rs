@@ -199,7 +199,46 @@ pub fn restore(db: &Path, from: &Path) -> Result<(), BackupError> {
             }
         }
     }
-    fs::rename(&staged, db).map_err(io_error(format!("cannot replace {}", db.display())))
+    fs::rename(&staged, db).map_err(io_error(format!("cannot replace {}", db.display())))?;
+    match_directory_owner(db)
+}
+
+/// Gives the database and its lock file the owner of the directory they live in. A restore run
+/// as root would otherwise leave them root-owned, and the registrar (user `mtpool`) could not
+/// open them. It changes nothing when the owner already matches, and when the caller may not
+/// change owners (anyone but root).
+pub fn match_directory_owner(db: &Path) -> Result<(), BackupError> {
+    use std::os::unix::fs::{MetadataExt, chown};
+
+    let dir = db.parent().filter(|p| !p.as_os_str().is_empty());
+    let dir = dir.unwrap_or_else(|| Path::new("."));
+    let wanted = fs::metadata(dir).map_err(io_error(format!("cannot read {}", dir.display())))?;
+    for file in [db.to_path_buf(), lock_path(db)] {
+        let meta = match fs::metadata(&file) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(BackupError::Io {
+                    what: format!("cannot read {}", file.display()),
+                    source: e,
+                });
+            }
+        };
+        if (meta.uid(), meta.gid()) == (wanted.uid(), wanted.gid()) {
+            continue;
+        }
+        match chown(&file, Some(wanted.uid()), Some(wanted.gid())) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {}
+            Err(e) => {
+                return Err(BackupError::Io {
+                    what: format!("cannot change the owner of {}", file.display()),
+                    source: e,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn check_integrity(path: &Path) -> Result<(), BackupError> {
