@@ -57,5 +57,31 @@ for (const theme of THEMES) {
     await openPanel(page, '#/overview');
     await page.waitForTimeout(1500);
     await page.screenshot({ path: `${DOCS}/panel-${theme}.png` });
+
+    // The gallery: one working screen each, without the side rail so it stays readable when small.
+    const area = { x: 232, y: 0, width: 1048, height: 700 };
+    await page.setViewportSize({ width: 1280, height: 800 });
+    // The node in quarantine: it is the one with rounds of sensor votes to show.
+    const checked = stand.ids[stand.roster.quarantine];
+    const gallery: [string, string][] = [
+      ['nodes', '#/nodes'],
+      ['masters', '#/masters'],
+      ['node', `#/nodes/${checked}`],
+      ['journal', '#/journal'],
+    ];
+    for (const [name, route] of gallery) {
+      await page.goto(`/panel/${route}`);
+      await page.waitForTimeout(1200);
+      await page.screenshot({ path: `${DOCS}/panel-${name}-${theme}.png`, clip: area });
+    }
+    await page.goto('/panel/#/settings');
+    await page.getByRole('tab', { name: 'Домены и DNS' }).click();
+    await page.waitForTimeout(800);
+    await page.screenshot({ path: `${DOCS}/panel-settings-${theme}.png`, clip: area });
+    await page.setViewportSize({ width: 1048, height: 700 });
+    await page.goto('/links/');
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(800);
+    await page.screenshot({ path: `${DOCS}/public-links-${theme}.png` });
   });
 }
