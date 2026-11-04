@@ -1,7 +1,8 @@
 //! The Docker stand: the registrar, the stand-ins for the services outside the pool and three
 //! systemd nodes, started with `docker compose` under a project name of their own. A [`Stand`]
 //! is one running copy of it; dropping it takes the copy down again (set `MTPOOL_E2E_KEEP=1` to
-//! keep it for a look). Everything here is for tests: nothing checks more than a test needs.
+//! keep it for a look, and `MTPOOL_E2E_LOG_DIR=<dir>` to save the logs of a stand that failed).
+//! Everything here is for tests: nothing checks more than a test needs.
 
 mod backup;
 mod faults;
@@ -19,7 +20,7 @@ pub use signing::{TestKey, ensure_test_key};
 pub use update::{RegistrarRelease, registrar_release};
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command as StdCommand, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
@@ -98,6 +99,12 @@ fn build_flag() -> &'static str {
 
 fn build_flag_for(prebuilt: bool) -> &'static str {
     if prebuilt { "--no-build" } else { "--build" }
+}
+
+/// The file for the logs of a failed stand: the test it served and its project.
+fn log_path(dir: &Path, test: Option<&str>, project: &str) -> PathBuf {
+    let test = test.unwrap_or("stand").replace("::", "-");
+    dir.join(format!("{test}-{project}.log"))
 }
 
 /// A project name nothing else shares: six hex digits from the clock and the process tell runs
@@ -258,10 +265,11 @@ impl Stand {
         if options.small_db {
             files.push(compose_file().with_file_name("compose.small-db.yml"));
         }
-        let guard = Guard {
+        let mut guard = Guard {
             project: project.clone(),
             files,
             env: Vec::new(),
+            up: false,
         };
         eprintln!("e2e: project {project}");
         run(
@@ -324,6 +332,7 @@ impl Stand {
             .ok_or_else(|| StandError(format!("no token in the answer: {enroll}")))?
             .to_owned();
 
+        guard.up = true;
         Ok(Stand {
             guard,
             registrar_url,
@@ -512,6 +521,8 @@ struct Guard {
     files: Vec<PathBuf>,
     /// Variables of every `docker compose` command (the compose file reads some).
     env: Vec<(String, String)>,
+    /// Whether the stand came up. One that did not has no test left to panic for it.
+    up: bool,
 }
 
 impl Guard {
@@ -535,11 +546,40 @@ impl Guard {
             .kill_on_drop(true);
         command
     }
+
+    /// Saves everything the services said under `MTPOOL_E2E_LOG_DIR`, if it is set. It runs while
+    /// a test unwinds, so a failure here is only reported.
+    fn save_logs(&self) {
+        let Some(dir) = std::env::var_os("MTPOOL_E2E_LOG_DIR") else {
+            return;
+        };
+        let dir = PathBuf::from(dir);
+        let path = log_path(&dir, std::thread::current().name(), &self.project);
+        let file = match std::fs::create_dir_all(&dir).and_then(|()| std::fs::File::create(&path)) {
+            Ok(file) => file,
+            Err(e) => {
+                eprintln!("e2e: cannot write {}: {e}", path.display());
+                return;
+            }
+        };
+        let saved = StdCommand::new("docker")
+            .args(["compose", "-p", &self.project, "--profile", "*"])
+            .args(self.file_args())
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
+            .args(["logs", "--no-color"])
+            .stdout(file)
+            .stderr(Stdio::null())
+            .status();
+        if let Err(e) = saved {
+            eprintln!("e2e: cannot save the logs of {}: {e}", self.project);
+        }
+    }
 }
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        if std::thread::panicking() {
+        if std::thread::panicking() || !self.up {
+            self.save_logs();
             // The test failed: what the services said is the first thing to look at.
             let _ = StdCommand::new("docker")
                 .args(["compose", "-p", &self.project, "--profile", "*"])
@@ -766,6 +806,24 @@ mod build_flag_tests {
     fn images_are_built_unless_they_came_prebuilt() {
         assert_eq!(build_flag_for(false), "--build");
         assert_eq!(build_flag_for(true), "--no-build");
+    }
+}
+
+#[cfg(test)]
+mod log_path_tests {
+    use super::log_path;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn the_file_says_which_test_and_which_stand() {
+        assert_eq!(
+            log_path(Path::new("/logs"), Some("ops::restore"), "mtpool-e2e-ab-0"),
+            PathBuf::from("/logs/ops-restore-mtpool-e2e-ab-0.log")
+        );
+        assert_eq!(
+            log_path(Path::new("/logs"), None, "mtpool-e2e-ab-0"),
+            PathBuf::from("/logs/stand-mtpool-e2e-ab-0.log")
+        );
     }
 }
 

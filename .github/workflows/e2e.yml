@@ -138,15 +138,16 @@ jobs:
           mv e2e-images/minisign.pub e2e-images/minisign.key e2e/keys/
           rm -r e2e-images
       - name: Run the scenarios
-        # Each scenario brings its own stand up and takes it down; a failed one prints the logs
-        # of its services.
+        # Each scenario brings its own stand up and takes it down; a failed one prints the end of
+        # the logs of its services and saves them whole for the artifact below.
         env:
           MTPOOL_E2E_PREBUILT: "1"
+          MTPOOL_E2E_LOG_DIR: ${{ github.workspace }}/e2e-logs
           TESTS: ${{ matrix.tests }}
         run: |
           # shellcheck disable=SC2086 # the names are separated by spaces
           cargo test -p mtpool-e2e --locked --tests --no-fail-fast -- --ignored --nocapture --test-threads=1 --exact $TESTS
-      - name: Collect the logs of the stand
+      - name: Collect the logs of a stand left running
         if: failure()
         run: |
           mkdir -p e2e-logs
