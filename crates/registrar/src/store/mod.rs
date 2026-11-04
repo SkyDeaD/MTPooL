@@ -228,7 +228,9 @@ impl Store {
         conn.busy_timeout(BUSY_TIMEOUT)
             .map_err(|e| classify(path, e))?;
         check_integrity(path, &conn)?;
-        conn.pragma_update(None, "journal_mode", "WAL")
+        // Switching to WAL does not wait for a lock by itself, and on a fresh install another
+        // process opens the same new file at the same moment.
+        until_unlocked(|| conn.pragma_update(None, "journal_mode", "WAL"))
             .map_err(|e| classify(path, e))?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -448,22 +450,10 @@ fn latest_version() -> i64 {
     MIGRATIONS.last().map_or(0, |(v, _)| *v)
 }
 
-/// Applies every migration above the stored version, each in its own transaction.
+/// Applies every migration above the stored version, each in its own transaction. The version
+/// is read again under the write lock, since another process may have just applied it.
 fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
-    let has_table: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations')",
-        [],
-        |r| r.get(0),
-    )?;
-    let current: i64 = if has_table {
-        conn.query_row(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
-            [],
-            |r| r.get(0),
-        )?
-    } else {
-        0
-    };
+    let current = stored_version(conn)?;
     if current > latest_version() {
         return Err(StoreError::UnknownSchemaVersion {
             found: current,
@@ -475,7 +465,12 @@ fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
             version: *version,
             source,
         };
-        let tx = conn.transaction().map_err(migration)?;
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(migration)?;
+        if stored_version(&tx)? >= *version {
+            continue;
+        }
         tx.execute_batch(sql).map_err(migration)?;
         tx.execute(
             "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, ?2)",
@@ -485,4 +480,39 @@ fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
         tx.commit().map_err(migration)?;
     }
     Ok(())
+}
+
+/// The newest applied migration, 0 on a new database.
+fn stored_version(conn: &Connection) -> Result<i64, StoreError> {
+    let has_table: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_table {
+        return Ok(0);
+    }
+    Ok(conn.query_row(
+        "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+        [],
+        |r| r.get(0),
+    )?)
+}
+
+/// Repeats `op` while the database is locked, up to `BUSY_TIMEOUT`.
+fn until_unlocked<T>(mut op: impl FnMut() -> rusqlite::Result<T>) -> rusqlite::Result<T> {
+    let deadline = std::time::Instant::now() + BUSY_TIMEOUT;
+    loop {
+        match op() {
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if matches!(
+                    e.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ) && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            result => return result,
+        }
+    }
 }

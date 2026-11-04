@@ -1236,3 +1236,29 @@ fn recorded_measurements_are_seen_and_old_ones_forgotten() {
         NOW.0
     );
 }
+
+/// A fresh install starts the service and runs an admin command at the same moment, and both
+/// open the new database.
+#[test]
+fn processes_opening_a_new_database_together_all_succeed() {
+    for _ in 0..20 {
+        let (_dir, path) = temp_db();
+        let start = std::sync::Barrier::new(6);
+        let results: Vec<Result<(), String>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..6)
+                .map(|_| {
+                    scope.spawn(|| {
+                        start.wait();
+                        let store = Store::open(&path).map_err(|e| e.to_string())?;
+                        store.close().map_err(|e| e.to_string())
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        for result in results {
+            assert_eq!(result, Ok(()));
+        }
+        assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 7);
+    }
+}
