@@ -1,0 +1,308 @@
+[
+  {
+    "availability_bp": 9987,
+    "checks": {
+      "tcp": true,
+      "metrics": true,
+      "globalping": "ok"
+    },
+    "clients": 142,
+    "domains": [
+      "proxy1.example.com"
+    ],
+    "engine": "telemt",
+    "is_master": true,
+    "last_round": {
+      "at": "2026-11-04T11:50:00Z",
+      "verdict": "clean",
+      "votes": [
+        {
+          "sensor": "globalping",
+          "vote": "clear"
+        },
+        {
+          "sensor": "cheburcheck",
+          "vote": "clear"
+        },
+        {
+          "sensor": "redflag",
+          "vote": "abstain",
+          "reason": "not_configured"
+        }
+      ]
+    },
+    "port": 443,
+    "registered_at": "2026-09-25T12:00:00Z",
+    "master_since": "2026-11-04T10:30:00Z",
+    "rotates_at": "2026-11-04T12:12:34Z",
+    "state": "healthy",
+    "state_since": "2026-10-30T12:00:00Z",
+    "id": "alpha-k3m2q",
+    "ip": "203.x.x.11",
+    "agent_version": "0.9.3",
+    "failed": [],
+    "full_ip": "203.0.113.11",
+    "last_heartbeat": "2026-11-04T11:59:48Z",
+    "owner_id": 1,
+    "owner_name": "Команда А"
+  },
+  {
+    "availability_bp": 9941,
+    "checks": {
+      "tcp": true,
+      "metrics": true,
+      "globalping": "ok"
+    },
+    "clients": 96,
+    "domains": [
+      "proxy1.example.com"
+    ],
+    "engine": "mt_proxy_l",
+    "is_master": true,
+    "port": 443,
+    "registered_at": "2026-09-25T12:00:00Z",
+    "master_since": "2026-11-04T10:50:00Z",
+    "rotates_at": "2026-11-04T12:36:50Z",
+    "state": "healthy",
+    "state_since": "2026-10-30T12:00:00Z",
+    "id": "beta-r8t4w",
+    "ip": "203.x.x.12",
+    "agent_version": "0.9.3",
+    "failed": [],
+    "full_ip": "203.0.113.12",
+    "last_heartbeat": "2026-11-04T11:59:48Z",
+    "owner_id": 2,
+    "owner_name": "Команда Б"
+  },
+  {
+    "availability_bp": 9902,
+    "checks": {
+      "tcp": true,
+      "metrics": true,
+      "globalping": "ok"
+    },
+    "clients": 61,
+    "domains": [
+      "proxy2.example.com"
+    ],
+    "engine": "meko",
+    "is_master": true,
+    "port": 443,
+    "registered_at": "2026-09-25T12:00:00Z",
+    "master_since": "2026-11-04T10:40:00Z",
+    "rotates_at": "2026-11-04T12:22:00Z",
+    "state": "healthy",
+    "state_since": "2026-10-30T12:00:00Z",
+    "id": "gamma-x2n9d",
+    "ip": "203.x.x.13",
+    "agent_version": "0.9.3",
+    "failed": [],
+    "full_ip": "203.0.113.13",
+    "last_heartbeat": "2026-11-04T11:59:48Z",
+    "owner_id": 1,
+    "owner_name": "Команда А"
+  },
+  {
+    "availability_bp": 9970,
+    "checks": {
+      "tcp": true,
+      "metrics": true,
+      "globalping": "ok"
+    },
+    "clients": 18,
+    "domains": [],
+    "engine": "telemt",
+    "is_master": false,
+    "port": 443,
+    "queue_position": 1,
+    "registered_at": "2026-09-25T12:00:00Z",
+    "state": "healthy",
+    "state_since": "2026-10-30T12:00:00Z",
+    "id": "epsilon-h4j6s",
+    "ip": "203.x.x.14",
+    "agent_version": "0.9.3",
+    "failed": [],
+    "full_ip": "203.0.113.14",
+    "last_heartbeat": "2026-11-04T11:59:48Z",
+    "owner_id": 2,
+    "owner_name": "Команда Б"
+  },
+  {
+    "checks": {
+      "tcp": true,
+      "metrics": true,
+      "globalping": "ok"
+    },
+    "clients": 7,
+    "domains": [],
+    "engine": "mt_proxy_l",
+    "is_master": false,
+    "port": 443,
+    "queue_position": 2,
+    "registered_at": "2026-09-25T12:00:00Z",
+    "state": "healthy",
+    "state_since": "2026-10-30T12:00:00Z",
+    "id": "zeta-w9b3y",
+    "ip": "203.x.x.15",
+    "agent_version": "0.9.3",
+    "failed": [],
+    "full_ip": "203.0.113.15",
+    "last_heartbeat": "2026-11-04T11:59:48Z",
+    "owner_id": 1,
+    "owner_name": "Команда А"
+  },
+  {
+    "availability_bp": 9815,
+    "checks": {
+      "tcp": true,
+      "metrics": true,
+      "globalping": "ok"
+    },
+    "clients": 3,
+    "domains": [],
+    "engine": "meko",
+    "is_master": false,
+    "port": 443,
+    "queue_position": 3,
+    "registered_at": "2026-09-25T12:00:00Z",
+    "state": "healthy",
+    "state_since": "2026-10-30T12:00:00Z",
+    "id": "eta-c5f8l",
+    "ip": "203.x.x.16",
+    "agent_version": "0.9.3",
+    "failed": [],
+    "full_ip": "203.0.113.16",
+    "last_heartbeat": "2026-11-04T11:59:48Z",
+    "owner_id": 2,
+    "owner_name": "Команда Б"
+  },
+  {
+    "availability_bp": 9120,
+    "checks": {
+      "tcp": true,
+      "metrics": false,
+      "globalping": "failed"
+    },
+    "domains": [],
+    "engine": "telemt",
+    "is_master": false,
+    "last_round": {
+      "at": "2026-11-04T11:50:00Z",
+      "verdict": "undecided",
+      "votes": [
+        {
+          "sensor": "globalping",
+          "vote": "blocked"
+        },
+        {
+          "sensor": "cheburcheck",
+          "vote": "abstain",
+          "reason": "unavailable"
+        }
+      ]
+    },
+    "next_round_at": "2026-11-04T12:08:00Z",
+    "port": 443,
+    "registered_at": "2026-09-25T12:00:00Z",
+    "state": "quarantine",
+    "state_since": "2026-11-04T10:30:00Z",
+    "id": "theta-m1d7z",
+    "ip": "203.x.x.17",
+    "agent_version": "0.9.3",
+    "failed": [
+      "globalping"
+    ],
+    "full_ip": "203.0.113.17",
+    "last_heartbeat": "2026-11-04T11:59:48Z",
+    "owner_id": 1,
+    "owner_name": "Команда А"
+  },
+  {
+    "checks": {
+      "tcp": true,
+      "metrics": true,
+      "globalping": "ok"
+    },
+    "domains": [],
+    "engine": "telemt",
+    "is_master": false,
+    "last_round": {
+      "at": "2026-11-04T09:00:00Z",
+      "verdict": "confirmed",
+      "votes": [
+        {
+          "sensor": "globalping",
+          "vote": "blocked"
+        },
+        {
+          "sensor": "cheburcheck",
+          "vote": "blocked"
+        },
+        {
+          "sensor": "redflag",
+          "vote": "abstain",
+          "reason": "not_configured"
+        }
+      ]
+    },
+    "port": 443,
+    "registered_at": "2026-09-25T12:00:00Z",
+    "state": "banned",
+    "state_since": "2026-11-04T09:00:00Z",
+    "id": "iota-p6q1c",
+    "ip": "203.x.x.18",
+    "full_ip": "203.0.113.18",
+    "agent_version": "0.9.3",
+    "failed": [],
+    "last_heartbeat": "2026-11-04T11:59:40Z",
+    "owner_id": 1,
+    "owner_name": "Команда А"
+  },
+  {
+    "checks": {
+      "tcp": true,
+      "metrics": true,
+      "globalping": "ok"
+    },
+    "domains": [],
+    "engine": "telemt",
+    "is_master": false,
+    "port": 443,
+    "registered_at": "2026-09-25T12:00:00Z",
+    "state": "pending",
+    "state_since": "2026-11-04T11:50:00Z",
+    "id": "kappa-d3v8n",
+    "ip": "203.x.x.19",
+    "full_ip": "203.0.113.19",
+    "failed": [
+      "heartbeat_stale"
+    ],
+    "owner_id": 2,
+    "owner_name": "Команда Б"
+  },
+  {
+    "checks": {
+      "tcp": true,
+      "metrics": true,
+      "globalping": "ok"
+    },
+    "domains": [],
+    "engine": "telemt",
+    "is_master": false,
+    "port": 443,
+    "registered_at": "2026-09-25T12:00:00Z",
+    "state": "dead",
+    "state_since": "2026-11-03T20:00:00Z",
+    "id": "lambda-z0s5f",
+    "ip": "203.x.x.20",
+    "full_ip": "203.0.113.20",
+    "agent_version": "0.9.2",
+    "failed": [
+      "tcp",
+      "heartbeat_stale"
+    ],
+    "last_heartbeat": "2026-11-03T19:50:00Z",
+    "owner_id": 1,
+    "owner_name": "Команда А"
+  }
+]

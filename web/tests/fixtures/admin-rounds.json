@@ -1,0 +1,94 @@
+[
+  {
+    "at": "2026-11-04T11:55:00Z",
+    "verdict": "undecided",
+    "votes": [
+      {
+        "sensor": "globalping",
+        "vote": "blocked",
+        "evidence": {
+          "probes": 20,
+          "failed": 11,
+          "cities": [
+            {
+              "city": "Москва",
+              "ok": 1,
+              "failed": 3
+            },
+            {
+              "city": "Казань",
+              "ok": 0,
+              "failed": 2
+            }
+          ]
+        }
+      },
+      {
+        "sensor": "cheburcheck",
+        "vote": "clear",
+        "evidence": {
+          "blocked": false
+        }
+      },
+      {
+        "sensor": "red_flag",
+        "vote": "abstain",
+        "reason": "not_configured",
+        "evidence": null
+      }
+    ]
+  },
+  {
+    "at": "2026-11-04T11:50:00Z",
+    "verdict": "undecided",
+    "votes": [
+      {
+        "sensor": "globalping",
+        "vote": "blocked",
+        "evidence": {
+          "probes": 20,
+          "failed": 12
+        }
+      },
+      {
+        "sensor": "cheburcheck",
+        "vote": "abstain",
+        "reason": "timeout",
+        "evidence": null
+      },
+      {
+        "sensor": "red_flag",
+        "vote": "abstain",
+        "reason": "not_configured",
+        "evidence": null
+      }
+    ]
+  },
+  {
+    "at": "2026-11-04T11:45:00Z",
+    "verdict": "clean",
+    "votes": [
+      {
+        "sensor": "globalping",
+        "vote": "clear",
+        "evidence": {
+          "probes": 20,
+          "failed": 2
+        }
+      },
+      {
+        "sensor": "cheburcheck",
+        "vote": "clear",
+        "evidence": {
+          "blocked": false
+        }
+      },
+      {
+        "sensor": "red_flag",
+        "vote": "abstain",
+        "reason": "not_configured",
+        "evidence": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,93 @@
+[
+  {
+    "id": 2,
+    "version": "0.9.4",
+    "created_at": "2026-11-04T11:00:00Z",
+    "phase": "batches",
+    "observing_since": "2026-11-04T11:10:00Z",
+    "next_batch_at": "2026-11-04T12:05:00Z",
+    "canary": "alpha-k3m2q",
+    "can_resume": false,
+    "can_cancel": true,
+    "timings": {
+      "observe_sec": 600,
+      "batch_interval_sec": 300,
+      "batch_percent": 10,
+      "return_sec": 120,
+      "offer_wait_sec": 300
+    },
+    "counts": {
+      "idle": 3,
+      "offered": 1,
+      "started": 0,
+      "updated": 3,
+      "failed": 0,
+      "missed": 0
+    },
+    "nodes": [
+      {
+        "node_id": "alpha-k3m2q",
+        "stage": "updated",
+        "version": "0.9.4",
+        "at": "2026-11-04T11:08:00Z"
+      },
+      {
+        "node_id": "beta-r8t4w",
+        "stage": "updated",
+        "version": "0.9.4",
+        "at": "2026-11-04T11:20:00Z"
+      },
+      {
+        "node_id": "gamma-x2n9d",
+        "stage": "updated",
+        "version": "0.9.4",
+        "at": "2026-11-04T11:20:30Z"
+      },
+      {
+        "node_id": "epsilon-h4j6s",
+        "stage": "offered",
+        "version": "0.9.3"
+      },
+      {
+        "node_id": "zeta-w9b3y",
+        "stage": "idle",
+        "version": "0.9.3"
+      },
+      {
+        "node_id": "eta-c5f8l",
+        "stage": "idle",
+        "version": "0.9.3"
+      },
+      {
+        "node_id": "theta-m1d7z",
+        "stage": "idle",
+        "version": "0.9.3"
+      }
+    ]
+  },
+  {
+    "id": 1,
+    "version": "0.9.3",
+    "created_at": "2026-10-20T11:00:00Z",
+    "phase": "done",
+    "changed_at": "2026-10-20T13:00:00Z",
+    "can_resume": false,
+    "can_cancel": false,
+    "timings": {
+      "observe_sec": 600,
+      "batch_interval_sec": 300,
+      "batch_percent": 10,
+      "return_sec": 120,
+      "offer_wait_sec": 300
+    },
+    "counts": {
+      "idle": 0,
+      "offered": 0,
+      "started": 0,
+      "updated": 7,
+      "failed": 0,
+      "missed": 0
+    },
+    "nodes": []
+  }
+]

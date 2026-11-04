@@ -1,0 +1,362 @@
+// @vitest-environment jsdom
+import { flushSync, mount, unmount } from 'svelte';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { t } from '../src/lib/i18n';
+import App from '../src/panel/App.svelte';
+import { MOCK_TOKEN } from '../scripts/admin-mock';
+import { FIXTURE_NOW, settle, setHidden } from './helpers';
+import { fakeAdmin, FakeEventSource, type FakeAdmin } from './panel-helpers';
+
+let app: ReturnType<typeof mount> | undefined;
+let target: HTMLElement;
+let api: FakeAdmin;
+
+function start(hash = ''): void {
+  window.location.hash = hash;
+  app = mount(App, {
+    target,
+    props: { fetchFn: api.fetchFn, eventSource: FakeEventSource as unknown as typeof EventSource },
+  });
+}
+
+beforeEach(() => {
+  vi.useFakeTimers({ now: FIXTURE_NOW });
+  setHidden(false);
+  FakeEventSource.reset();
+  api = fakeAdmin();
+  target = document.createElement('div');
+  document.body.append(target);
+});
+afterEach(() => {
+  if (app) unmount(app);
+  app = undefined;
+  target.remove();
+  document.body.replaceChildren();
+  vi.useRealTimers();
+});
+
+const text = () => document.body.textContent ?? '';
+
+/** One polling interval, exactly: `settle` repeats its step, which would be four rounds here. */
+async function pollOnce(): Promise<void> {
+  await vi.advanceTimersByTimeAsync(30_000);
+  flushSync();
+  await vi.advanceTimersByTimeAsync(5);
+  flushSync();
+}
+
+function type(input: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  flushSync();
+}
+
+async function click(el: Element | null | undefined): Promise<void> {
+  expect(el, 'element to click').toBeTruthy();
+  (el as HTMLElement).click();
+  await settle();
+}
+
+function button(label: string, root: ParentNode = document.body): HTMLButtonElement | undefined {
+  return [...root.querySelectorAll('button')].find((b) => b.textContent?.trim() === label);
+}
+
+async function login(token = MOCK_TOKEN): Promise<void> {
+  await settle();
+  const input = document.querySelector<HTMLInputElement>('input[name="token"]');
+  expect(input).toBeTruthy();
+  type(input!, token);
+  await click(button(t('panel.login.submit')));
+  await settle(50);
+}
+
+describe('login and session', () => {
+  it('login_with_token_then_session', async () => {
+    start('#/overview');
+    await login();
+    const post = api.calls.find((c) => c.method === 'POST' && c.path === '/admin/session');
+    expect(post?.body).toEqual({ token: MOCK_TOKEN });
+    expect(document.querySelector('h1')?.textContent).toBe(t('panel.overview.title'));
+    // The token is neither in the address nor in any storage.
+    expect(window.location.href).not.toContain(MOCK_TOKEN);
+    expect(JSON.stringify({ ...localStorage })).not.toContain(MOCK_TOKEN);
+    expect(JSON.stringify({ ...sessionStorage })).not.toContain(MOCK_TOKEN);
+  });
+
+  it('wrong_token_shows_error', async () => {
+    start('#/overview');
+    await login('nope');
+    expect(text()).toContain(t('panel.login.error'));
+    expect(document.querySelector('h1')?.textContent).toBe(t('panel.login.title'));
+    expect(api.calls.some((c) => c.path === '/admin/nodes')).toBe(false);
+  });
+
+  it('session_expired_returns_to_login_keeps_route', async () => {
+    start('#/nodes/alpha-k3m2q');
+    await login();
+    expect(document.querySelector('h1')?.textContent).toContain('alpha-k3m2q');
+    api.expire();
+    await pollOnce();
+    expect(document.querySelector('h1')?.textContent).toBe(t('panel.login.title'));
+    expect(text()).toContain(t('panel.login.expired'));
+    expect(window.location.hash).toBe('#/nodes/alpha-k3m2q');
+    await login();
+    expect(document.querySelector('h1')?.textContent).toContain('alpha-k3m2q');
+  });
+});
+
+describe('settings', () => {
+  async function openSettings(): Promise<void> {
+    start('#/settings');
+    await login();
+    await settle(50);
+  }
+
+  it('settings_human_labels_seconds_single_save_button', async () => {
+    await openSettings();
+    const form = document.querySelector('form.settings') as HTMLFormElement;
+    expect(form).toBeTruthy();
+    // One save button for the whole page.
+    expect(form.querySelectorAll('button[type="submit"]')).toHaveLength(1);
+    // Every setting the server has is on the page, by its dotted name.
+    const shown = new Set([...form.querySelectorAll<HTMLElement>('[data-key]')].map((e) => e.dataset.key));
+    const flat = (obj: Record<string, unknown>, prefix = ''): string[] =>
+      Object.entries(obj).flatMap(([k, v]) =>
+        k === 'secrets' ? [] : v && typeof v === 'object' && !Array.isArray(v) ? flat(v as Record<string, unknown>, `${prefix}${k}.`) : [`${prefix}${k}`],
+      );
+    for (const key of flat(api.mock.state.settings)) expect(shown, `field ${key}`).toContain(key);
+    // Labels are words, values are in seconds, and the code names stay out of sight.
+    expect(form.textContent).toContain(t('settings.heartbeat_interval_sec'));
+    expect(form.textContent).not.toContain('heartbeat_interval_sec');
+    expect(form.textContent).not.toContain('globalping_token');
+    const hb = form.querySelector<HTMLInputElement>('input[data-key="heartbeat_interval_sec"]');
+    expect(hb?.value).toBe('15');
+    expect(hb?.closest('.f')?.textContent).toContain(t('settings.unit.sec'));
+  });
+
+  it('settings_unsaved_warning', async () => {
+    await openSettings();
+    const form = document.querySelector('form.settings') as HTMLFormElement;
+    expect(text()).not.toContain(t('settings.unsaved'));
+    type(form.querySelector<HTMLInputElement>('input[data-key="rotation_ttl_sec"]')!, '2400');
+    expect(text()).toContain(t('settings.unsaved'));
+    // Leaving the tab asks for confirmation while there is something unsaved.
+    const leave = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(leave);
+    expect(leave.defaultPrevented).toBe(true);
+
+    form.requestSubmit();
+    await settle(50);
+    const patch = api.calls.find((c) => c.method === 'PATCH' && c.path === '/admin/settings');
+    expect(patch?.body).toEqual({ rotation_ttl_sec: 2400 });
+    expect(patch?.headers['x-csrf-token']).toBe('csrf-mock');
+    expect(text()).toContain(t('settings.saved'));
+    expect(text()).not.toContain(t('settings.unsaved'));
+    const after = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(after);
+    expect(after.defaultPrevented).toBe(false);
+  });
+
+  it('settings_invalid_value_blocks_the_save', async () => {
+    await openSettings();
+    const form = document.querySelector('form.settings') as HTMLFormElement;
+    type(form.querySelector<HTMLInputElement>('input[data-key="heartbeat_interval_sec"]')!, '0');
+    form.requestSubmit();
+    await settle(50);
+    expect(api.writes()).not.toContain('PATCH /admin/settings');
+    expect(form.textContent).toContain(t('settings.error.int', { min: 1, max: 86400 }));
+  });
+
+  it('secret_fields_write_only', async () => {
+    await openSettings();
+    const form = document.querySelector('form.settings') as HTMLFormElement;
+    // The server says only whether a secret is set; no input holds a value.
+    expect(form.textContent).toContain(t('settings.secret.set'));
+    expect(form.textContent).toContain(t('settings.secret.unset'));
+    expect(form.querySelectorAll('input[type="password"]')).toHaveLength(0);
+    const replace = [...form.querySelectorAll('button')].filter((b) => b.textContent?.trim() === t('settings.secret.replace'));
+    expect(replace.length).toBe(3);
+    await click(replace[2]);
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain(t('settings.secret.title', { label: t('settings.secret.cloudflare_api_token') }));
+    const field = dialog!.querySelector<HTMLInputElement>('input')!;
+    expect(field.value).toBe('');
+    type(field, 'cf-secret-value');
+    await click(button(t('common.save'), dialog!));
+    await settle(50);
+    const patch = api.calls.find((c) => c.method === 'PATCH');
+    expect(patch?.body).toEqual({ secrets: { cloudflare_api_token: 'cf-secret-value' } });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    // The value is gone from the page for good.
+    expect(document.body.outerHTML).not.toContain('cf-secret-value');
+    for (const input of document.querySelectorAll('input')) expect(input.value).not.toContain('cf-secret-value');
+  });
+});
+
+describe('tokens', () => {
+  it('new_token_shown_once_with_copy', async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    start('#/owners');
+    await login();
+    await click(button(t('panel.tokens.issue')));
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog).toBeTruthy();
+    await click(button(t('panel.tokens.create'), dialog));
+    const post = api.calls.find((c) => c.method === 'POST' && c.path === '/admin/tokens');
+    expect(post?.body).toMatchObject({ kind: 'enroll', owner_id: 1 });
+    const shown = document.querySelector('[role="dialog"] pre.code')?.textContent ?? '';
+    expect(shown).toMatch(/^mtp_enroll_secret/);
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(t('panel.tokens.once'));
+    await click(button(t('panel.tokens.copy')));
+    expect(writeText).toHaveBeenCalledWith(shown);
+    await click(button(t('panel.tokens.saved')));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    // The list has only the prefix: the value is not shown a second time.
+    expect(document.body.textContent).not.toContain(shown);
+    expect(document.body.textContent).toContain('mtp_enr_');
+  });
+});
+
+describe('node page', () => {
+  it('node_page_shows_votes_by_round_and_provider_hint', async () => {
+    start('#/nodes/theta-m1d7z');
+    await login();
+    const rounds = document.querySelectorAll('table.rounds tbody tr');
+    expect(rounds).toHaveLength(3);
+    const head = [...document.querySelectorAll('table.rounds thead th')].map((th) => th.textContent?.trim());
+    expect(head).toEqual([
+      t('panel.rounds.when'),
+      t('panel.rounds.verdict'),
+      t('sensor.globalping'),
+      t('sensor.cheburcheck'),
+      t('sensor.redflag'),
+    ]);
+    // A sensor that did not answer says why, in words.
+    expect(rounds[1].textContent).toContain(t('vote.reason.timeout'));
+    expect(rounds[0].textContent).toContain(t('vote.blocked'));
+    expect(rounds[2].textContent).toContain(t('vote.clear'));
+    // Probe cities show only where the evidence has them.
+    expect(rounds[0].textContent).toContain('Москва');
+    expect(rounds[1].textContent).not.toContain('Москва');
+    // The hint about the weakest vote: one "blocked" is not enough for a ban.
+    expect(text()).toContain(t('panel.node.hint'));
+  });
+
+  it('banned_node_has_unban_and_votes', async () => {
+    start('#/nodes/iota-p6q1c');
+    await login();
+    expect(button(t('panel.node.unban'))).toBeTruthy();
+    expect(button(t('panel.node.recheck'))).toBeUndefined();
+  });
+});
+
+describe('live data', () => {
+  it('stream_reconnect_and_fallback_to_poll', async () => {
+    start('#/nodes');
+    await login();
+    const es = FakeEventSource.last!;
+    expect(es.url).toBe('/api/v1/admin/stream');
+    es.open();
+    await settle();
+    expect(text()).toContain(t('panel.live.on'));
+    const base = api.count('/admin/nodes');
+    expect(base).toBe(1);
+
+    // An event refreshes what it touches at once.
+    es.emit('node_banned', { at: '2026-11-04T12:00:00Z', kind: 'node_banned', node: 'alpha-k3m2q' });
+    await settle(50);
+    expect(api.count('/admin/nodes')).toBe(base + 1);
+
+    // The stream drops: the page says so and keeps polling every 30 seconds.
+    es.fail();
+    await settle();
+    expect(text()).toContain(t('panel.live.off'));
+    await pollOnce();
+    expect(api.count('/admin/nodes')).toBe(base + 2);
+
+    // The browser gives up on the connection: the panel opens a new one after a pause.
+    es.fail(true);
+    await settle(6_000);
+    expect(FakeEventSource.all.length).toBe(2);
+    // Events missed while it was down are not replayed, so a reconnect reads everything again.
+    FakeEventSource.last!.open();
+    await settle(50);
+    expect(api.count('/admin/nodes')).toBeGreaterThan(base + 2);
+    expect(text()).toContain(t('panel.live.on'));
+  });
+
+  it('no_stream_support_means_polling_only', async () => {
+    window.location.hash = '#/nodes';
+    app = mount(App, { target, props: { fetchFn: api.fetchFn, eventSource: null } });
+    await login();
+    expect(text()).toContain(t('panel.live.off'));
+    await pollOnce();
+    expect(api.count('/admin/nodes')).toBe(2);
+  });
+});
+
+describe('cloudflare', () => {
+  it('cloudflare_error_banner', async () => {
+    api.mock.state.status.dns = {
+      ...api.mock.state.status.dns,
+      last_error: 'zone not found',
+      last_failed_at: '2026-11-04T11:58:00Z',
+      failed_24h: 2,
+      unsynced_domains: 1,
+    };
+    start('#/masters');
+    await login();
+    const banner = document.querySelector('[role="alert"]');
+    expect(banner?.textContent).toContain(t('panel.cf.errorTitle'));
+    expect(banner?.textContent).toContain('zone not found');
+    expect(button(t('panel.masters.push'))).toBeTruthy();
+  });
+
+  it('no_banner_when_dns_is_fine', async () => {
+    start('#/masters');
+    await login();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+  });
+});
+
+describe('destructive actions', () => {
+  it('destructive_actions_confirm', async () => {
+    start('#/nodes');
+    await login();
+    // A node leaves the pool only after a confirmation.
+    const menu = document.querySelector<HTMLButtonElement>('button[aria-label="' + t('panel.nodes.actions') + '"]');
+    await click(menu);
+    await click(button(t('panel.nodes.retire')));
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain(t('panel.retire.text'));
+    expect(api.writes().some((w) => w.includes('/retire'))).toBe(false);
+    await click(button(t('panel.retire.keep'), dialog));
+    expect(api.writes().some((w) => w.includes('/retire'))).toBe(false);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await click(document.querySelector<HTMLButtonElement>('button[aria-label="' + t('panel.nodes.actions') + '"]'));
+    await click(button(t('panel.nodes.retire')));
+    await click(button(t('panel.retire.confirm'), document.querySelector('[role="dialog"]')!));
+    expect(api.writes().filter((w) => w.endsWith('/retire'))).toHaveLength(1);
+  });
+
+  it('token_revoke_and_rollout_cancel_confirm', async () => {
+    start('#/owners');
+    await login();
+    await click(document.querySelector<HTMLButtonElement>('button[data-revoke]'));
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(t('panel.revoke.text'));
+    expect(api.writes().some((w) => w.startsWith('DELETE /admin/tokens'))).toBe(false);
+    await click(button(t('panel.revoke.keep'), document.querySelector('[role="dialog"]')!));
+    await click(document.querySelector<HTMLButtonElement>('button[data-revoke]'));
+    await click(button(t('panel.revoke.confirm'), document.querySelector('[role="dialog"]')!));
+    expect(api.writes().filter((w) => w.startsWith('DELETE /admin/tokens'))).toHaveLength(1);
+
+    window.location.hash = '#/updates';
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    await settle(50);
+    await click(button(t('panel.updates.cancel')));
+    expect(api.writes().some((w) => w.endsWith('/cancel'))).toBe(false);
+    await click(button(t('panel.updates.cancelConfirm'), document.querySelector('[role="dialog"]')!));
+    expect(api.writes().filter((w) => w.endsWith('/cancel'))).toHaveLength(1);
+  });
+});

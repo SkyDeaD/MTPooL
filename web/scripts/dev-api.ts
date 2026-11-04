@@ -7,6 +7,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
+import { createAdminMock } from './admin-mock.ts';
 
 const web = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURE_NOW = Date.parse('2026-11-04T12:00:00Z');
@@ -74,6 +75,52 @@ function answer(path: string, query: URLSearchParams): { status: number; body: u
   return { status: 404, body: { code: 'not_found' } };
 }
 
+// The admin API: one mock for the whole dev server, so a login and the changes made in the panel
+// last until the server restarts. The token to sign in with is `good-token`.
+const admin = createAdminMock();
+
+function readBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      try {
+        resolve(chunks.length > 0 ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : undefined);
+      } catch {
+        resolve(undefined);
+      }
+    });
+  });
+}
+
+async function handleAdmin(req: IncomingMessage, res: ServerResponse, path: string, query: URLSearchParams): Promise<void> {
+  if (path === '/admin/stream') {
+    // Only a heartbeat comment: the panel then shows the live mode, events are not made up here.
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+    res.write(': open\n\n');
+    const beat = setInterval(() => res.write(': beat\n\n'), 15_000);
+    req.on('close', () => clearInterval(beat));
+    return;
+  }
+  const headers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(req.headers)) headers[k] = Array.isArray(v) ? v.join(',') : (v ?? '');
+  const body = await readBody(req);
+  const out = admin.handle({ method: req.method ?? 'GET', path, query, headers, body });
+  const text = out.body === undefined ? '' : JSON.stringify(shift(out.body, Date.now() - FIXTURE_NOW));
+  res.statusCode = out.status;
+  if (text) res.setHeader('Content-Type', 'application/json');
+  if (out.status === 200 && req.method === 'GET') {
+    const tag = `"${createHash('sha1').update(text).digest('hex').slice(0, 16)}"`;
+    res.setHeader('ETag', tag);
+    if (req.headers['if-none-match'] === tag) {
+      res.statusCode = 304;
+      res.end();
+      return;
+    }
+  }
+  res.end(text);
+}
+
 function handle(req: IncomingMessage, res: ServerResponse, next: () => void): void {
   const url = new URL(req.url ?? '/', 'http://localhost');
   if (url.pathname === '/api/v1/openapi.json') {
@@ -88,6 +135,10 @@ function handle(req: IncomingMessage, res: ServerResponse, next: () => void): vo
   }
   if (!url.pathname.startsWith('/api/v1/')) return next();
   const path = url.pathname.slice('/api/v1'.length);
+  if (path.startsWith('/admin/')) {
+    void handleAdmin(req, res, path, url.searchParams);
+    return;
+  }
   const qr = path.match(/^\/links\/([^/]+)\/qr\.svg$/);
   if (qr) {
     res.setHeader('Content-Type', 'image/svg+xml');

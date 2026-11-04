@@ -1,0 +1,29 @@
+[
+  {
+    "id": 3,
+    "at": "2026-11-04T10:00:00Z",
+    "actor": "admin",
+    "action": "settings.update",
+    "detail": {
+      "fields": [
+        "rotation_ttl_sec"
+      ]
+    }
+  },
+  {
+    "id": 2,
+    "at": "2026-11-03T15:00:00Z",
+    "actor": "admin",
+    "action": "token.create",
+    "target": "2",
+    "detail": {}
+  },
+  {
+    "id": 1,
+    "at": "2026-11-03T14:00:00Z",
+    "actor": "admin",
+    "action": "owner.create",
+    "target": 2,
+    "detail": {}
+  }
+]
