@@ -4,25 +4,24 @@
 
 ## Состояния
 
+```mermaid
+stateDiagram-v2
+  accTitle: Состояния ноды
+  accDescr: Переходы ноды между Pending, Healthy, Quarantine, Banned, Dead и Pruned.
+  direction LR
+  [*] --> Pending: регистрация
+  Pending --> Healthy: все условия верны
+  Pending --> Quarantine: условие нарушено
+  Healthy --> Quarantine: условие нарушено
+  Healthy --> Pending: сменился IP
+  Quarantine --> Healthy: условия снова верны или 2 чистых раунда
+  Quarantine --> Banned: не меньше 2 голосов Blocked
+  Quarantine --> Dead: не жива 10 минут
+  Quarantine --> Pruned: нет решения 60 минут
+  Banned --> Pending: чистый reverify или ручной разбан
 ```
-              регистрация
-                  │
-                  ▼
-              Pending ──первый верный отчёт──► Healthy ◄──────────┐
-                  │                              │                │
-                  │ триггер                      │ триггер        │ 2 чистых раунда
-                  ▼                              ▼                │
-              ┌──────────────── Quarantine ──────────────────────┘
-              │                │               │
-     не жива 10 минут     ≥ 2 голоса       нет решения 60 минут
-              ▼            Blocked                ▼
-            Dead              ▼                Pruned
-                           Banned
-                              │
-                 reverify с этого IP чистый
-                              ▼
-                           Pending
-```
+
+На схеме показаны основные пути. В `Dead` нода попадает и из `Pending`, если не жива 10 минут, а смена IP возвращает в `Pending` и из `Quarantine`.
 
 | Состояние | Что значит |
 |---|---|

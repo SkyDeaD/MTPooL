@@ -24,15 +24,38 @@ Credit for the original idea is in [NOTICE](NOTICE). The documentation in `docs/
 
 ## How it works
 
-```
- node (agent) --heartbeat, reports-->  registrar  --A/CNAME-->  Cloudflare
- node (agent) --heartbeat, reports-->     |
-                                          |--> Globalping   \
-                                          |--> Cheburcheck   > sensor votes
-                                          '--> RedFlag      /
- visitor  <-- public pages and API -------|
- operator <-- panel /panel/ and API ------|
- bot      <-- API /api/v1/me and webhooks-'
+```mermaid
+flowchart LR
+  accTitle: How the pool is built
+  accDescr: Nodes send reports to the registrar and get settings back. The registrar asks the sensors and keeps the DNS in Cloudflare. A Telegram client finds the address through DNS and connects to a master.
+  client["Telegram client"]
+  visitor["Visitor"]
+  operator["Operator"]
+  bot["Bot"]
+
+  subgraph pool["Nodes: engine and mtpool-agent"]
+    master["Master"]
+    queued["Queued node"]
+  end
+
+  registrar["Registrar<br>mtpool-registrar"]
+  cloudflare["Cloudflare DNS"]
+
+  subgraph sensors["Sensors: a ban takes two Blocked votes"]
+    globalping["Globalping"]
+    cheburcheck["Cheburcheck"]
+    redflag["RedFlag"]
+  end
+
+  visitor -- "public pages" --> registrar
+  operator -- "panel /panel/" --> registrar
+  bot <-- "API and webhooks" --> registrar
+  pool -- "heartbeat, reports" --> registrar
+  registrar -- "settings" --> pool
+  registrar -- "A / CNAME" --> cloudflare
+  registrar -- "IP check" --> sensors
+  client -- "domain name" --> cloudflare
+  client -- "MTProto" --> master
 ```
 
 - **Node**: a server with an MTProto engine (telemt, MTProxyL or MEKO) and the `mtpool-agent` service. The agent reports health and applies the pool's settings.

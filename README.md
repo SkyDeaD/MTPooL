@@ -24,15 +24,38 @@ MTPooL — пул MTProto-прокси. Серверы регистрируют�
 
 ## Как это работает
 
-```
- нода (агент) ──heartbeat, отчёты──►  регистратор  ──A/CNAME──►  Cloudflare
- нода (агент) ──heartbeat, отчёты──►      │
-                                          ├──► Globalping   ┐
-                                          ├──► Cheburcheck  ├─ голоса сенсоров
-                                          └──► RedFlag      ┘
- посетитель ◄── публичные страницы и API ─┤
- оператор   ◄── панель /panel/ и API ─────┤
- бот        ◄── API /api/v1/me и webhooks ┘
+```mermaid
+flowchart LR
+  accTitle: Как устроен пул
+  accDescr: Ноды шлют регистратору отчёты и получают настройки. Регистратор спрашивает сенсоры и ведёт DNS в Cloudflare. Клиент Telegram узнаёт адрес из DNS и подключается к мастеру.
+  client["Клиент Telegram"]
+  visitor["Посетитель"]
+  operator["Оператор"]
+  bot["Бот"]
+
+  subgraph pool["Ноды: движок и mtpool-agent"]
+    master["Мастер"]
+    queued["Нода в очереди"]
+  end
+
+  registrar["Регистратор<br>mtpool-registrar"]
+  cloudflare["Cloudflare DNS"]
+
+  subgraph sensors["Сенсоры: бан от двух голосов Blocked"]
+    globalping["Globalping"]
+    cheburcheck["Cheburcheck"]
+    redflag["RedFlag"]
+  end
+
+  visitor -- "публичные страницы" --> registrar
+  operator -- "панель /panel/" --> registrar
+  bot <-- "API и webhooks" --> registrar
+  pool -- "heartbeat, отчёты" --> registrar
+  registrar -- "настройки" --> pool
+  registrar -- "A / CNAME" --> cloudflare
+  registrar -- "проверка IP" --> sensors
+  client -- "имя домена" --> cloudflare
+  client -- "MTProto" --> master
 ```
 
 - **Нода** — сервер с MTProto-движком (telemt, MTProxyL или MEKO) и агентом `mtpool-agent`. Агент сообщает о здоровье и применяет настройки пула.
