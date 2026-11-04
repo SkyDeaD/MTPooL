@@ -1,6 +1,7 @@
 <script lang="ts">
   import { t } from '../lib/i18n';
   import { loadRapidoc } from '../lib/rapidoc';
+  import { currentTheme } from '../lib/theme';
   import { toast } from '../lib/toast.svelte';
   import { messages, type MessageKey } from '../strings.ru';
   import Icon from '../shared/Icon.svelte';
@@ -55,9 +56,27 @@ def verify(secret: bytes, body: bytes, header: str) -> bool:
     el.setAttribute('render-style', 'focused');
     el.setAttribute('goto-path', `${route.method.toLowerCase()}-${route.path}`);
     el.setAttribute('show-header', 'false');
+    el.setAttribute('show-side-nav', 'false');
+    el.setAttribute('show-info', 'false');
+    el.setAttribute('load-fonts', 'false');
+    el.setAttribute('allow-search', 'false');
+    el.setAttribute('allow-advanced-search', 'false');
+    el.setAttribute('allow-spec-url-load', 'false');
+    el.setAttribute('allow-spec-file-load', 'false');
+    el.setAttribute('allow-spec-file-download', 'false');
     el.setAttribute('allow-authentication', 'false');
     el.setAttribute('allow-server-selection', 'false');
-    el.setAttribute('theme', document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
+    // The document names no server: requests go to the pool that serves this page.
+    el.setAttribute('server-url', location.origin);
+    el.style.cssText = 'display:block;height:640px;margin-top:10px';
+    el.setAttribute('update-route', 'false');
+    // Its own orange and fonts would make it a different product inside the page.
+    const css = getComputedStyle(document.documentElement);
+    el.setAttribute('theme', currentTheme());
+    el.setAttribute('bg-color', css.getPropertyValue('--surf').trim());
+    el.setAttribute('text-color', css.getPropertyValue('--fg').trim());
+    el.setAttribute('primary-color', css.getPropertyValue('--acc').trim());
+    el.setAttribute('regular-font', getComputedStyle(document.body).fontFamily);
     node.append(el);
     return { destroy: () => el.remove() };
   }
@@ -106,7 +125,7 @@ def verify(secret: bytes, body: bytes, header: str) -> bool:
       {#each sections as s (s)}<a href="#sec-{s}">{t(`api.sec.${s}`)}</a>{/each}
     </nav>
     <div class="stack">
-      <section class="t" id="sec-quick" style="--i:0">
+      <section class="t" id="sec-quick">
         <div class="th"><h2>{t('api.sec.quick')}</h2></div>
         <div class="tb-b stack">
           <p class="muted" style="max-width:70ch">{t('api.quick.text')}</p>
@@ -114,13 +133,13 @@ def verify(secret: bytes, body: bytes, header: str) -> bool:
         </div>
       </section>
 
-      <section class="t" id="sec-pub" style="--i:1">
+      <section class="t" id="sec-pub">
         <div class="th"><h2>{t('api.sec.pub')}</h2><span class="sub">{t('api.pub.sub')}</span></div>
         {#each publicRoutes as r (r.method + r.path)}{@render route(r, true)}{/each}
         {#if failed}<p class="stale">{t('api.tryFailed')}</p>{/if}
       </section>
 
-      <section class="t" id="sec-bot" style="--i:2">
+      <section class="t" id="sec-bot">
         <div class="th"><h2>{t('api.sec.bot')}</h2><span class="sub">{t('api.bot.sub')}</span></div>
         <div class="tb-b stack">
           <div class="prose"><p>{t('api.bot.text')}</p></div>
@@ -129,7 +148,7 @@ def verify(secret: bytes, body: bytes, header: str) -> bool:
         {#each botRoutes as r (r.method + r.path)}{@render route(r, false)}{/each}
       </section>
 
-      <section class="t" id="sec-hooks" style="--i:3">
+      <section class="t" id="sec-hooks">
         <div class="th"><h2>{t('api.sec.hooks')}</h2><span class="sub">{t('api.hooks.sub')}</span></div>
         <div class="tb-b stack">
           <div class="prose">
@@ -140,7 +159,7 @@ def verify(secret: bytes, body: bytes, header: str) -> bool:
         </div>
       </section>
 
-      <section class="t" id="sec-errs" style="--i:4">
+      <section class="t" id="sec-errs">
         <div class="th"><h2>{t('api.sec.errs')}</h2></div>
         <div class="tb-b stack">
           <p class="muted" style="max-width:70ch">{t('api.errs.text')}</p>
