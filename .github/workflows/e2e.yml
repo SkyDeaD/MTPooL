@@ -21,7 +21,7 @@ jobs:
         # Each scenario brings its own stand up and takes it down; a failed one prints the logs
         # of its services. The test key and the images are made by the first stand.
         run: |
-          cargo test -p mtpool-e2e --locked --test smoke --test scenarios --test operations -- --ignored --nocapture --test-threads=1
+          cargo test -p mtpool-e2e --locked --test smoke --test scenarios --test operations --test rollout --test footprint -- --ignored --nocapture --test-threads=1
       - name: Collect the logs of the stand
         if: failure()
         run: |

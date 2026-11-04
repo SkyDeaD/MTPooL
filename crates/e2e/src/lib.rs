@@ -21,6 +21,7 @@ pub use update::{RegistrarRelease, registrar_release};
 use std::fmt;
 use std::path::PathBuf;
 use std::process::{Command as StdCommand, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -89,13 +90,16 @@ fn compose_file() -> PathBuf {
     path.canonicalize().unwrap_or(path)
 }
 
-/// A project name no other run shares: six hex digits from the clock and the process.
+/// A project name nothing else shares: six hex digits from the clock and the process tell runs
+/// apart, a counter tells apart the stands of one run, which start within the same clock tick.
 fn project_name() -> String {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.subsec_nanos());
     let mixed = nanos.rotate_left(13) ^ std::process::id().wrapping_mul(2_654_435_761);
-    format!("mtpool-e2e-{:06x}", mixed & 0x00ff_ffff)
+    let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+    format!("mtpool-e2e-{:06x}-{serial}", mixed & 0x00ff_ffff)
 }
 
 /// The output of a finished command, failing with it unless it succeeded.
@@ -742,4 +746,16 @@ async fn configure(admin: &Admin) -> Result<()> {
         )
         .await
         .map(|_| ())
+}
+
+#[cfg(test)]
+mod project_name_tests {
+    use super::project_name;
+    use std::collections::HashSet;
+
+    #[test]
+    fn project_names_never_repeat_inside_one_run() {
+        let names: HashSet<String> = (0..4096).map(|_| project_name()).collect();
+        assert_eq!(names.len(), 4096);
+    }
 }
