@@ -1447,3 +1447,66 @@ async fn agent_routes_refuse_other_methods() {
     .await;
     assert_problem(&resp, StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed");
 }
+
+#[derive(Clone)]
+struct Journal(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Journal {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The log of this test binary. Global: a scoped subscriber misses a line that another test
+/// reaches first. Other tests write here too, so a test reads the lines of its own node.
+fn journal() -> &'static Arc<Mutex<Vec<u8>>> {
+    static LOGS: std::sync::OnceLock<Arc<Mutex<Vec<u8>>>> = std::sync::OnceLock::new();
+    LOGS.get_or_init(|| {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let sink = Journal(Arc::clone(&buf));
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .with_writer(move || sink.clone())
+            .finish();
+        tracing::subscriber::set_global_default(subscriber).expect("one global subscriber");
+        buf
+    })
+}
+
+#[tokio::test]
+async fn a_report_without_a_measurement_says_why_in_the_log() {
+    const NODE: &str = "gamma-00077";
+    let logs = journal();
+    let lines = || -> Vec<String> {
+        String::from_utf8_lossy(&logs.lock().unwrap())
+            .lines()
+            .filter(|l| l.contains(NODE))
+            .map(str::to_owned)
+            .collect()
+    };
+    let env = env(pool(vec![node_at(
+        NODE,
+        [45, 33, 1, 5],
+        NodeState::Healthy,
+    )]));
+    let token = node_token(&env, NODE);
+    env.clock.store(NOW + 30_000, Ordering::SeqCst);
+    let body =
+        |reason: &str| report_at(NOW + 30_000, json!({ "kind": "no_data", "reason": reason }));
+
+    // The usual report between measurements says nothing, and neither does an unknown word.
+    report(&env, &token, body("no_data")).await;
+    report(&env, &token, body("made-up-word")).await;
+    assert_eq!(lines(), Vec::<String>::new());
+
+    report(&env, &token, body("rate_limited")).await;
+    let lines = lines();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains("no Globalping measurement"), "{lines:?}");
+    assert!(lines[0].contains("RateLimited"), "{lines:?}");
+}
