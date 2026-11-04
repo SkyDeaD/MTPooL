@@ -28,7 +28,9 @@ describe('node page', () => {
     await settle();
     expect(target.querySelector('h1')?.textContent).toContain('theta-m1d7z');
     expect(target.querySelectorAll('.vote')).toHaveLength(2);
-    expect(target.textContent).toContain('timeout from 3 of 5 probes');
+    // An abstention shows its reason as words, never as the raw code.
+    expect(target.textContent).toContain(t('vote.reason.unavailable'));
+    expect(target.textContent).not.toContain('unavailable');
     const strip = target.querySelectorAll('.hs i');
     expect(strip).toHaveLength(96);
     // A bucket with no samples is drawn as "no data", never as a failure.

@@ -3,7 +3,7 @@
   import { shortDomain } from '../lib/model';
   import { useResource } from '../lib/resource.svelte';
   import { toast } from '../lib/toast.svelte';
-  import type { ProxyLink } from '../lib/types';
+  import type { ProxyLink, PublicDomain } from '../lib/types';
   import Icon from '../shared/Icon.svelte';
   import PublicShell from './PublicShell.svelte';
 
@@ -12,7 +12,19 @@
   let { fetchFn }: { fetchFn?: typeof fetch } = $props();
 
   const links = useResource<ProxyLink[]>(() => '/api/v1/links', fetchFn);
+  const domains = useResource<PublicDomain[]>(() => '/api/v1/domains', fetchFn);
   const steps = ['one', 'two', 'three'] as const;
+
+  // «Порт 443, мастер alpha»: the port is the one in the link; a folded domain says where it runs.
+  function subline(link: ProxyLink): string | null {
+    const d = domains.data?.find((x) => x.domain === link.domain);
+    if (!d) return null;
+    const port = new URLSearchParams(link.link.split('?')[1] ?? '').get('port') ?? '443';
+    if (d.folded_into) return t('links.sub.folded', { port, domain: shortDomain(d.folded_into) });
+    if (d.masters.length === 0) return null;
+    const nodes = d.masters.join(', ');
+    return t(d.masters.length > 1 ? 'links.sub.masters' : 'links.sub.master', { port, nodes });
+  }
 
   async function copy(link: ProxyLink): Promise<void> {
     try {
@@ -58,7 +70,10 @@
                 <img class="qr-img" src={link.qr_url} alt={t('links.qr', { domain: link.domain })} width="132" height="132" loading="lazy" />
               </div>
               <div class="stack" style="gap:10px">
-                <div class="d">{link.domain}</div>
+                <div>
+                  <div class="d">{link.domain}</div>
+                  {#if subline(link)}<div class="sub-l muted sm">{subline(link)}</div>{/if}
+                </div>
                 <div class="row w">
                   <a class="btn pri s" href={link.link}><Icon name="send" />{t('links.open.button')}</a>
                   <button class="btn s" type="button" onclick={() => copy(link)}><Icon name="copy" />{t('links.copy')}</button>

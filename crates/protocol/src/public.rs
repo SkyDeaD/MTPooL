@@ -70,6 +70,9 @@ pub struct PublicNode {
     /// master.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue_position: Option<u32>,
+    /// For a master: since when it has been master (its earliest slot start, RFC 3339, UTC).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master_since: Option<String>,
     /// For a master: when its slot is due to rotate (RFC 3339, UTC). Absent when rotation is
     /// off.
     #[serde(default, skip_serializing_if = "Option::is_none")]

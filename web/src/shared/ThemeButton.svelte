@@ -10,6 +10,6 @@
   });
 </script>
 
-<button class="btn s ic" type="button" aria-label={t('shell.theme')} onclick={() => (theme = toggleTheme())}>
+<button class="btn s ic txt" type="button" aria-label={t('shell.theme')} onclick={() => (theme = toggleTheme())}>
   <Icon name={theme === 'dark' ? 'sun' : 'moon'} />
 </button>

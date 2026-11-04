@@ -1,5 +1,6 @@
 <script lang="ts" generics="V extends string">
-  // A row of buttons where one is chosen, such as a range or a metric.
+  // A row of buttons where one is chosen, such as a range or a metric. A thumb slides under the
+  // pressed one.
   let {
     items,
     value,
@@ -11,9 +12,32 @@
     onchange: (value: V) => void;
     label: string;
   } = $props();
+
+  let seg: HTMLElement | undefined = $state();
+  let thumb: HTMLElement | undefined = $state();
+
+  function place(): void {
+    const on = seg?.querySelector<HTMLElement>('button[aria-pressed="true"]');
+    if (!thumb || !on) return;
+    thumb.style.width = `${on.offsetWidth}px`;
+    thumb.style.transform = `translateX(${on.offsetLeft}px)`;
+  }
+
+  // Again when the choice changes and when the buttons change size (a font arrives, the window
+  // narrows).
+  $effect(() => {
+    void value;
+    void items;
+    place();
+    if (!seg || typeof ResizeObserver === 'undefined') return;
+    const watch = new ResizeObserver(place);
+    watch.observe(seg);
+    return () => watch.disconnect();
+  });
 </script>
 
-<div class="seg" role="group" aria-label={label}>
+<div class="seg" role="group" aria-label={label} bind:this={seg}>
+  <span class="thumb" bind:this={thumb}></span>
   {#each items as item (item.value)}
     <button type="button" aria-pressed={item.value === value} onclick={() => onchange(item.value)}>
       {item.label}

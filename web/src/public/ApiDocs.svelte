@@ -134,7 +134,7 @@ def verify(secret: bytes, body: bytes, header: str) -> bool:
         <div class="tb-b stack">
           <div class="prose">
             <p><b>{t('api.hooks.events')}</b> {#each events as e, i (e)}<code>{e}</code>{i < events.length - 1 ? ', ' : '.'}{/each}</p>
-            <p>{t('api.hooks.sign')} <code>X-MTPooL-Signature</code>: <code>t=&lt;ts&gt;,v1=&lt;hex&gt;</code>. {t('api.hooks.signText')}</p>
+            <p>{t('api.hooks.sign')} <code>X-MTPooL-Signature</code> {t('api.hooks.signHas')} <code>t=&lt;время&gt;,v1=&lt;подпись&gt;</code>. {t('api.hooks.signText')}</p>
           </div>
           {@render code(verify)}
         </div>

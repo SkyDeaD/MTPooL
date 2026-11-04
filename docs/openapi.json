@@ -5339,6 +5339,13 @@
               }
             ]
           },
+          "master_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For a master: since when it has been master (its earliest slot start, RFC 3339, UTC)."
+          },
           "next_round_at": {
             "type": [
               "string",

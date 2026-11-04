@@ -1,7 +1,7 @@
 <script lang="ts">
   import { useNow } from '../lib/clock.svelte';
   import { formatSpan } from '../lib/dates';
-  import { t } from '../lib/i18n';
+  import { t, tp } from '../lib/i18n';
   import { buildScheme, formatAvailability, groupNodes, poolCounts } from '../lib/model';
   import { useResource } from '../lib/resource.svelte';
   import type { ClientsRange, ClientsSeries, PublicDomain, PublicNode, StatsSummary } from '../lib/types';
@@ -37,7 +37,17 @@
       groups.quarantine.length === 0 &&
       (scheme?.domains.every((d) => d.masters.length > 0) ?? true),
   );
-  const lastBans = $derived(summary.data?.kpi);
+  const heroText = $derived.by(() => {
+    if (!groups || !counts) return '';
+    const q = groups.quarantine.length;
+    if (!healthy) {
+      return q === 1
+        ? t('stats.hero.changesOne')
+        : t('stats.hero.changesMany', { n: q, word: tp('unit.node', q) });
+    }
+    return counts.shown === 1 ? t('stats.hero.okOne') : t('stats.hero.okText', { n: counts.shown });
+  });
+  const lastBans =$derived(summary.data?.kpi);
 </script>
 
 <PublicShell active="stats" {updatedAt} {stale}>
@@ -55,7 +65,7 @@
           <span class={['ic', !healthy && 'warn']}><Icon name={healthy ? 'check' : 'alert'} lg /></span>
           <div>
             <h1>{healthy ? t('stats.hero.ok') : t('stats.hero.changes')}</h1>
-            <p class="muted" style="margin-top:3px">{healthy ? t('stats.hero.okText') : t('stats.hero.changesText')}</p>
+            <p class="muted" style="margin-top:3px">{heroText}</p>
           </div>
         </div>
         <a class="btn pri" href="/links"><Icon name="send" />{t('stats.hero.connect')}</a>

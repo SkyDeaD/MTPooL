@@ -1440,6 +1440,8 @@ export interface components {
             /** @description Whether the node is the master of at least one domain. */
             is_master: boolean;
             last_round?: components["schemas"]["LastRound"] | null;
+            /** @description For a master: since when it has been master (its earliest slot start, RFC 3339, UTC). */
+            master_since?: string | null;
             /** @description When the next sensor round of the node is due (RFC 3339, UTC). */
             next_round_at?: string | null;
             /** Format: int32 */

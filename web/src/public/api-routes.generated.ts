@@ -8,11 +8,18 @@ export interface ApiRoute {
 export const publicRoutes: ApiRoute[] = [
   {
     "method": "GET",
-    "path": "/api/v1/bans",
-    "query": [
-      "limit",
-      "before"
-    ]
+    "path": "/api/v1/nodes",
+    "query": []
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/nodes/{id}",
+    "query": []
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/nodes/{id}/history",
+    "query": []
   },
   {
     "method": "GET",
@@ -31,23 +38,11 @@ export const publicRoutes: ApiRoute[] = [
   },
   {
     "method": "GET",
-    "path": "/api/v1/nodes",
-    "query": []
-  },
-  {
-    "method": "GET",
-    "path": "/api/v1/nodes/{id}",
-    "query": []
-  },
-  {
-    "method": "GET",
-    "path": "/api/v1/nodes/{id}/history",
-    "query": []
-  },
-  {
-    "method": "GET",
-    "path": "/api/v1/openapi.json",
-    "query": []
+    "path": "/api/v1/bans",
+    "query": [
+      "limit",
+      "before"
+    ]
   },
   {
     "method": "GET",
@@ -69,6 +64,11 @@ export const publicRoutes: ApiRoute[] = [
     "query": [
       "range"
     ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/openapi.json",
+    "query": []
   },
   {
     "method": "GET",

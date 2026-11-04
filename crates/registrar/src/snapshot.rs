@@ -137,6 +137,7 @@ impl<'a> View<'a> {
                 },
             },
             queue_position: self.queue.get(&n.id).copied(),
+            master_since: self.since_of.get(n.id.as_str()).map(|at| rfc3339(*at)),
             rotates_at,
             next_round_at: next_round_at(n, settings).map(|at| rfc3339(at.0)),
             availability_bp: stats.and_then(|s| s.availability_bp),
@@ -381,6 +382,25 @@ mod tests {
         let snapshot = Snapshot::build(&state);
         let doc = &snapshot.node_docs["alpha-00001"];
         assert_eq!(doc.rotates_at, Some(rfc3339(T0 + 1_000 + 600_000)));
+    }
+
+    #[test]
+    fn a_master_shows_since_when_it_has_been_master() {
+        let mut state = pool(
+            settings(600),
+            vec![node("alpha-00001", T0), node("alpha-00002", T0)],
+        );
+        make_master(&mut state, "a.example.com", "alpha-00001", T0 + 5_000);
+        make_master(&mut state, "b.example.com", "alpha-00001", T0 + 1_000);
+        let snapshot = Snapshot::build(&state);
+        assert_eq!(
+            snapshot.node_docs["alpha-00001"].master_since,
+            Some(rfc3339(T0 + 1_000))
+        );
+        let other = &snapshot.node_docs["alpha-00002"];
+        assert_eq!(other.master_since, None);
+        let json = serde_json::to_value(other).unwrap();
+        assert!(json.get("master_since").is_none());
     }
 
     #[test]

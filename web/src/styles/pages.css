@@ -11,6 +11,8 @@
 .tb th button:hover{color:var(--fg)}
 .tb th button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 .nm{font-weight:500}
+a.nm{color:var(--fg);text-decoration:none}
+a.nm:hover{text-decoration:underline}
 .nm-s{color:var(--fg3);font-size:12.5px;margin-top:1px}
 .bar{display:block;height:3px;border-radius:2px;background:var(--line);overflow:hidden;margin-top:6px;min-width:56px}
 .bar i{display:block;height:100%;border-radius:2px;background:var(--acc);transform-origin:left;animation:grow .45s cubic-bezier(.2,.7,.2,1) both;transition:width .9s linear}
@@ -276,7 +278,6 @@ dialog::backdrop{background:var(--scrim)}
   .lk::after,.dot::after,.run,.ccs .pulse{display:none}
 }
 @keyframes rise{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
-pre.code{margin:0;padding:12px;background:var(--bg);border:1px solid var(--line);border-radius:var(--r2);font:12.5px/1.55 var(--mono);overflow-x:auto;white-space:pre;color:var(--fg);tab-size:2}
 .codew{position:relative}
 .codew .btn{position:absolute;top:6px;right:6px;background:var(--surf)}
 

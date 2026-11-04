@@ -1,5 +1,6 @@
 <script lang="ts">
   import { t, tp } from '../lib/i18n';
+  import type { PublicNode } from '../lib/types';
   import { clock, ENGINE_NAMES, secondsUntil, shortDomain, type Scheme } from '../lib/model';
 
   // Domains on the left, their masters on the right. A folded domain hangs under the domain its
@@ -9,7 +10,15 @@
 
   const anyFold = $derived(scheme.domains.some((d) => d.folded.length > 0));
   // The dot animations are made for 1 to 8 masters of a domain.
-  const kOf = (n: number) => Math.min(8, Math.max(1, n));
+  // How much of its turn a master has served, in whole percent; null when either end is unknown.
+  function elapsed(m: PublicNode, nowMs: number): number | null {
+    if (!m.master_since || !m.rotates_at) return null;
+    const from = Date.parse(m.master_since);
+    const to = Date.parse(m.rotates_at);
+    if (Number.isNaN(from) || Number.isNaN(to) || to <= from) return null;
+    return Math.round(Math.min(1, Math.max(0, (nowMs - from) / (to - from))) * 100);
+  }
+  const kOf =(n: number) => Math.min(8, Math.max(1, n));
 </script>
 
 <section class="t">
@@ -45,6 +54,7 @@
               </div>
               <div class="s" style="margin-top:2px"><span class="mono">{m.ip}</span>, {ENGINE_NAMES[m.engine]}</div>
               {#if left !== null}<div class="s" style="margin-top:6px">{t('scheme.rotates', { time: clock(left) })}</div>{/if}
+              {#if left !== null && elapsed(m, now) !== null}<span class="bar"><i style="width:{elapsed(m, now)}%"></i></span>{/if}
             </a>
           </div>
         {/each}

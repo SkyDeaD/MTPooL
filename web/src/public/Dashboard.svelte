@@ -1,5 +1,6 @@
 <script lang="ts">
   import { formatSpan } from '../lib/dates';
+  import { formatBytes } from '../lib/format';
   import { t, tp } from '../lib/i18n';
   import { reasonLabel } from '../lib/model';
   import { useResource } from '../lib/resource.svelte';
@@ -12,7 +13,7 @@
   // How often the pool loses nodes and how long they live: three figures, a chart and the log.
   let { fetchFn }: { fetchFn?: typeof fetch } = $props();
 
-  type Metric = 'bans' | 'gap' | 'life';
+  type Metric = 'bans' | 'gap' | 'life' | 'traffic';
   let range = $state<StatsRange>('7d');
   let metric = $state<Metric>('bans');
 
@@ -28,10 +29,20 @@
   const known = $derived(new Set(nodes.data?.map((n) => n.id) ?? []));
   const href = (id: string) => (known.has(id) ? `/node/?id=${encodeURIComponent(id)}` : null);
 
+  const valueOf = (b: StatsSeries['buckets'][number]): number | null =>
+    metric === 'bans'
+      ? b.bans
+      : metric === 'gap'
+        ? (b.avg_gap_sec ?? null)
+        : metric === 'life'
+          ? (b.avg_lifetime_sec ?? null)
+          : b.traffic_total_bytes;
+  const unit = $derived(metric === 'bans' ? 'count' : metric === 'traffic' ? 'bytes' : 'span');
+
   const bars = $derived<Bar[]>(
     (ser?.buckets ?? []).map((b) => ({
       at: Date.parse(b.start_ts),
-      value: metric === 'bans' ? b.bans : metric === 'gap' ? (b.avg_gap_sec ?? null) : (b.avg_lifetime_sec ?? null),
+      value: valueOf(b),
     })),
   );
   const stale = $derived(summary.stale || series.stale || bans.stale || nodes.stale);
@@ -41,7 +52,7 @@
   const noBansToday = $derived(range === '24h' && sum !== null && sum.kpi.bans === 0);
 
   const rangeItems = (['24h', '7d', '30d'] as const).map((value) => ({ value, label: t(`dash.range.${value}`) }));
-  const metricItems = (['bans', 'gap', 'life'] as const).map((value) => ({ value, label: t(`dash.metric.${value}`) }));
+  const metricItems = (['bans', 'gap', 'life', 'traffic'] as const).map((value) => ({ value, label: t(`dash.metric.${value}`) }));
 </script>
 
 <PublicShell active="dashboard" updatedAt={summary.updatedAt} {stale}>
@@ -68,6 +79,13 @@
         <span class="v">{sum?.kpi.avg_gap_sec ? formatSpan(sum.kpi.avg_gap_sec) : '—'}</span>
         <span class="s">{t('dash.kpi.gapNote')}</span>
       </section>
+      <section class="t kpi" style="--i:3">
+        <span class="l">{t('dash.kpi.traffic')}</span>
+        <span class="v">{sum ? formatBytes(sum.kpi.traffic_total_bytes) : '—'}</span>
+        <span class="s">
+          {sum ? t('dash.kpi.trafficNote', { egress: formatBytes(sum.kpi.traffic_egress_bytes), ingress: formatBytes(sum.kpi.traffic_ingress_bytes) }) : ''}
+        </span>
+      </section>
     </div>
 
     <section class="t" style="--i:3">
@@ -91,7 +109,7 @@
           </div>
         {:else if ser}
           {#if !ser.history_ok}<p class="faint sm">{t('dash.historyShort')}</p>{/if}
-          <TimeChart {bars} unit={metric === 'bans' ? 'count' : 'span'} hourly={range === '24h'} />
+          <TimeChart {bars} {unit} hourly={range === '24h'} />
         {:else if !series.stale}
           <div class="sk" style="height:180px"></div>
         {/if}
@@ -127,8 +145,6 @@
         <div class="tb-b"><div class="sk" style="height:120px"></div></div>
       {/if}
     </section>
-
-    <p class="faint sm" style="max-width:70ch">{t('dash.traffic')}</p>
   </div>
 </PublicShell>
 

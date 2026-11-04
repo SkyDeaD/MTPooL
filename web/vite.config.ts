@@ -7,7 +7,7 @@ import { devApi } from './scripts/dev-api.ts';
 // own entry, so a page loads only the code it uses.
 //
 // `npm run dev` serves /api/v1/* from tests/fixtures (scripts/dev-api.ts), so the pages show data
-// without a registrar. `npm run dev:real` proxies /api to a registrar on 127.0.0.1:8080 instead.
+// without a registrar. `npm run dev:real` proxies /api/v1 to a registrar on 127.0.0.1:8080 instead.
 export default defineConfig(({ command }) => {
   const mock = command === 'serve' && !process.env.VITEST && !process.env.MTPOOL_REAL_API;
   return {
@@ -34,7 +34,12 @@ export default defineConfig(({ command }) => {
     },
     server: {
       // A registrar started with its defaults.
-      proxy: { '/api': 'http://127.0.0.1:8080' },
+      // Only what the registrar serves: /api/ itself is a page of this project.
+      proxy: {
+        '/api/v1': 'http://127.0.0.1:8080',
+        '/install.sh': 'http://127.0.0.1:8080',
+        '/releases': 'http://127.0.0.1:8080',
+      },
     },
   };
 });

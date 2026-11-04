@@ -11,10 +11,10 @@
   const tone = { blocked: 'bad', clear: 'ok', abstain: 'off' } as const;
   const icon = { blocked: 'stop', clear: 'check', abstain: 'minus' } as const;
 
-  // A reason the page knows is put in words; any other is shown as it came.
+  // The API sends a code; one the page knows is put in words, any other gets one generic line.
   const reasonText = (r: string) => {
     const key = `vote.reason.${r}`;
-    return key in messages ? t(key as MessageKey) : r;
+    return r !== 'other' && key in messages ? t(key as MessageKey) : t('vote.reason.other');
   };
 </script>
 

@@ -7,7 +7,10 @@
   "kpi": {
     "bans": 90,
     "avg_lifetime_sec": 518400,
-    "avg_gap_sec": 172800
+    "avg_gap_sec": 172800,
+    "traffic_ingress_bytes": 25423773696,
+    "traffic_egress_bytes": 211864780800,
+    "traffic_total_bytes": 237288554496
   },
   "by_reason": {
     "cheburcheck+globalping": 2,

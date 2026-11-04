@@ -35,6 +35,7 @@
     "port": 443,
     "queue_position": null,
     "registered_at": "2026-09-25T12:00:00Z",
+    "master_since": "2026-11-04T10:30:00Z",
     "rotates_at": "2026-11-04T12:12:34Z",
     "state": "healthy",
     "state_since": "2026-10-30T12:00:00Z",
@@ -59,6 +60,7 @@
     "port": 443,
     "queue_position": null,
     "registered_at": "2026-09-25T12:00:00Z",
+    "master_since": "2026-11-04T10:50:00Z",
     "rotates_at": "2026-11-04T12:36:50Z",
     "state": "healthy",
     "state_since": "2026-10-30T12:00:00Z",
@@ -83,6 +85,7 @@
     "port": 443,
     "queue_position": null,
     "registered_at": "2026-09-25T12:00:00Z",
+    "master_since": "2026-11-04T10:40:00Z",
     "rotates_at": "2026-11-04T12:22:00Z",
     "state": "healthy",
     "state_since": "2026-10-30T12:00:00Z",
@@ -96,7 +99,7 @@
       "metrics": true,
       "globalping": "ok"
     },
-    "clients": null,
+    "clients": 18,
     "domains": [],
     "engine": "telemt",
     "is_master": false,
@@ -118,7 +121,7 @@
       "metrics": true,
       "globalping": "ok"
     },
-    "clients": null,
+    "clients": 7,
     "domains": [],
     "engine": "mt_proxy_l",
     "is_master": false,
@@ -140,7 +143,7 @@
       "metrics": true,
       "globalping": "ok"
     },
-    "clients": null,
+    "clients": 3,
     "domains": [],
     "engine": "meko",
     "is_master": false,
@@ -172,8 +175,7 @@
       "votes": [
         {
           "sensor": "globalping",
-          "vote": "blocked",
-          "reason": "timeout from 3 of 5 probes"
+          "vote": "blocked"
         },
         {
           "sensor": "cheburcheck",

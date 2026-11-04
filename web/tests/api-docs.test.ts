@@ -46,6 +46,24 @@ describe('api docs', () => {
     expect(text).not.toContain('/api/v1/agent');
   });
 
+  it('public_routes_start_with_what_people_ask_for_most', () => {
+    const paths = buildApiRoutes(openapi).pub.map((r) => r.path);
+    expect(paths.slice(0, 4)).toEqual([
+      '/api/v1/nodes',
+      '/api/v1/nodes/{id}',
+      '/api/v1/nodes/{id}/history',
+      '/api/v1/domains',
+    ]);
+    expect(paths.indexOf('/api/v1/links')).toBeLessThan(paths.indexOf('/api/v1/bans'));
+    expect(paths.indexOf('/api/v1/bans')).toBeLessThan(paths.indexOf('/install.sh'));
+  });
+
+  it('the_api_page_has_no_live_data_so_shows_no_loading_status', () => {
+    app = mount(ApiDocs, { target });
+    expect(target.querySelector('.live')).toBeNull();
+    expect(target.textContent).not.toContain(messages['common.loading']);
+  });
+
   it('every_documented_route_has_a_russian_description', () => {
     const { pub, bot } = buildApiRoutes(openapi);
     for (const r of [...pub, ...bot]) {

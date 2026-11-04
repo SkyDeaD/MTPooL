@@ -23,6 +23,13 @@ interface OpenApi {
 }
 
 const METHODS = ['get', 'post', 'put', 'patch', 'delete'];
+// The order the page lists open routes in: what people ask for most goes first. The document itself
+// is sorted by path, which would open the page with the ban history.
+const PUBLIC_ORDER = ['/api/v1/nodes', '/api/v1/domains', '/api/v1/links', '/api/v1/bans', '/api/v1/stats'];
+const rank = (path: string): number => {
+  const i = PUBLIC_ORDER.findIndex((prefix) => path.startsWith(prefix));
+  return i === -1 ? PUBLIC_ORDER.length : i;
+};
 
 export function buildApiRoutes(openapi: OpenApi): { pub: ApiRoute[]; bot: ApiRoute[] } {
   const pub: ApiRoute[] = [];
@@ -41,6 +48,7 @@ export function buildApiRoutes(openapi: OpenApi): { pub: ApiRoute[]; bot: ApiRou
       else if (path.startsWith('/api/v1/me')) bot.push(route);
     }
   }
+  pub.sort((x, y) => rank(x.path) - rank(y.path));
   return { pub, bot };
 }
 

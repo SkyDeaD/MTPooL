@@ -13,7 +13,7 @@
   // The frame of every public page: header with the sections, the page, the footer.
   let {
     active,
-    updatedAt = null,
+    updatedAt,
     stale = false,
     children,
   }: { active: Section | null; updatedAt?: number | null; stale?: boolean; children: Snippet } = $props();
@@ -25,8 +25,9 @@
     { id: 'links', href: '/links', label: t('shell.tab.links') },
     { id: 'api', href: '/api', label: t('shell.tab.api') },
   ];
+  // A page with nothing live (the API page) passes no `updatedAt` and shows no status at all.
   const age = $derived.by(() => {
-    if (updatedAt === null) return t('common.loading');
+    if (updatedAt === undefined || updatedAt === null) return t('common.loading');
     const s = Math.max(0, Math.round((now.ms - updatedAt) / 1000));
     return s < 5 ? t('shell.age.now') : t('shell.age', { s });
   });
@@ -41,7 +42,7 @@
       {/each}
     </nav>
     <span class="sp"></span>
-    <span class="live" title={stale ? t('common.stale') : undefined}><span class={['dot', stale && 'off']}></span>{age}</span>
+    {#if updatedAt !== undefined}<span class="live" title={stale ? t('common.stale') : undefined}><span class={['dot', stale && 'off']}></span>{age}</span>{/if}
     <ThemeButton />
     <a class="btn s" href="/panel/">{t('shell.panel')}</a>
   </div>

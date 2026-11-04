@@ -1,7 +1,6 @@
 <script lang="ts">
   import { t } from '../lib/i18n';
   import { ENGINE_NAMES, formatAvailability, type NodeGroups } from '../lib/model';
-  import type { PublicNode } from '../lib/types';
   import ChecksCell from './ChecksCell.svelte';
   import ClientsCell from './ClientsCell.svelte';
   import RoleCell from './RoleCell.svelte';
@@ -36,7 +35,6 @@
     row.querySelector<HTMLAnchorElement>('a')?.click();
   }
 
-  const addr = (n: PublicNode) => `${n.ip}:${n.port}, ${ENGINE_NAMES[n.engine]}`;
 </script>
 
 <div class="tw">
@@ -58,7 +56,7 @@
           <tr class={['go', node.is_master && 'mrow']} onclick={open}>
             <td class="full" data-l=""
               ><a class="nm" href={href(node.id)}>{node.id}</a>
-              <div class="nm-s">{addr(node)}</div></td
+              <div class="nm-s"><span class="mono">{node.ip}:{node.port}</span>, {ENGINE_NAMES[node.engine]}</div></td
             >
             <td data-l={t('stats.col.state')}><StateCell state={node.state} /></td>
             <td data-l={t('stats.col.role')}><RoleCell {node} {now} /></td>

@@ -148,6 +148,7 @@ code,
 }
 
 .stack {
+  grid-template-columns: minmax(0, 1fr);
   display: grid;
   gap: var(--gap);
   min-width: 0;
