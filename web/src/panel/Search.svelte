@@ -36,7 +36,7 @@
     const q = query.trim().toLowerCase();
     if (!q) return [];
     const nodes = (data.nodes.data ?? [])
-      .filter((n) => n.id.toLowerCase().includes(q) || n.full_ip.includes(q))
+      .filter((n) => n.state !== 'banned' && (n.id.toLowerCase().includes(q) || n.full_ip.includes(q)))
       .map((n) => ({ href: hrefOf('node', n.id), label: n.id, kind: t('panel.search.node') }));
     const doms = (domains.data ?? [])
       .filter((d) => d.domain.includes(q))

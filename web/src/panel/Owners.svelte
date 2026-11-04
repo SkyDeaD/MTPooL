@@ -150,7 +150,7 @@
             <th>{t('panel.owners.name')}</th>
             <th class="n">{t('panel.owners.limit')}</th>
             <th>{t('panel.owners.note')}</th>
-            <th><span class="sr-only">{t('panel.nodes.actions')}</span></th>
+            <th><span class="sr-only">{t('panel.table.actions')}</span></th>
           </tr>
         </thead>
         <tbody>
@@ -161,7 +161,7 @@
               <td data-l={t('panel.owners.note')}>{o.note || '—'}</td>
               <td class="n">
                 <Popover.Root>
-                  <Popover.Trigger class="btn s ic txt" aria-label={`${t('panel.nodes.actions')}: ${o.name}`}><Icon name="more" /></Popover.Trigger>
+                  <Popover.Trigger class="btn s ic txt" aria-label={`${t('panel.table.actions')}: ${o.name}`}><Icon name="more" /></Popover.Trigger>
                   <Popover.Portal>
                     <Popover.Content class="pop" align="end" sideOffset={4}>
                       <button type="button" onclick={() => editOwner(o)}>{t('panel.owners.edit')}</button>
@@ -191,7 +191,7 @@
             <th>{t('panel.tokens.owner')}</th>
             <th>{t('panel.tokens.expires')}</th>
             <th>{t('panel.tokens.lastUsed')}</th>
-            <th><span class="sr-only">{t('panel.nodes.actions')}</span></th>
+            <th><span class="sr-only">{t('panel.table.actions')}</span></th>
           </tr>
         </thead>
         <tbody>

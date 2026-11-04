@@ -147,7 +147,7 @@
                 <tr>
                   <th>{t('panel.settings.userName')}</th>
                   <th>{t('panel.settings.userSecret')}</th>
-                  <th><span class="sr-only">{t('panel.nodes.actions')}</span></th>
+                  <th><span class="sr-only">{t('panel.table.actions')}</span></th>
                 </tr>
               </thead>
               <tbody>

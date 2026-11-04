@@ -26,6 +26,10 @@ test('banned: the panel node table, the rail counter and the attention list do n
   const attention = page.locator('section, .t').filter({ hasText: 'Требует внимания' }).first();
   await expect(attention).toBeVisible();
   await expect(attention.getByText(bannedId())).toHaveCount(0);
+
+  await page.getByRole('search').getByRole('searchbox').fill(bannedId());
+  await expect(page.locator('.srch .res')).toBeVisible();
+  await expect(page.locator('.srch .res').getByText(bannedId())).toHaveCount(0);
 });
 
 test('banned: it is in the ban history and the journal of the panel', async ({ page }) => {

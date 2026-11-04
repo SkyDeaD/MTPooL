@@ -157,7 +157,7 @@
               <th>{t('panel.srmd.manages')}</th>
               <th>{t('stats.col.state')}</th>
               <th class="n">{t('stats.col.clients')}</th>
-              <th><span class="sr-only">{t('panel.nodes.actions')}</span></th>
+              <th><span class="sr-only">{t('panel.table.actions')}</span></th>
             </tr>
           </thead>
           <tbody>

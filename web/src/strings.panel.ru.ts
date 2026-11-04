@@ -72,6 +72,7 @@ export const panelMessages = {
   // Admin panel: nodes
   'panel.nodes.title': 'Ноды',
   'panel.nodes.actions': 'Действия с нодой',
+  'panel.table.actions': 'Действия',
   'panel.nodes.open': 'Открыть',
   'panel.nodes.recheck': 'Проверить заново',
   'panel.nodes.retire': 'Вывести из пула',
