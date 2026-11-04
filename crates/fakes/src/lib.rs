@@ -333,9 +333,12 @@ fn globalping(fakes: &Fakes, method: &Method, segments: &[&str], body: &str) -> 
     }
 }
 
-/// A time as Globalping writes it: RFC 3339 with milliseconds (`rfc3339` already has them).
+/// A time as Globalping writes it: RFC 3339 with always three digits of milliseconds
+/// (`rfc3339` drops trailing zeros).
 fn measurement_time(unix_ms: i64) -> String {
-    mtpool_protocol::rfc3339(unix_ms)
+    let whole_seconds = mtpool_protocol::rfc3339(unix_ms.div_euclid(1000) * 1000);
+    let stem = whole_seconds.trim_end_matches('Z');
+    format!("{stem}.{:03}Z", unix_ms.rem_euclid(1000))
 }
 
 // --- cheburcheck --------------------------------------------------------------------------------
@@ -643,6 +646,19 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
         assert_eq!(control(&app, "nobody", "ok").await, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn measurement_times_always_have_three_digits_of_milliseconds() {
+        for (ms, text) in [
+            (1_700_000_000_670, "2023-11-14T22:13:20.670Z"),
+            (1_700_000_000_600, "2023-11-14T22:13:20.600Z"),
+            (1_700_000_000_000, "2023-11-14T22:13:20.000Z"),
+            (1_700_000_000_005, "2023-11-14T22:13:20.005Z"),
+        ] {
+            assert_eq!(crate::measurement_time(ms), text);
+            assert_eq!(mtpool_protocol::parse_rfc3339(text), Some(ms));
+        }
     }
 
     #[tokio::test]
