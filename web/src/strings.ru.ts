@@ -231,7 +231,7 @@ export const messages = {
   'links.step.three': 'Подтвердите в Telegram',
   'links.step.threeText': 'Нажмите «Подключить прокси» и пользуйтесь.',
   'links.empty.title': 'Ссылок пока нет',
-  'links.empty.text': 'Они появятся, когда у пула будет хотя бы один домен с мастером.',
+  'links.empty.text': 'Они появятся, когда оператор пула добавит домен и пользователя прокси.',
   'links.qr': 'QR-код для {domain}',
   'links.open.button': 'Открыть в Telegram',
   'links.copy': 'Копировать',
