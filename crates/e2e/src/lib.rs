@@ -90,6 +90,16 @@ fn compose_file() -> PathBuf {
     path.canonicalize().unwrap_or(path)
 }
 
+/// What `docker compose up` does about the images: builds them, unless the variable
+/// `MTPOOL_E2E_PREBUILT=1` says they are loaded already. Then a missing image is an error.
+fn build_flag() -> &'static str {
+    build_flag_for(std::env::var("MTPOOL_E2E_PREBUILT").as_deref() == Ok("1"))
+}
+
+fn build_flag_for(prebuilt: bool) -> &'static str {
+    if prebuilt { "--no-build" } else { "--build" }
+}
+
 /// A project name nothing else shares: six hex digits from the clock and the process tell runs
 /// apart, a counter tells apart the stands of one run, which start within the same clock tick.
 fn project_name() -> String {
@@ -257,7 +267,7 @@ impl Stand {
         run(
             guard
                 .compose()
-                .args(["up", "-d", "--build", "--wait", "--wait-timeout", "240"]),
+                .args(["up", "-d", build_flag(), "--wait", "--wait-timeout", "240"]),
             "docker compose up",
             None,
         )
@@ -746,6 +756,17 @@ async fn configure(admin: &Admin) -> Result<()> {
         )
         .await
         .map(|_| ())
+}
+
+#[cfg(test)]
+mod build_flag_tests {
+    use super::build_flag_for;
+
+    #[test]
+    fn images_are_built_unless_they_came_prebuilt() {
+        assert_eq!(build_flag_for(false), "--build");
+        assert_eq!(build_flag_for(true), "--no-build");
+    }
 }
 
 #[cfg(test)]
