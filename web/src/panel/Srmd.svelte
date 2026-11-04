@@ -46,7 +46,7 @@
     domain === base ? 'main' : srmd.data?.created.includes(domain) ? 'srmd' : 'manual';
   // Folded domains grouped by the one they point at, for the tree.
   const tree = $derived.by(() => {
-    const map = new Map<string, string[]>();
+    const map = new Map<string, string[]>((srmd.data?.active ?? []).map((d) => [d, []]));
     for (const d of folded) {
       const to = srmd.data?.cnames[d];
       if (to) map.set(to, [...(map.get(to) ?? []), d]);
@@ -74,7 +74,6 @@
 <div class="view stack">
   <header class="ph">
     <h1>{t('panel.srmd.title')}</h1>
-    <span class="sub">{t('panel.srmd.sub')}</span>
     <span class="sp"></span>
     {#if srmd.data}
       <label class="sw">
@@ -83,6 +82,7 @@
         <span class="sm">{enabled ? t('panel.srmd.on') : t('panel.srmd.off')}</span>
       </label>
     {/if}
+    <span class="sub">{t('panel.srmd.sub')}</span>
   </header>
   {#if srmd.stale}<p class="note" role="status">{t('common.stale')}</p>{/if}
 
@@ -121,17 +121,23 @@
         <div class="tb-b dtree">
           {#each tree as [to, list] (to)}
             <div class="dt">
-              <div class="card"><span class="mono nm">{to}</span></div>
-              <div class="fds">
-                {#each list as d (d)}
-                  <div class="fd">
-                    <Icon name="elbow" cls="elb" />
-                    <span class="mono">{d}</span>
-                    <span class="tag">{t('panel.srmd.foldedTag')}</span>
-                    <span class="fc faint sm">{t('panel.srmd.foldedText', { short: shortDomain(to) })}</span>
-                  </div>
-                {/each}
+              <div class="card">
+                <div class="d">{to}</div>
+                <div class="s" style="margin-top:2px">{t('panel.srmd.treeNote', { n: data.clients[to] ?? 0 })}</div>
               </div>
+              {#if list.length > 0}
+                <div class="fds">
+                  {#each list as d, j (d)}
+                    <div class="fd">
+                      <span class="ftk" style="--j:{j}"><i class="run fl" style="--dl:{(j * 0.9).toFixed(1)}s"></i></span>
+                      <div class="card fc">
+                        <div class="a"><span class="d">{d}</span><span class="tag">{t('panel.srmd.foldedTag')}</span></div>
+                        <div class="s" style="margin-top:2px">{t('panel.srmd.foldedText', { short: shortDomain(to) })}</div>
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
             </div>
           {/each}
         </div>

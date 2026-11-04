@@ -57,20 +57,19 @@
       ></textarea>
     {:else}
       <label for={`f-${key}`}>{label}</label>
-      <div class="u">
+      <div class={f.kind === 'text' ? undefined : 'u'}>
         <input
           class={['inp', f.kind === 'text' && 'mono', err && 'err']}
           id={`f-${key}`}
           type={f.kind === 'text' ? 'text' : 'number'}
-          step={f.kind === 'ratio' ? '0.05' : undefined}
-          inputmode={f.kind === 'text' ? undefined : f.kind === 'ratio' ? 'decimal' : 'numeric'}
+                    inputmode={f.kind === 'text' ? undefined : f.kind === 'ratio' ? 'decimal' : 'numeric'}
           spellcheck="false"
           autocomplete="off"
           data-key={key}
           value={store.values[key] as string}
           oninput={(e) => (store.values[key] = e.currentTarget.value)}
         />
-        {#if f.unit === 'min'}<span>{t('settings.unit.min')}</span>{:else if f.kind === 'sec'}<span>{t('settings.unit.sec')}</span>{:else if f.kind === 'percent'}<span>{t('settings.unit.percent')}</span>{/if}
+        {#if f.unit === 'min'}<span>{t('settings.unit.min')}</span>{:else if f.kind === 'sec'}<span>{t('settings.unit.sec')}</span>{:else if f.kind === 'percent' || f.kind === 'ratio'}<span>{t('settings.unit.percent')}</span>{/if}
       </div>
     {/if}
     {#if h}<span class="h">{h}</span>{/if}

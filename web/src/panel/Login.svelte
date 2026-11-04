@@ -56,7 +56,6 @@
           </button>
         </div>
         {#if error}<div class="e" role="alert">{error}</div>{/if}
-        <div class="h">{t('panel.login.hint')}</div>
       </div>
       <button class="btn pri" type="submit" disabled={busy}>{t('panel.login.submit')}</button>
       <a class="sm" href="/">{t('panel.login.public')}</a>

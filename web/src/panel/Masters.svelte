@@ -51,9 +51,9 @@
 <div class="view stack">
   <header class="ph">
     <h1>{t('panel.masters.title')}</h1>
-    <span class="sub">{t('panel.masters.sub')}</span>
     <span class="sp"></span>
     <button class="btn" type="button" disabled={pushing} onclick={push}><Icon name="ref" />{t('panel.masters.push')}</button>
+    <span class="sub">{t('panel.masters.sub')}</span>
   </header>
   {#if stale}<p class="note" role="status">{t('common.stale')}</p>{/if}
 
@@ -100,7 +100,7 @@
                 <td class="faint hm" data-l={t('panel.masters.rotation')}>{t('panel.masters.none2')}</td>
                 <td class="n faint hm" data-l={t('stats.col.clients')}>{t('panel.masters.at', { name: short(d.folded_into) })}</td>
                 <td data-l={t('panel.masters.dnsState')}>
-                  <span class={['st', d.dns_synced ? 'ok' : 'bad']}>{d.dns_synced ? t('panel.masters.synced') : t('panel.masters.unsynced')}</span>
+                  <span class={['st', d.dns_synced ? 'ok' : 'bad']}><Icon name={d.dns_synced ? 'check' : 'alert'} />{d.dns_synced ? t('panel.masters.synced') : t('panel.masters.unsynced')}</span>
                 </td>
               </tr>
             {:else if d.masters.length === 0}
@@ -111,7 +111,7 @@
                 <td class="faint hm" data-l={t('panel.masters.rotation')}>—</td>
                 <td class="n" data-l={t('stats.col.clients')}>{d.clients !== null && d.clients !== undefined ? formatNumber(d.clients) : '—'}</td>
                 <td data-l={t('panel.masters.dnsState')}>
-                  <span class={['st', d.dns_synced ? 'ok' : 'bad']}>{d.dns_synced ? t('panel.masters.synced') : t('panel.masters.unsynced')}</span>
+                  <span class={['st', d.dns_synced ? 'ok' : 'bad']}><Icon name={d.dns_synced ? 'check' : 'alert'} />{d.dns_synced ? t('panel.masters.synced') : t('panel.masters.unsynced')}</span>
                 </td>
               </tr>
             {:else}
@@ -137,7 +137,7 @@
                   <td class="n" data-l={t('stats.col.clients')}>{n?.clients ?? '—'}</td>
                   {#if i === 0}
                     <td class="tp" rowspan={d.masters.length} data-l={t('panel.masters.dnsState')}>
-                      <span class={['st', d.dns_synced ? 'ok' : 'bad']}>{d.dns_synced ? t('panel.masters.synced') : t('panel.masters.unsynced')}</span>
+                      <span class={['st', d.dns_synced ? 'ok' : 'bad']}><Icon name={d.dns_synced ? 'check' : 'alert'} />{d.dns_synced ? t('panel.masters.synced') : t('panel.masters.unsynced')}</span>
                     </td>
                   {/if}
                 </tr>

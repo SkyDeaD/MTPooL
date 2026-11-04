@@ -89,6 +89,7 @@
     <div class="state">
       <div>{secretLabel(name)}</div>
       <div class="h">{isSet ? t('settings.secret.set') : t('settings.secret.unset')}</div>
+      <div class="h">{t(`settings.h.${name}` as Key)}</div>
     </div>
     <button class="btn s" type="button" onclick={() => (replacing = name)}>{t('settings.secret.replace')}</button>
     {#if isSet}<button class="btn s dng" type="button" onclick={() => clearSecret(name)}>{t('settings.secret.clear')}</button>{/if}

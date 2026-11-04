@@ -46,7 +46,8 @@
 /* Forms */
 .f .e { color: var(--bad); font-size: var(--fs-xs); margin-top: 4px; }
 .u { display: flex; align-items: center; gap: 8px; }
-.u .inp { max-width: 120px; }
+.u .inp { flex: 1; min-width: 0; }
+.u .inp[type='number'] { flex: none; width: 120px; }
 .u span { color: var(--fg2); font-size: 13px; }
 .fg { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(250px, 100%), 1fr)); gap: 18px 20px; padding: 16px; }
 .ff { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; border-top: 1px solid var(--line); }
@@ -84,7 +85,7 @@
 .ev .ts { color: var(--fg3); font-size: 12.5px; white-space: nowrap; }
 .tabs { display: flex; gap: 4px; margin-bottom: 14px; flex-wrap: wrap; }
 .tabs [role='tab'] { height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--r2); background: var(--surf); color: var(--fg2); cursor: pointer; font: inherit; font-size: 13.5px; }
-.tabs [role='tab'][data-state='active'] { background: var(--acc-t); color: var(--acc); border-color: transparent; font-weight: 500; }
+.tabs [role='tab'][aria-selected='true'] { background: var(--acc-t); color: var(--acc); border-color: transparent; font-weight: 500; }
 
 /* Rounds table on the node page */
 table.rounds td, table.rounds th { vertical-align: top; }
@@ -181,4 +182,10 @@ pre.code { margin: 0; padding: 12px 14px; background: var(--surf2); border: 1px 
   .stepper { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cols { grid-template-columns: minmax(0, 1fr); }
   .srch { max-width: none; }
+}
+
+/* On a phone the head already shows the live dot: the search takes the row. */
+@media (max-width: 860px) {
+  .top .srch { flex: 1; width: auto; max-width: none; }
+  .top .srch kbd, .top .grow, .top .live-state { display: none; }
 }

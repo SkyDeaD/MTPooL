@@ -52,7 +52,6 @@
   <header class="ph">
     <h1>{t('panel.updates.title')}</h1>
     <span class="sub">{t('panel.updates.sub')}</span>
-    {#if current}<span class="sp"></span><span class="mono sm">{current.version}</span>{/if}
   </header>
   {#if rollouts.stale}<p class="note" role="status">{t('common.stale')}</p>{/if}
 

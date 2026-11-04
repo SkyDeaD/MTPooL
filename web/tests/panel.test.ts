@@ -1,4 +1,9 @@
 // @vitest-environment jsdom
+import { dayOf } from '../src/lib/dates';
+import { FIELDS, parse, toText } from '../src/panel/settings-fields';
+import { panelMessages } from '../src/strings.panel.ru';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { t } from '../src/panel/i18n';
@@ -434,5 +439,51 @@ describe('destructive actions', () => {
     expect(api.writes().some((w) => w.endsWith('/cancel'))).toBe(false);
     await click(button(t('panel.updates.cancelConfirm'), document.querySelector('[role="dialog"]')!));
     expect(api.writes().filter((w) => w.endsWith('/cancel'))).toHaveLength(1);
+  });
+});
+
+describe('settings limits follow the server', () => {
+  const field = (key: string) => FIELDS.get(key)!;
+
+  it('masters_per_domain_stops_at_8', () => {
+    expect(parse(field('masters_per_domain'), '8').ok).toBe(true);
+    expect(parse(field('masters_per_domain'), '9').ok).toBe(false);
+  });
+
+  it('rotation_zero_turns_it_off_and_12_hours_is_the_top', () => {
+    expect(parse(field('rotation_ttl_sec'), '0')).toEqual({ ok: true, value: 0 });
+    expect(parse(field('rotation_ttl_sec'), '720')).toEqual({ ok: true, value: 43200 });
+    expect(parse(field('rotation_ttl_sec'), '721').ok).toBe(false);
+  });
+
+  it('latch_thresholds_stop_at_255', () => {
+    expect(parse(field('latch_fail_threshold'), '256').ok).toBe(false);
+  });
+
+  it('an_empty_base_domain_means_the_first_listed_domain', () => {
+    expect(parse(field('srmd.base_domain'), '  ')).toEqual({ ok: true, value: null });
+    expect(toText(field('srmd.base_domain'), null)).toBe('');
+  });
+
+  it('the_block_threshold_reads_in_percent', () => {
+    expect(toText(field('globalping.success_threshold'), 0.5)).toBe('50');
+    expect(parse(field('globalping.success_threshold'), '50')).toEqual({ ok: true, value: 0.5 });
+    expect(parse(field('globalping.success_threshold'), '0').ok).toBe(false);
+    expect(parse(field('globalping.success_threshold'), '101').ok).toBe(false);
+  });
+
+  it('every_setting_has_a_hint_and_every_tab_panel_hides_with_css', () => {
+    for (const key of FIELDS.keys()) expect(`settings.h.${key}` in panelMessages, key).toBe(true);
+    const css = readFileSync(join(process.cwd(), 'src/styles/base.css'), 'utf8');
+    expect(css).toMatch(/\[hidden\]\s*\{\s*display:\s*none\s*!important/);
+  });
+});
+
+describe('journal days', () => {
+  it('a_day_turns_at_midnight_moscow_time_whatever_the_browser_zone', () => {
+    const lateEvening = Date.parse('2026-11-03T19:13:00Z'); // 22:13 in Moscow
+    const afterMidnight = Date.parse('2026-11-03T21:30:00Z'); // 00:30 in Moscow
+    expect(dayOf(lateEvening)).not.toBe(dayOf(afterMidnight));
+    expect(dayOf(lateEvening)).toBe('3 нояб.');
   });
 });

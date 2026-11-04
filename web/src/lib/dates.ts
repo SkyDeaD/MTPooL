@@ -31,6 +31,11 @@ export function formatDay(ms: number): string {
 }
 
 /** "4 нояб., 14:05" */
+/** The calendar day of a moment, as the pages show it. */
+export function dayOf(ms: number): string {
+  return dayFormat.format(ms);
+}
+
 export function formatWhen(ms: number): string {
   return `${formatDay(ms)}, ${formatHour(ms)}`;
 }
@@ -41,7 +46,7 @@ export function formatSpan(seconds: number): string {
   const d = Math.floor(s / 86400);
   const h = Math.floor((s % 86400) / 3600);
   const m = Math.floor((s % 3600) / 60);
-  if (d > 0) return `${d} д ${h} ч`;
-  if (h > 0) return `${h} ч ${m} мин`;
+  if (d > 0) return h > 0 ? `${d} д ${h} ч` : `${d} д`;
+  if (h > 0) return m > 0 ? `${h} ч ${m} мин` : `${h} ч`;
   return `${m} мин`;
 }

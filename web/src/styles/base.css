@@ -147,6 +147,10 @@ code,
   margin-left: auto;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .stack {
   grid-template-columns: minmax(0, 1fr);
   display: grid;

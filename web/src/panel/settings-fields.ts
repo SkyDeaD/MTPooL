@@ -10,6 +10,8 @@ export interface Field {
   max?: number;
   /** Seconds on the wire, minutes on the page. */
   unit?: 'min';
+  /** Empty is allowed and goes to the server as null. */
+  optional?: boolean;
 }
 
 export interface Group {
@@ -18,7 +20,7 @@ export interface Group {
 }
 
 const sec = (key: string): Field => ({ key, kind: 'sec', min: 1, max: 86400 });
-const mn = (key: string): Field => ({ key, kind: 'sec', min: 1, max: 86400, unit: 'min' });
+const mn = (key: string, min = 1, max = 86400): Field => ({ key, kind: 'sec', min, max, unit: 'min' });
 const count = (key: string, max = 1000): Field => ({ key, kind: 'count', min: 1, max });
 
 export const GROUPS: Group[] = [
@@ -32,9 +34,9 @@ export const GROUPS: Group[] = [
       sec('sync_interval_sec'),
       sec('tcp_probe_interval_sec'),
       sec('tcp_probe_timeout_sec'),
-      count('latch_fail_threshold'),
-      count('latch_ok_threshold'),
-      sec('dead_after_sec'),
+      count('latch_fail_threshold', 255),
+      count('latch_ok_threshold', 255),
+      mn('dead_after_sec'),
     ],
   },
   {
@@ -48,7 +50,7 @@ export const GROUPS: Group[] = [
       mn('reverify_pause_sec'),
     ],
   },
-  { id: 'masters', fields: [count('masters_per_domain', 50), mn('rotation_ttl_sec')] },
+  { id: 'masters', fields: [count('masters_per_domain', 8), mn('rotation_ttl_sec', 0, 43200)] },
   {
     id: 'dns',
     fields: [sec('dns_ttl'), { key: 'dns_proxied', kind: 'bool' }, { key: 'domains', kind: 'domains' }],
@@ -63,9 +65,9 @@ export const GROUPS: Group[] = [
       mn('globalping_interval_sec'),
       count('globalping.probe_limit'),
       count('globalping.min_probes'),
-      { key: 'globalping.success_threshold', kind: 'ratio', min: 0, max: 1 },
-      sec('globalping.vote_report_max_age_sec'),
-      sec('globalping.window_past_sec'),
+      { key: 'globalping.success_threshold', kind: 'ratio', min: 1, max: 100 },
+      mn('globalping.vote_report_max_age_sec'),
+      mn('globalping.window_past_sec'),
       sec('globalping.window_future_sec'),
       count('globalping.min_limit_remaining', 100000),
       { key: 'globalping.allow_credits', kind: 'bool' },
@@ -75,8 +77,8 @@ export const GROUPS: Group[] = [
     id: 'srmd',
     fields: [
       { key: 'srmd.enabled', kind: 'bool' },
-      { key: 'srmd.base_domain', kind: 'text' },
-      count('srmd.max_nodes_per_domain', 50),
+      { key: 'srmd.base_domain', kind: 'text', optional: true },
+      count('srmd.max_nodes_per_domain'),
       count('srmd.max_domains', 50),
       count('srmd.diverge_ticks'),
     ],
@@ -106,6 +108,7 @@ export function pick(doc: Record<string, unknown>, key: string): unknown {
 export function toText(field: Field, raw: unknown): Value {
   if (field.unit === 'min' && typeof raw === 'number') return String(Math.round((raw / 60) * 100) / 100);
   if (field.kind === 'bool') return raw === true;
+  if (field.kind === 'ratio' && typeof raw === 'number') return String(Math.round(raw * 10000) / 100);
   if (field.kind === 'domains') return Array.isArray(raw) ? raw.join('\n') : '';
   if (field.kind === 'users')
     return Array.isArray(raw) ? raw.map((u: { name: string; secret_hex: string }) => `${u.name}:${u.secret_hex}`).join('\n') : '';
@@ -126,6 +129,7 @@ export function parse(field: Field, value: Value): { ok: true; value: unknown } 
     case 'bool':
       return { ok: true, value: value === true };
     case 'text':
+      if (!text && field.optional) return { ok: true, value: null };
       return text ? { ok: true, value: text } : { ok: false, problem: { code: 'empty' } };
     case 'domains': {
       const list = text.split(/\s+/).filter(Boolean);
@@ -141,9 +145,10 @@ export function parse(field: Field, value: Value): { ok: true; value: unknown } 
       return good ? { ok: true, value: users } : { ok: false, problem: { code: 'users' } };
     }
     case 'ratio': {
+      // A share on the wire, percent on the page.
       const n = Number(text.replace(',', '.'));
-      return text !== '' && Number.isFinite(n) && n >= (field.min ?? 0) && n <= (field.max ?? 1)
-        ? { ok: true, value: n }
+      return text !== '' && Number.isFinite(n) && n >= (field.min ?? 1) && n <= (field.max ?? 100)
+        ? { ok: true, value: n / 100 }
         : { ok: false, problem: { code: 'float', min: field.min, max: field.max } };
     }
     default: {

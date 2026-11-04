@@ -33,7 +33,7 @@
   const nodes = $derived(data.nodes.data);
   const status = $derived(data.status.data);
   const groups = $derived(nodes ? panelGroups(nodes) : null);
-  const pool = $derived(groups ? groups.masters.length + groups.queue.length + groups.quarantine.length + groups.idle.length : 0);
+  const pool = $derived(groups ? groups.masters.length + groups.queue.length + groups.quarantine.length : 0);
   const working = $derived(groups ? groups.masters.length + groups.queue.length : 0);
   const trouble = $derived(groups ? groups.quarantine.length : 0);
 
@@ -42,6 +42,12 @@
   const foldedCount = $derived((domains.data ?? []).length - hosts.length);
   const scheme = $derived(nodes && domains.data ? buildScheme(domains.data, nodes) : null);
   const ser = $derived(series.data && series.data.range === '7d' ? series.data : null);
+  // Average node life over the week, weighted by how many bans each day had.
+  const avgLife = $derived.by(() => {
+    const days = (ser?.buckets ?? []).filter((b) => b.avg_lifetime_sec && b.bans > 0);
+    const bans = days.reduce((sum, b) => sum + b.bans, 0);
+    return bans ? Math.round(days.reduce((sum, b) => sum + (b.avg_lifetime_sec ?? 0) * b.bans, 0) / bans) : 0;
+  });
   const bars = $derived<Bar[]>((ser?.buckets ?? []).map((b) => ({ at: Date.parse(b.start_ts), value: b.bans })));
   const chartSeries = $derived(clients.data && clients.data.range === range ? clients.data : null);
   const recentBans = $derived((bans.data ?? []).filter((b) => !b.reverify).slice(0, 5));
@@ -129,12 +135,12 @@
     <section class="t kpi">
       <span class="l">{t('panel.overview.changes')}</span>
       <span class="v">{status?.counts.master_changes_24h ?? '—'}</span>
-      <span class="s">{t('panel.overview.changesNote')}</span>
+      <span class="s">{status ? (status.counts.master_changes_24h > 0 ? t('panel.overview.changesNote', { span: formatSpan(Math.round(86400 / status.counts.master_changes_24h)) }) : t('panel.overview.changesNone')) : ''}</span>
     </section>
     <section class="t kpi">
       <span class="l">{t('panel.overview.bans')}</span>
       <span class="v">{status?.counts.bans_7d ?? '—'}</span>
-      <span class="s">{t('panel.overview.bansNote')}</span>
+      <span class="s">{avgLife ? t('panel.overview.bansNote', { span: formatSpan(avgLife) }) : status?.counts.bans_7d === 0 ? t('panel.overview.bansNone') : ''}</span>
     </section>
     <section class="t kpi">
       <span class="l">{t('panel.overview.dnsDay')}</span>
@@ -189,10 +195,10 @@
       <div class="th">
         <h2>{t('panel.overview.lastBans')}</h2>
         <span class="sp"></span>
-        <a href={hrefOf('journal')}>{t('panel.overview.allBans')}</a>
+        <a href="/dashboard/">{t('panel.overview.allBans')}</a>
       </div>
       {#if recentBans.length > 0}
-        <BanTable rows={recentBans} href={banHref} />
+        <BanTable rows={recentBans} href={banHref} compact />
       {:else}
         <div class="tb-b"><p class="muted">{t('dash.log.empty')}</p></div>
       {/if}

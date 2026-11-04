@@ -1,6 +1,6 @@
 <script lang="ts">
   import { useNow } from '../lib/clock.svelte';
-  import { formatWhen } from '../lib/dates';
+  import { dayOf, formatWhen } from '../lib/dates';
   import EventRow from './EventRow.svelte';
   import { CATEGORIES, describeAudit, describeEvent, type Category } from './events';
   import { t, type Key } from './i18n';
@@ -30,14 +30,12 @@
     return described.filter((x) => (filter === 'all' || x.d.category === filter) && (!q || x.d.haystack.includes(q)));
   });
   // The list is newest first; a separator goes before the first entry of each day.
-  const dayKey = (iso: string) => new Date(iso).toDateString();
+  const dayKey = (iso: string) => dayOf(Date.parse(iso));
   function dayLabel(iso: string): string {
-    const at = new Date(iso);
-    const today = new Date(clock.ms);
-    const yesterday = new Date(clock.ms - 86_400_000);
-    if (at.toDateString() === today.toDateString()) return t('panel.journal.today');
-    if (at.toDateString() === yesterday.toDateString()) return t('panel.journal.yesterday');
-    return formatWhen(at.getTime()).split(',')[0];
+    const day = dayKey(iso);
+    if (day === dayOf(clock.ms)) return t('panel.journal.today');
+    if (day === dayOf(clock.ms - 86_400_000)) return t('panel.journal.yesterday');
+    return day;
   }
   const who = (actor: string) => (actor.startsWith('token:') ? t('panel.journal.byToken', { id: actor.slice(6) }) : t('panel.journal.bySession'));
 </script>

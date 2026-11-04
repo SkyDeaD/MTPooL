@@ -67,7 +67,13 @@
     if ((event.target as Element).closest('a,button')) return;
     row.querySelector<HTMLAnchorElement>('a.nm')?.click();
   }
-  const heartbeat = (n: AdminNode) => (n.last_heartbeat ? formatWhen(Date.parse(n.last_heartbeat)) : t('panel.nodes.noSignal'));
+  const heartbeat = (n: AdminNode) => {
+    if (!n.last_heartbeat) return t('panel.nodes.noSignal');
+    const at = Date.parse(n.last_heartbeat);
+    const s = Math.max(0, Math.round((clock.ms - at) / 1000));
+    if (s < 120) return t('panel.nodes.ago', { s });
+    return s < 3600 ? t('panel.nodes.agoMin', { m: Math.round(s / 60) }) : formatWhen(at);
+  };
 </script>
 
 <div class="view">
@@ -129,7 +135,7 @@
                     <td data-l={t('stats.col.checks')}><ChecksCell checks={node.checks} /></td>
                     <td class="n" data-l={t('stats.col.availability')}>{formatAvailability(node.availability_bp)}</td>
                     <td class="n" data-l={t('stats.col.clients')}><ClientsCell clients={node.clients} max={maxClients} /></td>
-                    <td data-l={t('panel.nodes.signal')}>{heartbeat(node)}</td>
+                    <td class="nowrap" data-l={t('panel.nodes.signal')}>{heartbeat(node)}</td>
                     <td class="n">
                       <RowMenu id={node.id} onrecheck={() => recheck(node.id)} onretire={() => (retiring = node.id)} />
                     </td>

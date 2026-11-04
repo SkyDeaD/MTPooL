@@ -46,7 +46,7 @@
   let moreOpen = $state(false);
 
   // What the counters in the rail say: the nodes the pool holds, and those in trouble.
-  const pool = $derived((data.nodes.data ?? []).filter((n) => n.state !== 'banned' && n.state !== 'pruned'));
+  const pool = $derived((data.nodes.data ?? []).filter((n) => ['healthy', 'quarantine'].includes(n.state)));
   const trouble = $derived(pool.filter((n) => n.state === 'quarantine').length);
   const running = $derived((data.rollouts.data ?? []).some((r) => ['canary', 'observing', 'batches', 'paused'].includes(r.phase)));
   function counter(page: Page): { text: string; bad: boolean } | null {
