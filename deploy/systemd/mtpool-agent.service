@@ -2,6 +2,11 @@
 Description=MTPooL node agent
 After=network-online.target
 Wants=network-online.target
+# A build that keeps failing to start is put back (the rollback unit does nothing when no update
+# is on probation).
+OnFailure=mtpool-agent-rollback.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 EnvironmentFile=-/etc/mtpool/agent.env

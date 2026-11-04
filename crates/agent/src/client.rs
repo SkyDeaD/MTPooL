@@ -1,10 +1,12 @@
 //! The registrar's agent API, decoded into [`Answer`] so the lifecycle matches on what an answer
 //! means, not on status codes.
 
+use std::path::Path;
 use std::time::Duration;
 
 use mtpool_protocol::agent::{
     AgentConfig, Empty, EmptyRequest, EnrollRequest, EnrollResponse, ReportRequest, Terminate,
+    UpdateOffer, UpdatePoll, UpdateStatus,
 };
 use mtpool_protocol::problem::Problem;
 use reqwest::Url;
@@ -41,6 +43,8 @@ pub struct ClientError(String);
 const MAX_ANSWER_BYTES: usize = 1024 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// A build may be some megabytes on a slow link.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone)]
 pub struct RegistrarClient {
@@ -124,6 +128,65 @@ impl RegistrarClient {
     pub async fn config(&self, node_token: &str) -> Answer<AgentConfig> {
         self.send(self.http.get(self.url("config")).bearer_auth(node_token))
             .await
+    }
+
+    /// Asks which version the registrar wants this node on.
+    pub async fn update(&self, node_token: &str, request: &UpdatePoll) -> Answer<UpdateOffer> {
+        self.send(
+            self.http
+                .post(self.url("update"))
+                .bearer_auth(node_token)
+                .json(request),
+        )
+        .await
+    }
+
+    /// Tells the registrar how the update went.
+    pub async fn update_status(&self, node_token: &str, request: &UpdateStatus) -> Answer<Empty> {
+        self.send(
+            self.http
+                .post(self.url("update-status"))
+                .bearer_auth(node_token)
+                .json(request),
+        )
+        .await
+    }
+
+    /// Downloads `/releases/{name}` into `dest`, at most `max` bytes. The route is public: no
+    /// token goes with it.
+    pub async fn release_file(&self, name: &str, dest: &Path, max: u64) -> Result<(), String> {
+        use tokio::io::AsyncWriteExt;
+        let mut url = self.base.clone();
+        url.set_query(None);
+        url.set_fragment(None);
+        if let Ok(mut segments) = url.path_segments_mut() {
+            segments.pop_if_empty().extend(["releases", name]);
+        }
+        let mut response = self
+            .http
+            .get(url)
+            .timeout(DOWNLOAD_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| describe(&e))?;
+        if !response.status().is_success() {
+            return Err(format!("the registrar answered {}", response.status()));
+        }
+        if response.content_length().is_some_and(|n| n > max) {
+            return Err("the file is too large".to_owned());
+        }
+        let mut file = tokio::fs::File::create(dest)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut size = 0u64;
+        while let Some(chunk) = response.chunk().await.map_err(|e| describe(&e))? {
+            size += chunk.len() as u64;
+            if size > max {
+                return Err("the file is too large".to_owned());
+            }
+            file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+        }
+        file.flush().await.map_err(|e| e.to_string())
     }
 
     async fn send<T: DeserializeOwned>(&self, request: reqwest::RequestBuilder) -> Answer<T> {

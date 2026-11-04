@@ -29,7 +29,8 @@ use mtpool_core::{
 };
 use mtpool_protocol::agent::{
     AgentConfig, AgentUser, Empty, EmptyRequest, EnrollRequest, EnrollResponse, GpReport,
-    Intervals, ReportRequest, Terminate, TerminateReason,
+    Intervals, ReportRequest, Terminate, TerminateReason, UpdateOffer, UpdateOutcome, UpdatePoll,
+    UpdateStatus,
 };
 use mtpool_protocol::problem::Problem;
 use mtpool_protocol::public::Engine;
@@ -168,6 +169,8 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(report))
         .routes(routes!(retire))
         .routes(routes!(config))
+        .routes(routes!(update))
+        .routes(routes!(update_status))
 }
 
 // ----- answers -------------------------------------------------------------------------------
@@ -988,4 +991,112 @@ pub async fn config(State(app): State<AppState>, auth: NodeAuth) -> Result<Respo
             serde_json::to_string(&config).expect("an agent config serializes"),
         )),
     }
+}
+
+// ----- update --------------------------------------------------------------------------------
+
+/// A node of the pool that may talk about updates: not unknown, not out of the pool.
+async fn in_pool(app: &AppState, id: NodeId) -> Result<(), Failure> {
+    let seen = app
+        .actor
+        .inspect(move |state| state.nodes.get(&id).map(|n| terminal(n.state)))
+        .await
+        .map_err(|_| actor_stopped())?;
+    match seen {
+        None => Err(unknown_node()),
+        Some(Some(reason)) => Err(Failure(Box::new(terminate(reason)))),
+        Some(None) => Ok(()),
+    }
+}
+
+/// The agent tells which version it runs and learns whether to update.
+#[utoipa::path(
+    post,
+    path = "/api/v1/agent/update",
+    tag = "agent",
+    security(("bearer" = [])),
+    request_body = UpdatePoll,
+    responses(
+        (status = 200, description = "`{\"version\": \"x.y.z\"}` when the node is to update to it, `{}` when not", body = UpdateOffer),
+        (status = 400, description = "Bad body or a version that is not x.y.z", body = Problem, content_type = "application/problem+json"),
+        (status = 401, description = "No valid node token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "The node is out of the pool: `{\"terminate\": true, ...}`", body = Terminate),
+        (status = 410, description = "The registrar does not know the node; enroll again", body = Problem, content_type = "application/problem+json"),
+        (status = 413, description = "The body is larger than 256 KiB", body = Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn update(
+    State(app): State<AppState>,
+    auth: NodeAuth,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Response, Failure> {
+    let poll: UpdatePoll = parse(&body_bytes(body)?)?;
+    if mtpool_selfupdate::manifest::Version::parse(&poll.version).is_none() {
+        return Err(ApiError::bad_request("version must be x.y.z.").into());
+    }
+    in_pool(&app, auth.node_id.clone()).await?;
+    let now = (app.clock)();
+    let offer = app.rollouts.poll(&auth.node_id, &poll.version, now);
+    let version = if offer {
+        app.rollouts.offered_version()
+    } else {
+        None
+    };
+    Ok(json_response(
+        StatusCode::OK,
+        serde_json::to_string(&UpdateOffer { version }).expect("an update offer serializes"),
+    ))
+}
+
+/// The agent reports a step of its update.
+#[utoipa::path(
+    post,
+    path = "/api/v1/agent/update-status",
+    tag = "agent",
+    security(("bearer" = [])),
+    request_body = UpdateStatus,
+    responses(
+        (status = 200, description = "Noted (also when no rollout wants it)", body = Empty),
+        (status = 400, description = "Bad body, a version that is not x.y.z, or `failed` without a valid `code`", body = Problem, content_type = "application/problem+json"),
+        (status = 401, description = "No valid node token", body = Problem, content_type = "application/problem+json"),
+        (status = 403, description = "The node is out of the pool: `{\"terminate\": true, ...}`", body = Terminate),
+        (status = 410, description = "The registrar does not know the node; enroll again", body = Problem, content_type = "application/problem+json"),
+        (status = 413, description = "The body is larger than 256 KiB", body = Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn update_status(
+    State(app): State<AppState>,
+    auth: NodeAuth,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Response, Failure> {
+    use mtpool_core::rollout::Status;
+    let report: UpdateStatus = parse(&body_bytes(body)?)?;
+    if mtpool_selfupdate::manifest::Version::parse(&report.version).is_none() {
+        return Err(ApiError::bad_request("version must be x.y.z.").into());
+    }
+    let status = match report.outcome {
+        UpdateOutcome::Started => Status::Started,
+        UpdateOutcome::Updated => Status::Updated,
+        UpdateOutcome::RolledBack => Status::RolledBack,
+        UpdateOutcome::Failed => {
+            let code = report.code.as_deref().unwrap_or("");
+            let plain = (1..=40).contains(&code.len())
+                && code
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+            if !plain {
+                return Err(ApiError::bad_request(
+                    "failed needs a code of 1 to 40 characters: a-z, 0-9, underscore.",
+                )
+                .into());
+            }
+            Status::Failed {
+                code: code.to_owned(),
+            }
+        }
+    };
+    in_pool(&app, auth.node_id.clone()).await?;
+    app.rollouts
+        .status(&auth.node_id, &report.version, &status, (app.clock)());
+    Ok(empty_ok())
 }

@@ -145,6 +145,56 @@ pub struct AgentConfig {
     pub antiscan: bool,
 }
 
+/// `POST /agent/update`: the agent says which version it runs and asks whether to update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdatePoll {
+    /// The version the agent runs, `x.y.z` with an optional `-pre` part.
+    #[schema(example = "0.1.0")]
+    pub version: String,
+}
+
+/// The answer to `POST /agent/update`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct UpdateOffer {
+    /// The version to update to, or absent when the node is not asked to update. The agent
+    /// fetches `/releases/manifest.json` and checks the signature itself; this is only the
+    /// registrar's wish.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "0.2.0")]
+    pub version: Option<String>,
+}
+
+/// What happened to the update on the node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateOutcome {
+    /// The agent began the switch; the engine is not touched.
+    Started,
+    /// The new version runs and has talked to the registrar.
+    Updated,
+    /// The update was refused before the switch (`code` says why); the old version still runs.
+    Failed,
+    /// The new version did not come up and the old one was put back.
+    RolledBack,
+}
+
+/// `POST /agent/update-status`: the agent reports an update step. It is sent again until the
+/// registrar answers, so a report may repeat.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateStatus {
+    /// The version the update is about.
+    #[schema(example = "0.2.0")]
+    pub version: String,
+    pub outcome: UpdateOutcome,
+    /// Required with `failed`: a short code of 1 to 40 characters `a-z`, `0-9`, `_`
+    /// (`bad_signature`, `bad_hash`, `downgrade`, `key_mismatch`, `download`, `start_failed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "bad_signature")]
+    pub code: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminateReason {

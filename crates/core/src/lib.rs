@@ -5,6 +5,7 @@ pub mod dns;
 pub mod health;
 pub mod lifecycle;
 pub mod links;
+pub mod rollout;
 pub mod selection;
 pub mod settings;
 pub mod srmd;
@@ -26,7 +27,9 @@ pub use lifecycle::{
 };
 pub use links::{build_proxy_link, link_secret};
 pub use selection::{Assignments, MasterChange, SelectionResult, Slot, queue_order, select};
-pub use settings::{GlobalpingSettings, ProxyUser, Settings, SettingsError, SrmdSettings};
+pub use settings::{
+    GlobalpingSettings, ProxyUser, RolloutSettings, Settings, SettingsError, SrmdSettings,
+};
 pub use srmd::{
     SrmdAction, SrmdError, SrmdState, rebalance, release, required_domains, set_clients, take,
 };

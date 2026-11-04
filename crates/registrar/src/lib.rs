@@ -11,6 +11,7 @@ pub mod dns;
 pub mod metrics;
 pub mod prober;
 pub mod release;
+pub mod rollout;
 pub mod secrets;
 pub mod sensors;
 pub mod server;

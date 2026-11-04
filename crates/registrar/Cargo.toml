@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 mtpool-core.workspace = true
 mtpool-protocol.workspace = true
+mtpool-selfupdate.workspace = true
 arc-swap.workspace = true
 async-trait.workspace = true
 axum.workspace = true

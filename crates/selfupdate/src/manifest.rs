@@ -9,13 +9,15 @@ use std::path::Path;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use super::{MANIFEST_NAME, SIGNATURE_NAME};
+use crate::{MANIFEST_NAME, SIGNATURE_NAME};
 
 /// The component of a build of the registrar.
 pub const REGISTRAR_COMPONENT: &str = "mtpool-registrar";
+/// The component of a build of the node agent.
+pub const AGENT_COMPONENT: &str = "mtpool-agent";
 /// The component of a new signing key, announced by a release that the old key signed.
 pub const KEY_COMPONENT: &str = "mtpool-signing-key";
-const MAX_MANIFEST_BYTES: usize = 256 * 1024;
+pub const MAX_MANIFEST_BYTES: usize = 256 * 1024;
 const MAX_ARTIFACTS: usize = 64;
 
 #[derive(Debug, thiserror::Error)]
@@ -206,7 +208,7 @@ fn parse(bytes: &[u8]) -> Result<Manifest, VerifyError> {
         if !label(&a.component) || !label(&a.target) {
             return Err(bad("component or target is not a plain name"));
         }
-        if !crate::release::valid_name(&a.name)
+        if !crate::valid_file_name(&a.name)
             || a.name.starts_with('.')
             || a.name == MANIFEST_NAME
             || a.name == SIGNATURE_NAME
@@ -253,11 +255,6 @@ pub fn verify_manifest_with(
     key.verify(bytes, &signature, false)
         .map_err(|_| VerifyError::BadSignature)?;
     parse(bytes)
-}
-
-/// [`verify_manifest_with`] with the key built into this binary.
-pub fn verify_manifest(bytes: &[u8], signature: &str) -> Result<Manifest, VerifyError> {
-    verify_manifest_with(crate::release::MINISIGN_PUB, bytes, signature)
 }
 
 /// The lower-case hex sha256 of everything `reader` gives.

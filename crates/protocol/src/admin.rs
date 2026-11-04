@@ -121,3 +121,88 @@ pub struct EventEntry {
 pub struct DomainRequest {
     pub domain: String,
 }
+
+/// The note of a rollout that waits or is paused: why, in a code and in words for the admin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct RolloutNote {
+    /// `no_canary_candidate` (waiting), `node_not_back`, `health_drop`, `update_failed`,
+    /// `bad_signature` or `rolled_back` (paused), `superseded` (cancelled by a newer release).
+    #[schema(example = "node_not_back")]
+    pub code: String,
+    pub text: String,
+}
+
+/// The timings a rollout runs by; copied from the settings when it starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct RolloutTimings {
+    pub observe_sec: u32,
+    pub batch_interval_sec: u32,
+    pub batch_percent: u32,
+    pub return_sec: u32,
+    pub offer_wait_sec: u32,
+}
+
+/// How many nodes are at each stage.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct RolloutCounts {
+    pub idle: u32,
+    pub offered: u32,
+    pub started: u32,
+    pub updated: u32,
+    pub failed: u32,
+    pub missed: u32,
+}
+
+/// One node in a rollout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct RolloutNode {
+    pub node_id: String,
+    /// The agent version the node last reported; absent until it has polled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// `idle`, `offered`, `started`, `updated`, `failed` or `missed`.
+    pub stage: String,
+    /// RFC 3339: when the node entered the stage (absent for `idle`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+    /// With `failed`: the code the agent or the registrar gave.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+
+/// A rollout of an agent release: `GET /admin/rollouts` and `/admin/rollouts/{id}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct RolloutView {
+    pub id: i64,
+    /// The release version being rolled out.
+    pub version: String,
+    /// RFC 3339.
+    pub created_at: String,
+    /// `canary` (one node takes it; waits without a candidate), `observing` (the canary is
+    /// watched), `batches`, `paused`, `done` or `cancelled`.
+    pub phase: String,
+    /// With `paused`: the phase "continue" goes back to (`canary`, `observing`, `batches`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_to: Option<String>,
+    /// RFC 3339: when the canary is judged good (`observing`: its start; add `observe_sec`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observing_since: Option<String>,
+    /// RFC 3339: when the next batch goes out (`batches`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_batch_at: Option<String>,
+    /// RFC 3339: when the rollout was paused, finished or cancelled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_at: Option<String>,
+    /// Why the rollout waits or is paused; absent while it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<RolloutNote>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canary: Option<String>,
+    /// Whether `POST .../resume` is accepted (the rollout is paused).
+    pub can_resume: bool,
+    /// Whether `POST .../cancel` is accepted (the rollout is not over).
+    pub can_cancel: bool,
+    pub timings: RolloutTimings,
+    pub counts: RolloutCounts,
+    pub nodes: Vec<RolloutNode>,
+}

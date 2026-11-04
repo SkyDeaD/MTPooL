@@ -10,7 +10,6 @@
 
 pub mod apply;
 pub mod github;
-pub mod manifest;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -19,6 +18,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
+
+pub use mtpool_selfupdate::manifest;
+pub use mtpool_selfupdate::{
+    MANIFEST_NAME, MAX_ARTIFACT_BYTES, Paths, Probation, SIGNATURE_NAME, write_atomic,
+};
 
 use manifest::{Manifest, VerifyError, Version};
 
@@ -34,105 +38,9 @@ pub const DEFAULT_BIN: &str = "/usr/local/bin/mtpool-registrar";
 pub const POLL_EVERY: Duration = Duration::from_secs(300);
 /// The longest the poller stays away after GitHub says the limit is used up.
 pub const MAX_BACKOFF: Duration = Duration::from_secs(3600);
-/// One build, and the whole release, are never bigger than this.
-pub const MAX_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+/// The whole release is never bigger than this (one build: [`MAX_ARTIFACT_BYTES`]).
 pub const MAX_RELEASE_BYTES: u64 = 1024 * 1024 * 1024;
-pub const MANIFEST_NAME: &str = "manifest.json";
-pub const SIGNATURE_NAME: &str = "manifest.json.minisig";
 pub(crate) const STAGING: &str = ".staging";
-
-/// Where the updater reads and writes.
-#[derive(Debug, Clone)]
-pub struct Paths {
-    /// The releases directory the registrar serves agents from.
-    pub releases: PathBuf,
-    /// Root-owned state: what is installed, what is rejected, the probation marker.
-    pub state: PathBuf,
-}
-
-/// The marker that says a new build is on trial.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Probation {
-    pub version: Version,
-    pub previous: Version,
-}
-
-const INSTALLED_FILE: &str = "installed";
-const REJECTED_FILE: &str = "rejected";
-const PROBATION_FILE: &str = "probation";
-
-/// Writes `text` to `path` so that a reader sees the old file or the whole new one.
-pub(crate) fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
-    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path)
-}
-
-impl Paths {
-    /// The version the helper last confirmed as running.
-    pub fn installed(&self) -> Option<Version> {
-        std::fs::read_to_string(self.state.join(INSTALLED_FILE))
-            .ok()
-            .and_then(|t| Version::parse(t.trim()))
-    }
-
-    pub fn set_installed(&self, version: &Version) -> std::io::Result<()> {
-        write_atomic(&self.state.join(INSTALLED_FILE), &format!("{version}\n"))
-    }
-
-    /// Releases that were rolled back, with the reason.
-    pub fn rejected(&self) -> Vec<(Version, String)> {
-        let text = std::fs::read_to_string(self.state.join(REJECTED_FILE)).unwrap_or_default();
-        text.lines()
-            .filter_map(|line| {
-                let (version, reason) = line.split_once(' ').unwrap_or((line, ""));
-                Some((Version::parse(version)?, reason.to_owned()))
-            })
-            .collect()
-    }
-
-    pub fn is_rejected(&self, version: &Version) -> bool {
-        self.rejected().iter().any(|(v, _)| v == version)
-    }
-
-    pub fn reject(&self, version: &Version, reason: &str) -> std::io::Result<()> {
-        use std::io::Write;
-        let reason = reason.replace(['\n', '\r'], " ");
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.state.join(REJECTED_FILE))?;
-        writeln!(file, "{version} {reason}")
-    }
-
-    pub fn probation(&self) -> Option<Probation> {
-        let text = std::fs::read_to_string(self.state.join(PROBATION_FILE)).ok()?;
-        let (version, previous) = text.trim().split_once(' ')?;
-        Some(Probation {
-            version: Version::parse(version)?,
-            previous: Version::parse(previous)?,
-        })
-    }
-
-    pub fn begin_probation(&self, version: &Version, previous: &Version) -> std::io::Result<()> {
-        write_atomic(
-            &self.state.join(PROBATION_FILE),
-            &format!("{version} {previous}\n"),
-        )
-    }
-
-    /// Takes the marker away, and is the one caller that gets it: the confirmation of a good
-    /// build and the rollback of a bad one cannot both happen.
-    pub fn claim_probation(&self) -> Option<Probation> {
-        let marker = self.probation()?;
-        let claimed = self
-            .state
-            .join(format!("{PROBATION_FILE}.claimed{}", std::process::id()));
-        std::fs::rename(self.state.join(PROBATION_FILE), &claimed).ok()?;
-        let _ = std::fs::remove_file(claimed);
-        Some(marker)
-    }
-}
 
 /// Something the admin should see: it goes to the log and to the audit log.
 #[derive(Debug, Clone, PartialEq)]

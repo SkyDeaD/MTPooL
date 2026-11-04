@@ -69,6 +69,7 @@ pub struct Env {
     pub resolver: Arc<FakeResolver>,
     /// The Globalping settings the verifier and the sensor read.
     pub gp_settings: SharedSettings,
+    pub rollouts: mtpool_registrar::rollout::RolloutService,
     pub _dir: tempfile::TempDir,
 }
 
@@ -156,12 +157,12 @@ pub fn env_with_keepalive(state: PoolState, keepalive: Duration) -> Env {
     );
     let resolver = Arc::new(FakeResolver::default());
     let gp_settings: SharedSettings = Arc::new(ArcSwap::from_pointee(Default::default()));
-    let app = router(
-        AppState::with_clock(store.clone(), actor.clone(), actor.snapshots(), clock_fn)
-            .with_events(events.clone())
-            .with_resolver(resolver.clone())
-            .with_gp_settings(gp_settings.clone()),
-    );
+    let state = AppState::with_clock(store.clone(), actor.clone(), actor.snapshots(), clock_fn)
+        .with_events(events.clone())
+        .with_resolver(resolver.clone())
+        .with_gp_settings(gp_settings.clone());
+    let rollouts = state.rollouts.clone();
+    let app = router(state);
     Env {
         app,
         store,
@@ -170,6 +171,7 @@ pub fn env_with_keepalive(state: PoolState, keepalive: Duration) -> Env {
         events,
         resolver,
         gp_settings,
+        rollouts,
         _dir: dir,
     }
 }

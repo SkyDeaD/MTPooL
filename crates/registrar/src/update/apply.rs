@@ -7,6 +7,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use mtpool_selfupdate::{
+    Verdict, previous_of, read_release_file, replace_binary, stage, staged_of, watch,
+};
+
 use super::Paths;
 use super::manifest::Version;
 
@@ -56,144 +60,11 @@ pub enum ApplyError {
     Superseded(Version),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Verdict {
-    Ready,
-    Failed,
-}
-
-/// `path` with `suffix` appended to its file name.
-fn sibling(path: &Path, suffix: &str) -> PathBuf {
-    let mut name = path.as_os_str().to_owned();
-    name.push(suffix);
-    PathBuf::from(name)
-}
-
-/// The file the previous build is kept in beside the installed one.
-pub fn previous_of(bin: &Path) -> PathBuf {
-    sibling(bin, ".prev")
-}
-
-/// The file a build is staged in before it replaces the installed one.
-pub fn staged_of(bin: &Path) -> PathBuf {
-    sibling(bin, ".new")
-}
-
-/// Makes `staged` the installed binary and keeps the build that was installed as `<bin>.prev`.
-///
-/// `bin` is never missing and never half-written: the old build is linked to its `.prev` name
-/// (through a temporary name, so an older `.prev` is replaced in one step) and the staged file is
-/// renamed over `bin`. A running process keeps the inode it started from.
-pub fn replace_binary(bin: &Path, staged: &Path) -> io::Result<()> {
-    let prev = previous_of(bin);
-    let tmp = sibling(bin, ".prev.tmp");
-    let _ = std::fs::remove_file(&tmp);
-    if bin.exists() {
-        if std::fs::hard_link(bin, &tmp).is_err() {
-            std::fs::copy(bin, &tmp)?;
-        }
-        std::fs::rename(&tmp, &prev)?;
-    }
-    std::fs::rename(staged, bin)
-}
-
-/// Probes until `window` is over. `Ready` needs at least one good answer and no bad one after
-/// the first good one; a build that answered and then stopped is not a good build.
-pub async fn watch(
-    window: Duration,
-    every: Duration,
-    mut probe: impl AsyncFnMut() -> bool,
-) -> Verdict {
-    let started = tokio::time::Instant::now();
-    let mut seen = false;
-    while started.elapsed() < window {
-        if probe().await {
-            seen = true;
-        } else if seen {
-            return Verdict::Failed;
-        }
-        tokio::time::sleep(every).await;
-    }
-    if seen {
-        Verdict::Ready
-    } else {
-        Verdict::Failed
-    }
-}
-
 fn rejected(version: Option<&Version>, reason: impl Into<String>) -> ApplyError {
     ApplyError::Rejected {
         version: version.cloned(),
         reason: reason.into(),
     }
-}
-
-/// The regular file `name` in the releases directory, read whole up to `max` bytes. The directory
-/// belongs to an unprivileged user, so a link in it is not followed.
-fn read_release_file(dir: &Path, name: &str, max: u64) -> io::Result<Vec<u8>> {
-    use std::io::Read;
-    let mut file = open_regular(&dir.join(name), max)?;
-    let mut body = Vec::new();
-    file.by_ref().take(max + 1).read_to_end(&mut body)?;
-    Ok(body)
-}
-
-fn open_regular(path: &Path, max: u64) -> io::Result<std::fs::File> {
-    use std::os::unix::fs::MetadataExt;
-    let before = std::fs::symlink_metadata(path)?;
-    if !before.is_file() || before.len() > max {
-        return Err(io::Error::other(format!(
-            "{} is not a regular file of acceptable size",
-            path.display()
-        )));
-    }
-    let file = std::fs::File::open(path)?;
-    let after = file.metadata()?;
-    if before.ino() != after.ino() || before.dev() != after.dev() {
-        return Err(io::Error::other(format!(
-            "{} changed while opening",
-            path.display()
-        )));
-    }
-    Ok(file)
-}
-
-/// Copies the build into the staging file while hashing the bytes that are written, so that what
-/// is checked is what is installed.
-fn stage(source: &Path, staged: &Path, want_sha256: &str) -> Result<(), String> {
-    use std::io::{Read, Write};
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut from = open_regular(source, super::MAX_ARTIFACT_BYTES).map_err(|e| e.to_string())?;
-    let _ = std::fs::remove_file(staged);
-    let mut to = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o755)
-        .open(staged)
-        .map_err(|e| format!("cannot create {}: {e}", staged.display()))?;
-    let mut hash = <sha2::Sha256 as sha2::Digest>::new();
-    let mut buf = vec![0u8; 64 * 1024];
-    let copied: io::Result<()> = (|| {
-        loop {
-            let n = from.read(&mut buf)?;
-            if n == 0 {
-                break;
-            }
-            sha2::Digest::update(&mut hash, &buf[..n]);
-            to.write_all(&buf[..n])?;
-        }
-        to.sync_all()
-    })();
-    let got = data_encoding::HEXLOWER.encode(&sha2::Digest::finalize(hash));
-    if let Err(e) = copied {
-        let _ = std::fs::remove_file(staged);
-        return Err(format!("cannot copy the build: {e}"));
-    }
-    if got != want_sha256 {
-        let _ = std::fs::remove_file(staged);
-        return Err("the build does not have the checksum the signed manifest gives".to_owned());
-    }
-    Ok(())
 }
 
 /// Checks the published release again and, if it is a newer, intact, signed one, installs it:
@@ -365,13 +236,6 @@ impl SystemHost {
     }
 }
 
-/// The key id in the output of `mtpool-registrar version`: `1.2.3 (signing key E7620F1842B4E81F)`.
-pub fn key_id_of_version_line(line: &str) -> Option<String> {
-    let rest = line.split_once("(signing key ")?.1;
-    let id = rest.split_once(')')?.0.trim();
-    (id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit())).then(|| id.to_owned())
-}
-
 impl Host for SystemHost {
     fn restart(&self) -> io::Result<()> {
         use std::process::Command;
@@ -393,36 +257,7 @@ impl Host for SystemHost {
     }
 
     fn binary_key_id(&self, path: &Path) -> Result<Option<String>, String> {
-        use std::io::Read;
-        use std::process::{Command, Stdio};
-        let mut child = Command::new(path)
-            .arg("version")
-            .env_clear()
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| e.to_string())?;
-        let started = std::time::Instant::now();
-        let status = loop {
-            match child.try_wait().map_err(|e| e.to_string())? {
-                Some(status) => break status,
-                None if started.elapsed() > Duration::from_secs(10) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err("`version` did not finish in 10 seconds".to_owned());
-                }
-                None => std::thread::sleep(Duration::from_millis(50)),
-            }
-        };
-        if !status.success() {
-            return Err(format!("`version` exited with {status}"));
-        }
-        let mut out = String::new();
-        if let Some(mut stdout) = child.stdout.take() {
-            let _ = stdout.by_ref().take(4096).read_to_string(&mut out);
-        }
-        Ok(key_id_of_version_line(&out))
+        mtpool_selfupdate::binary_key_id(path)
     }
 
     async fn ready(&self) -> bool {

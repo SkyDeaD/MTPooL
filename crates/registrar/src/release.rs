@@ -26,12 +26,13 @@ pub const MINISIGN_PUB: &str = env!("MTPOOL_MINISIGN_PUB");
 pub const DEFAULT_RELEASES_DIR: &str = "/var/lib/mtpool/releases";
 
 /// The longest release file name the route accepts.
-const MAX_NAME_LEN: usize = 120;
 /// The largest release file the route serves.
 const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 const INSTALL_SCRIPT: &str = include_str!("../../../deploy/install.sh");
 const AGENT_UNIT: &str = include_str!("../../../deploy/systemd/mtpool-agent.service");
+const AGENT_ROLLBACK_UNIT: &str =
+    include_str!("../../../deploy/systemd/mtpool-agent-rollback.service");
 const TELEMT_UNIT: &str = include_str!("../../../deploy/systemd/telemt.service");
 const TELEMT_TOML: &str = include_str!("../../../deploy/systemd/telemt.toml");
 
@@ -129,6 +130,7 @@ fn render(url: &str, key: &str, port: u16, tls_domain: &str) -> String {
         .replace("__MTPOOL_TELEMT_TOML__", &file(TELEMT_TOML))
         .replace("__MTPOOL_TELEMT_UNIT__", &file(TELEMT_UNIT))
         .replace("__MTPOOL_AGENT_UNIT__", &file(AGENT_UNIT))
+        .replace("__MTPOOL_AGENT_ROLLBACK_UNIT__", &file(AGENT_ROLLBACK_UNIT))
 }
 
 #[utoipa::path(
@@ -181,11 +183,7 @@ pub async fn install_script(
 
 /// A release file name: letters, digits, dot, dash and underscore, not made of dots alone.
 pub(crate) fn valid_name(name: &str) -> bool {
-    (1..=MAX_NAME_LEN).contains(&name.len())
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-        && name.bytes().any(|b| b != b'.')
+    mtpool_selfupdate::valid_file_name(name)
 }
 
 fn content_type(name: &str) -> &'static str {
@@ -291,6 +289,7 @@ mod tests {
             "__MTPOOL_TELEMT_TOML__",
             "__MTPOOL_TELEMT_UNIT__",
             "__MTPOOL_AGENT_UNIT__",
+            "__MTPOOL_AGENT_ROLLBACK_UNIT__",
         ] {
             assert!(INSTALL_SCRIPT.contains(marker), "{marker}");
         }

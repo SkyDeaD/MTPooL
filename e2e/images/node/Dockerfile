@@ -11,7 +11,14 @@ COPY e2e/keys/minisign.pub ./deploy/minisign.pub
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --release --locked -p mtpool-agent \
- && install -D target/release/mtpool-agent /out/mtpool-agent
+ && install -D target/release/mtpool-agent /out/mtpool-agent \
+ && cp Cargo.toml /tmp/Cargo.toml.orig && cp Cargo.lock /tmp/Cargo.lock.orig \
+ && for v in 0.0.1; do \
+      sed -i "s/^version = \"0.0.0\"/version = \"$v\"/" Cargo.toml \
+   && cargo build --release -p mtpool-agent \
+   && install -D target/release/mtpool-agent /out/agent-$v \
+   && cp /tmp/Cargo.toml.orig Cargo.toml && cp /tmp/Cargo.lock.orig Cargo.lock; \
+    done
 
 FROM ubuntu:24.04
 ENV container=docker DEBIAN_FRONTEND=noninteractive
@@ -41,10 +48,13 @@ RUN set -eu; \
     telemt --version
 
 COPY --from=build /out/mtpool-agent /usr/local/bin/mtpool-agent
+# Builds of the same agent under another version, for the rollout scenarios to offer as releases.
+COPY --from=build /out/agent-0.0.1 /opt/e2e/agent-0.0.1
 # The units and the engine's starting configuration are the ones the installer puts on a real
 # node. Only the agent's environment is the stand's: plain http to the registrar, private
 # addresses and the stand-ins for the services outside the pool.
-COPY deploy/systemd/telemt.service deploy/systemd/mtpool-agent.service /etc/systemd/system/
+COPY deploy/systemd/telemt.service deploy/systemd/mtpool-agent.service \
+     deploy/systemd/mtpool-agent-rollback.service /etc/systemd/system/
 COPY deploy/systemd/telemt.toml /tmp/telemt.toml
 RUN mkdir -p /etc/mtpool /etc/telemt /var/lib/mtpool /etc/systemd/system/multi-user.target.wants \
  && sed -e 's/__PORT__/443/' -e 's/__TLS_DOMAIN__/www.example.com/' \
@@ -56,6 +66,7 @@ RUN printf '%s\n' \
       'MTPOOL_GLOBALPING_URL=http://fakes:9000/globalping/' \
       'MTPOOL_IP_SOURCES=http://fakes:9000/ip,http://fakes:9000/ip?2,http://fakes:9000/ip?3,http://fakes:9000/ip?4' \
       'MTPOOL_IPSUM_URL=http://fakes:9000/ipsum' \
+      'MTPOOL_AGENT_UPDATE_POLL_SEC=2' \
       > /etc/mtpool/agent.env
 
 STOPSIGNAL SIGRTMIN+3

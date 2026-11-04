@@ -48,6 +48,51 @@ pub struct Settings {
 
     pub srmd: SrmdSettings,
     pub globalping: GlobalpingSettings,
+    /// Absent in settings stored before the rollout existed.
+    #[serde(default)]
+    pub rollout: RolloutSettings,
+}
+
+/// How an agent release is rolled out: the spec's numbers, shrinkable for E2E.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RolloutSettings {
+    /// How long the canary is watched before the batches begin.
+    pub observe_sec: u32,
+    /// Time between two batches.
+    pub batch_interval_sec: u32,
+    /// Share of the fleet in one batch, in percent.
+    pub batch_percent: u32,
+    /// A node that started its update must be back within this time.
+    pub return_sec: u32,
+    /// A node that was offered the update must have started it within this time.
+    pub offer_wait_sec: u32,
+}
+
+impl Default for RolloutSettings {
+    fn default() -> Self {
+        RolloutSettings {
+            observe_sec: 600,
+            batch_interval_sec: 300,
+            batch_percent: 10,
+            return_sec: 120,
+            offer_wait_sec: 300,
+        }
+    }
+}
+
+impl RolloutSettings {
+    fn validate(&self) -> Result<(), SettingsError> {
+        positive(self.observe_sec, "rollout.observe_sec")?;
+        positive(self.batch_interval_sec, "rollout.batch_interval_sec")?;
+        positive(self.return_sec, "rollout.return_sec")?;
+        positive(self.offer_wait_sec, "rollout.offer_wait_sec")?;
+        check(
+            (1..=100).contains(&self.batch_percent),
+            "rollout.batch_percent",
+            "must be between 1 and 100",
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +180,7 @@ impl Default for Settings {
             proxy_users: Vec::new(),
             srmd: SrmdSettings::default(),
             globalping: GlobalpingSettings::default(),
+            rollout: RolloutSettings::default(),
         }
     }
 }
@@ -252,7 +298,8 @@ impl Settings {
             "user names must be unique",
         )?;
         self.srmd.validate()?;
-        self.globalping.validate()
+        self.globalping.validate()?;
+        self.rollout.validate()
     }
 }
 
@@ -298,6 +345,29 @@ impl GlobalpingSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rollout_defaults_are_the_specs_and_old_settings_load() {
+        let d = RolloutSettings::default();
+        assert_eq!(
+            (
+                d.observe_sec,
+                d.batch_interval_sec,
+                d.batch_percent,
+                d.return_sec
+            ),
+            (600, 300, 10, 120)
+        );
+        let mut json = serde_json::to_value(Settings::default()).unwrap();
+        json.as_object_mut().unwrap().remove("rollout");
+        let old: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(old.rollout, d);
+        let mut s = Settings::default();
+        s.rollout.batch_percent = 0;
+        assert!(s.validate().is_err());
+        s.rollout.batch_percent = 101;
+        assert!(s.validate().is_err());
+    }
 
     #[test]
     fn defaults_match_spec() {

@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/core",
     "crates/protocol",
+    "crates/selfupdate",
     "crates/registrar",
     "crates/agent",
     "crates/fakes",
@@ -21,6 +22,7 @@ publish = false
 [workspace.dependencies]
 mtpool-core = { path = "crates/core" }
 mtpool-protocol = { path = "crates/protocol" }
+mtpool-selfupdate = { path = "crates/selfupdate" }
 arc-swap = "1.9.3"
 async-trait = "0.1.92"
 aes = "0.9.4"

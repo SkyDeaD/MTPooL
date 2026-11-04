@@ -572,10 +572,14 @@ fn redact_token(output: &str) -> String {
         .join("\n")
 }
 
-const UNIT_FILES: [(&str, &str); 9] = [
+const UNIT_FILES: [(&str, &str); 10] = [
     (
         "mtpool-agent.service",
         include_str!("../../../deploy/systemd/mtpool-agent.service"),
+    ),
+    (
+        "mtpool-agent-rollback.service",
+        include_str!("../../../deploy/systemd/mtpool-agent-rollback.service"),
     ),
     (
         "telemt.service",
@@ -621,6 +625,7 @@ async fn units_pass_systemd_analyze_verify() {
     node.exec(
         "mkdir -p /tmp/units && install -m 0755 /bin/true /usr/local/bin/mtpool-registrar \
          && install -m 0755 /bin/true /usr/local/bin/mtpool-registrar.prev \
+         && install -m 0755 /bin/true /usr/local/bin/mtpool-agent.prev \
          && (id mtpool >/dev/null 2>&1 || useradd --system --no-create-home mtpool)",
     )
     .await

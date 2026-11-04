@@ -113,15 +113,21 @@ impl Node<'_> {
     /// Copies the agent of this node's image to this machine, and returns where. A scenario
     /// offers it back as a release: it is a build the node can run.
     pub async fn fetch_agent_binary(&self) -> Result<PathBuf> {
-        let path = scratch_dir("agent")?.join(format!("mtpool-agent-{}", self.service));
+        self.fetch_file("/usr/local/bin/mtpool-agent").await
+    }
+
+    /// Copies the file `remote` of this node to this machine, and returns where.
+    pub async fn fetch_file(&self, remote: &str) -> Result<PathBuf> {
+        let base = remote.rsplit('/').next().unwrap_or("file");
+        let path = scratch_dir("agent")?.join(format!("{base}-{}", self.service));
         run(
             self.stand
                 .guard
                 .compose()
                 .arg("cp")
-                .arg(format!("{}:/usr/local/bin/mtpool-agent", self.service))
+                .arg(format!("{}:{remote}", self.service))
                 .arg(&path),
-            "docker compose cp of the agent binary",
+            &format!("docker compose cp of {remote}"),
             None,
         )
         .await?;

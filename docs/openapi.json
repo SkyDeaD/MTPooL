@@ -807,6 +807,257 @@
         ]
       }
     },
+    "/api/v1/admin/rollouts": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "list_rollouts",
+        "responses": {
+          "200": {
+            "description": "Every rollout, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RolloutView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/rollouts/{id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "get_rollout",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The rollout id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rollout with the stage of every node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RolloutView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such rollout",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/rollouts/{id}/cancel": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "cancel_rollout",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The rollout id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Empty, or `{}`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The rollout is cancelled; nodes keep the version they run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RolloutView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such rollout",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The rollout is over already (`rollout_over`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/rollouts/{id}/resume": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "resume_rollout",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The rollout id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Empty, or `{}`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The rollout goes on from where it stopped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RolloutView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such rollout",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The rollout is not paused (`not_paused`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/settings": {
       "get": {
         "tags": [
@@ -1692,6 +1943,178 @@
           },
           "410": {
             "description": "The registrar does not know the node",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is larger than 256 KiB",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/agent/update": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "The agent tells which version it runs and learns whether to update.",
+        "operationId": "update",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePoll"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "`{\"version\": \"x.y.z\"}` when the node is to update to it, `{}` when not",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateOffer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad body or a version that is not x.y.z",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid node token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The node is out of the pool: `{\"terminate\": true, ...}`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Terminate"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The registrar does not know the node; enroll again",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is larger than 256 KiB",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/agent/update-status": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "summary": "The agent reports a step of its update.",
+        "operationId": "update_status",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateStatus"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Noted (also when no rollout wants it)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad body, a version that is not x.y.z, or `failed` without a valid `code`",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid node token",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The node is out of the pool: `{\"terminate\": true, ...}`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Terminate"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The registrar does not know the node; enroll again",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -4259,6 +4682,242 @@
         },
         "additionalProperties": false
       },
+      "RolloutCounts": {
+        "type": "object",
+        "description": "How many nodes are at each stage.",
+        "required": [
+          "idle",
+          "offered",
+          "started",
+          "updated",
+          "failed",
+          "missed"
+        ],
+        "properties": {
+          "failed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "idle": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "missed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "offered": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "started": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "updated": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "RolloutNode": {
+        "type": "object",
+        "description": "One node in a rollout.",
+        "required": [
+          "node_id",
+          "stage"
+        ],
+        "properties": {
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339: when the node entered the stage (absent for `idle`)."
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `failed`: the code the agent or the registrar gave."
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string",
+            "description": "`idle`, `offered`, `started`, `updated`, `failed` or `missed`."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The agent version the node last reported; absent until it has polled."
+          }
+        }
+      },
+      "RolloutNote": {
+        "type": "object",
+        "description": "The note of a rollout that waits or is paused: why, in a code and in words for the admin.",
+        "required": [
+          "code",
+          "text"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "`no_canary_candidate` (waiting), `node_not_back`, `health_drop`, `update_failed`,\n`bad_signature` or `rolled_back` (paused), `superseded` (cancelled by a newer release).",
+            "example": "node_not_back"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "RolloutTimings": {
+        "type": "object",
+        "description": "The timings a rollout runs by; copied from the settings when it starts.",
+        "required": [
+          "observe_sec",
+          "batch_interval_sec",
+          "batch_percent",
+          "return_sec",
+          "offer_wait_sec"
+        ],
+        "properties": {
+          "batch_interval_sec": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "batch_percent": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "observe_sec": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "offer_wait_sec": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "return_sec": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "RolloutView": {
+        "type": "object",
+        "description": "A rollout of an agent release: `GET /admin/rollouts` and `/admin/rollouts/{id}`.",
+        "required": [
+          "id",
+          "version",
+          "created_at",
+          "phase",
+          "can_resume",
+          "can_cancel",
+          "timings",
+          "counts",
+          "nodes"
+        ],
+        "properties": {
+          "can_cancel": {
+            "type": "boolean",
+            "description": "Whether `POST .../cancel` is accepted (the rollout is not over)."
+          },
+          "can_resume": {
+            "type": "boolean",
+            "description": "Whether `POST .../resume` is accepted (the rollout is paused)."
+          },
+          "canary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339: when the rollout was paused, finished or cancelled."
+          },
+          "counts": {
+            "$ref": "#/components/schemas/RolloutCounts"
+          },
+          "created_at": {
+            "type": "string",
+            "description": "RFC 3339."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "next_batch_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339: when the next batch goes out (`batches`)."
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RolloutNode"
+            }
+          },
+          "note": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RolloutNote",
+                "description": "Why the rollout waits or is paused; absent while it runs."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observing_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339: when the canary is judged good (`observing`: its start; add `observe_sec`)."
+          },
+          "phase": {
+            "type": "string",
+            "description": "`canary` (one node takes it; waits without a candidate), `observing` (the canary is\nwatched), `batches`, `paused`, `done` or `cancelled`."
+          },
+          "resume_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With `paused`: the phase \"continue\" goes back to (`canary`, `observing`, `batches`)."
+          },
+          "timings": {
+            "$ref": "#/components/schemas/RolloutTimings"
+          },
+          "version": {
+            "type": "string",
+            "description": "The release version being rolled out."
+          }
+        }
+      },
       "StatsBucket": {
         "allOf": [
           {
@@ -4539,6 +5198,72 @@
             "type": "string"
           }
         }
+      },
+      "UpdateOffer": {
+        "type": "object",
+        "description": "The answer to `POST /agent/update`.",
+        "properties": {
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The version to update to, or absent when the node is not asked to update. The agent\nfetches `/releases/manifest.json` and checks the signature itself; this is only the\nregistrar's wish.",
+            "example": "0.2.0"
+          }
+        }
+      },
+      "UpdateOutcome": {
+        "type": "string",
+        "description": "What happened to the update on the node.",
+        "enum": [
+          "started",
+          "updated",
+          "failed",
+          "rolled_back"
+        ]
+      },
+      "UpdatePoll": {
+        "type": "object",
+        "description": "`POST /agent/update`: the agent says which version it runs and asks whether to update.",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "string",
+            "description": "The version the agent runs, `x.y.z` with an optional `-pre` part.",
+            "example": "0.1.0"
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateStatus": {
+        "type": "object",
+        "description": "`POST /agent/update-status`: the agent reports an update step. It is sent again until the\nregistrar answers, so a report may repeat.",
+        "required": [
+          "version",
+          "outcome"
+        ],
+        "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Required with `failed`: a short code of 1 to 40 characters `a-z`, `0-9`, `_`\n(`bad_signature`, `bad_hash`, `downgrade`, `key_mismatch`, `download`, `start_failed`).",
+            "example": "bad_signature"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/UpdateOutcome"
+          },
+          "version": {
+            "type": "string",
+            "description": "The version the update is about.",
+            "example": "0.2.0"
+          }
+        },
+        "additionalProperties": false
       },
       "Verdict": {
         "type": "string",

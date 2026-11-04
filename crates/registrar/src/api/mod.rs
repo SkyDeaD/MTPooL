@@ -24,6 +24,7 @@ pub mod bot;
 pub mod public;
 pub mod qr;
 pub mod ratelimit;
+pub mod rollout;
 pub mod stats;
 pub mod stream;
 pub mod util;
@@ -222,6 +223,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .merge(agent::routes())
         .merge(bot::routes())
         .merge(admin::routes())
+        .merge(rollout::routes())
         .merge(crate::metrics::routes())
 }
 

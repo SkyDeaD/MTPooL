@@ -83,6 +83,8 @@ pub struct AppState {
     /// The key releases are signed with, as served in `/install.sh`; empty when this build has
     /// none (then `/install.sh` says so).
     pub minisign_pub: &'static str,
+    /// The rollout of agent releases.
+    pub rollouts: crate::rollout::RolloutService,
 }
 
 impl AppState {
@@ -96,7 +98,13 @@ impl AppState {
         snapshots: SnapshotStore,
         clock: Clock,
     ) -> AppState {
+        let rollouts = crate::rollout::RolloutService::load(store.clone(), clock.clone())
+            .unwrap_or_else(|e| {
+                tracing::error!(error = %e, "cannot read the saved rollouts, starting without");
+                crate::rollout::RolloutService::empty(store.clone(), clock.clone())
+            });
         AppState {
+            rollouts,
             store,
             actor,
             snapshots,
@@ -173,6 +181,7 @@ pub fn router(state: AppState) -> Router {
     // The bot and admin routes take a token of their own kind and are not behind it either.
     let (bot, _) = api::bot::routes().split_for_parts();
     let (admin, _) = api::admin::routes().split_for_parts();
+    let (rollouts, _) = api::rollout::routes().split_for_parts();
     // /metrics takes a metrics token and sits outside the API prefix.
     let (metrics, _) = crate::metrics::routes().split_for_parts();
     Router::new()
@@ -183,6 +192,7 @@ pub fn router(state: AppState) -> Router {
         .merge(agent)
         .merge(bot)
         .merge(admin)
+        .merge(rollouts)
         .merge(metrics)
         .fallback(api::not_found)
         .method_not_allowed_fallback(api::method_not_allowed)
@@ -341,14 +351,22 @@ pub async fn run_with(
     ];
     // The poller only fetches and checks files; it has no say over the state owner.
     workers.extend(crate::update::spawn_poller(store.clone()));
-    let app = router(
-        AppState::new(store.clone(), actor.clone(), actor.snapshots())
-            .with_events(fan.clone())
-            .with_gp_settings(gp_settings)
-            .with_allow_private_ips(allow_private_ips)
-            .with_releases_dir(releases_dir)
-            .with_verifier(Arc::new(verifier)),
-    );
+    let state = AppState::new(store.clone(), actor.clone(), actor.snapshots())
+        .with_events(fan.clone())
+        .with_gp_settings(gp_settings)
+        .with_allow_private_ips(allow_private_ips)
+        .with_releases_dir(releases_dir)
+        .with_verifier(Arc::new(verifier));
+    // The rollout worker only reads the state owner; the agents' polls reach the rollout
+    // through the handlers.
+    workers.push(tokio::spawn(crate::rollout::run(
+        state.rollouts.clone(),
+        actor.clone(),
+        state.clock.clone(),
+        state.releases_dir.clone(),
+        state.minisign_pub,
+    )));
+    let app = router(state);
     if let Ok(addr) = listener.local_addr() {
         tracing::info!(%addr, "listening");
     }

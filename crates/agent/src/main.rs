@@ -43,6 +43,21 @@ enum Command {
     },
     /// Print the version.
     Version,
+    /// Manage the agent's own update.
+    Update {
+        #[command(subcommand)]
+        action: UpdateAction,
+    },
+}
+
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+enum UpdateAction {
+    /// Put the previous build back when a new one is on probation. Run by the rollback unit.
+    Rollback {
+        /// The local configuration file.
+        #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
+        config: PathBuf,
+    },
 }
 
 fn init_logging() {
@@ -201,7 +216,7 @@ async fn run(config_path: PathBuf) -> ExitCode {
             },
         },
     };
-    let lifecycle = match Lifecycle::new(&config, client, fs, hooks, system_jitter()) {
+    let lifecycle = match Lifecycle::new(&config, client, fs.clone(), hooks, system_jitter()) {
         Ok(lifecycle) => lifecycle,
         Err(error) => {
             tracing::error!(
@@ -211,10 +226,14 @@ async fn run(config_path: PathBuf) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let update_task = update_task(&config, fs.clone());
     tracing::info!(version = env!("CARGO_PKG_VERSION"), name = %config.name, "mtpool-agent starts");
     let outcome = lifecycle.run(shutdown_signal()).await;
     gp_task.abort();
     antiscan_task.abort();
+    if let Some(task) = update_task {
+        task.abort();
+    }
     match outcome {
         Ok(()) => {
             tracing::info!("mtpool-agent stops");
@@ -223,6 +242,84 @@ async fn run(config_path: PathBuf) -> ExitCode {
         Err(reason) => {
             tracing::error!("{reason}");
             ExitCode::from(reason.exit_code())
+        }
+    }
+}
+
+/// The self-update loop, when this build can verify releases.
+fn update_task(config: &LocalConfig, fs: Arc<RealFs>) -> Option<tokio::task::JoinHandle<()>> {
+    use mtpool_agent::state_files::StateFiles;
+    use mtpool_agent::update::{self, AgentUpdater, RegistrarSource, SystemHost};
+    let Some(cfg) = update::host_config(&config.state_dir) else {
+        tracing::info!("no release key is built in: the agent does not update itself");
+        return None;
+    };
+    if let Err(error) = std::fs::create_dir_all(&cfg.paths.releases) {
+        tracing::warn!(%error, "cannot prepare the update directory: the agent does not update itself");
+        return None;
+    }
+    let client = RegistrarClient::new(config.registrar.clone()).ok()?;
+    let source = RegistrarSource {
+        client,
+        state: StateFiles::new(fs, config.state_dir.clone()),
+    };
+    let host = SystemHost {
+        runner: TokioRunner,
+        unit: update::UNIT.to_owned(),
+    };
+    let updater = AgentUpdater::new(cfg, source, host);
+    Some(tokio::spawn(update::run_loop(
+        updater,
+        update::poll_every(),
+    )))
+}
+
+/// `update rollback`: what the rollback unit runs.
+async fn rollback(config_path: PathBuf) -> ExitCode {
+    use mtpool_agent::state_files::StateFiles;
+    use mtpool_agent::update::{self, AgentUpdater, RegistrarSource, SystemHost};
+    let allow_private = match Overrides::from_env() {
+        Ok(overrides) => overrides.allow_private_ips,
+        Err(error) => {
+            tracing::error!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let config = match LocalConfig::load_allowing(&config_path, allow_private) {
+        Ok(config) => config,
+        Err(error) => {
+            tracing::error!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(cfg) = update::host_config(&config.state_dir) else {
+        tracing::error!("no release key is built in: nothing to roll back");
+        return ExitCode::FAILURE;
+    };
+    let Ok(client) = RegistrarClient::new(config.registrar.clone()) else {
+        return ExitCode::FAILURE;
+    };
+    // The rollback only writes the report to the outbox; the restarted agent sends it.
+    let source = RegistrarSource {
+        client,
+        state: StateFiles::new(Arc::new(RealFs), config.state_dir.clone()),
+    };
+    let host = SystemHost {
+        runner: TokioRunner,
+        unit: update::UNIT.to_owned(),
+    };
+    match AgentUpdater::new(cfg, source, host).rollback().await {
+        Ok(Some(version)) => {
+            println!("rolled back {version}");
+            ExitCode::SUCCESS
+        }
+        Ok(None) => {
+            println!("no update is on probation; nothing changed");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            tracing::error!("{error}");
+            ExitCode::FAILURE
         }
     }
 }
@@ -237,6 +334,12 @@ async fn main() -> ExitCode {
                 None => println!("{}", env!("CARGO_PKG_VERSION")),
             }
             ExitCode::SUCCESS
+        }
+        Command::Update {
+            action: UpdateAction::Rollback { config },
+        } => {
+            init_logging();
+            rollback(config).await
         }
         Command::Run { config } => {
             init_logging();

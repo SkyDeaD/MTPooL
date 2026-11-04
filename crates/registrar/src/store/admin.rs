@@ -66,6 +66,14 @@ pub enum AdminOp {
         id: i64,
         at: Ts,
     },
+    /// Inserts or rewrites a rollout (`state` is its JSON document, already serialized).
+    SaveRollout {
+        id: i64,
+        version: String,
+        state: String,
+        created_at: Ts,
+        updated_at: Ts,
+    },
 }
 
 // Only the variant name: the ops carry webhook and API secrets.
@@ -86,6 +94,7 @@ pub(super) fn name(op: &AdminOp) -> &'static str {
         AdminOp::DeleteSecret { .. } => "delete_secret",
         AdminOp::UpdateOwner { .. } => "update_owner",
         AdminOp::DeleteOwner { .. } => "delete_owner",
+        AdminOp::SaveRollout { .. } => "save_rollout",
     }
 }
 
@@ -162,6 +171,21 @@ pub(super) fn apply(conn: &Connection, op: &AdminOp) -> Result<i64, StoreError> 
                 next_at.map(|t| t.0)
             ])?;
             Ok(0)
+        }
+        AdminOp::SaveRollout {
+            id,
+            version,
+            state,
+            created_at,
+            updated_at,
+        } => {
+            conn.prepare_cached(
+                "INSERT INTO rollouts(id, version, state, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5) \
+                 ON CONFLICT(id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at",
+            )?
+            .execute(params![id, version, state, created_at.0, updated_at.0])?;
+            Ok(*id)
         }
         AdminOp::SetSecret { name, value, at } => {
             conn.prepare_cached(

@@ -316,6 +316,9 @@ TELEMT_UNIT
     cat >/etc/systemd/system/mtpool-agent.service <<'MTPOOL_AGENT_UNIT'
 __MTPOOL_AGENT_UNIT__
 MTPOOL_AGENT_UNIT
+    cat >/etc/systemd/system/mtpool-agent-rollback.service <<'MTPOOL_AGENT_ROLLBACK_UNIT'
+__MTPOOL_AGENT_ROLLBACK_UNIT__
+MTPOOL_AGENT_ROLLBACK_UNIT
 
     systemctl daemon-reload
     systemctl enable --now mtpool-agent
