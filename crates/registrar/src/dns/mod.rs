@@ -14,7 +14,7 @@ pub mod worker;
 /// The comment every record the pool creates carries. A record with exactly this comment is the
 /// pool's own and may be deleted; any other record is never touched. The marker lives at the
 /// provider, so it survives a lost database and shows in the Cloudflare panel.
-pub const MANAGED_COMMENT: &str = "mtpool";
+pub const MANAGED_COMMENT: &str = "MTPooL";
 
 /// A record as the provider holds it, and whether the pool created it.
 #[derive(Debug, Clone, PartialEq, Eq)]

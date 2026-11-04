@@ -289,7 +289,7 @@ async fn create_sends_the_comment_ttl_and_proxied() {
             "content": "192.0.2.1",
             "ttl": 60,
             "proxied": false,
-            "comment": "mtpool",
+            "comment": "MTPooL",
         })))
         .respond_with(json_answer(200, CREATE))
         .expect(1)
@@ -316,7 +316,7 @@ async fn a_cname_is_created_as_a_cname() {
             "content": "p1.example.com",
             "ttl": 300,
             "proxied": true,
-            "comment": "mtpool",
+            "comment": "MTPooL",
         })))
         .respond_with(json_answer(200, CREATE))
         .expect(1)

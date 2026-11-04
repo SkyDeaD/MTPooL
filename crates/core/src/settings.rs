@@ -244,10 +244,14 @@ impl Settings {
             (self.rounds_before_slow, "rounds_before_slow"),
             (self.clean_rounds_to_exit, "clean_rounds_to_exit"),
             (self.reverify_pause_sec, "reverify_pause_sec"),
-            (self.dns_ttl, "dns_ttl"),
         ] {
             positive(v, field)?;
         }
+        check(
+            (60..=86_400).contains(&self.dns_ttl),
+            "dns_ttl",
+            "must be between 60 and 86400",
+        )?;
         check(
             (1..=8).contains(&self.masters_per_domain),
             "masters_per_domain",
@@ -345,6 +349,20 @@ impl GlobalpingSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dns_ttl_follows_what_cloudflare_accepts() {
+        let with = |ttl| Settings {
+            dns_ttl: ttl,
+            ..Settings::default()
+        };
+        assert!(with(60).validate().is_ok());
+        assert!(with(86_400).validate().is_ok());
+        // 1 means "automatic" at Cloudflare, which is 300 seconds: too slow to change masters.
+        assert!(with(1).validate().is_err());
+        assert!(with(59).validate().is_err());
+        assert!(with(86_401).validate().is_err());
+    }
 
     #[test]
     fn rollout_defaults_are_the_specs_and_old_settings_load() {

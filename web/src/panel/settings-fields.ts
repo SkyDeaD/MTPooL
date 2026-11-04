@@ -53,7 +53,7 @@ export const GROUPS: Group[] = [
   { id: 'masters', fields: [count('masters_per_domain', 8), mn('rotation_ttl_sec', 0, 43200)] },
   {
     id: 'dns',
-    fields: [sec('dns_ttl'), { key: 'dns_proxied', kind: 'bool' }, { key: 'domains', kind: 'domains' }],
+    fields: [{ key: 'dns_ttl', kind: 'sec', min: 60, max: 86400 }, { key: 'dns_proxied', kind: 'bool' }, { key: 'domains', kind: 'domains' }],
   },
   {
     id: 'proxy',

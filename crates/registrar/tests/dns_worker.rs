@@ -308,7 +308,7 @@ async fn token_revoked_403_emits_event_and_slow_retry_no_deletes() {
     let old = json!({
         "result": [{
             "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1", "name": DOMAIN, "type": "A",
-            "content": "192.0.2.9", "proxied": false, "ttl": 60, "comment": "mtpool", "tags": []
+            "content": "192.0.2.9", "proxied": false, "ttl": 60, "comment": "MTPooL", "tags": []
         }],
         "result_info": {"page": 1, "per_page": 100, "count": 1, "total_count": 1, "total_pages": 1},
         "success": true, "errors": [], "messages": []

@@ -1014,7 +1014,7 @@ mod tests {
             post(
                 &records,
                 &json!({"type":"A","name":"pool.example.com","content":"192.0.2.7",
-                        "ttl":60,"proxied":false,"comment":"mtpool"}),
+                        "ttl":60,"proxied":false,"comment":"MTPooL"}),
             ),
         )
         .await;
@@ -1033,7 +1033,7 @@ mod tests {
         )
         .await;
         assert_eq!(listed["result"].as_array().map(Vec::len), Some(1));
-        assert_eq!(listed["result"][0]["comment"], "mtpool");
+        assert_eq!(listed["result"][0]["comment"], "MTPooL");
         let (_, other) = json_of(
             &app,
             get_with_token(&format!(
@@ -1047,7 +1047,7 @@ mod tests {
         assert_eq!(
             state["dns"],
             json!([{"zone":"example.com","name":"pool.example.com","type":"A",
-                    "content":"192.0.2.7","comment":"mtpool","id":id}])
+                    "content":"192.0.2.7","comment":"MTPooL","id":id}])
         );
 
         let (status, _) = json_of(

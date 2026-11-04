@@ -38,7 +38,7 @@ async fn node_enrolls_becomes_master_and_dns_points_to_it() {
         .await
         .expect("the DNS record points to the node");
     assert_eq!(
-        record["comment"], "mtpool",
+        record["comment"], "MTPooL",
         "the record is managed: {record:#?}"
     );
 
