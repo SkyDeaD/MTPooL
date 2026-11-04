@@ -26,14 +26,40 @@ export function hrefOf(page: Page, arg?: string | null): string {
 
 export const current = $state<{ route: Route }>({ route: { page: 'overview', arg: null } });
 
+/**
+ * A page with unsaved work sets `dirty`. A move to another address is then held back: the address
+ * goes back where it was and `pending` keeps the one asked for, until the shell has asked the reader.
+ */
+export const guard = $state<{ dirty: boolean; pending: string | null }>({ dirty: false, pending: null });
+
+/** The reader agreed to leave: the held address is taken. */
+export function leave(): void {
+  const target = guard.pending;
+  guard.dirty = false;
+  guard.pending = null;
+  if (target !== null) window.location.hash = target;
+}
+
 /** Follows the address bar; returns the function that stops it. */
 export function startRouter(): () => void {
+  let last = window.location.hash;
   const sync = () => {
-    current.route = parseRoute(window.location.hash);
+    const next = window.location.hash;
+    if (guard.dirty && next !== last) {
+      guard.pending = next;
+      history.replaceState(null, '', last || '#/');
+      return;
+    }
+    last = next;
+    current.route = parseRoute(next);
   };
   sync();
   window.addEventListener('hashchange', sync);
-  return () => window.removeEventListener('hashchange', sync);
+  return () => {
+    window.removeEventListener('hashchange', sync);
+    guard.dirty = false;
+    guard.pending = null;
+  };
 }
 
 export function go(page: Page, arg?: string | null): void {

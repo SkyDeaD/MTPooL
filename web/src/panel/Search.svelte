@@ -1,37 +1,58 @@
 <script lang="ts">
-  import { t } from '../lib/i18n';
-  import Icon from '../shared/Icon.svelte';
-  import { usePanel } from './context.svelte';
-  import { go } from './route.svelte';
-  import type { AdminNode } from './types';
+  import { t, type Key } from './i18n';
+  import type { PublicDomain } from '../lib/types';
+  import Icon from './ui/Icon.svelte';
+  import { useData } from './data.svelte';
+  import { usePolled } from './live.svelte';
+  import { hrefOf, type Page } from './route.svelte';
 
-  // Quick search over the nodes by name or address. The list is read when the field is first used,
-  // so the page itself asks nothing extra. `/` jumps here from anywhere but a text field.
-  const panel = usePanel();
-  let nodes = $state<AdminNode[] | null>(null);
+  // Search over the nodes, the domains and the sections. The nodes are the shell's own list; the
+  // domains are read when the field is first used. `/` jumps here from anywhere but a text field.
+  const data = useData();
   let query = $state('');
   let open = $state(false);
+  let used = $state(false);
+  let active = $state(0);
   let input: HTMLInputElement | undefined = $state();
+  const domains = usePolled<PublicDomain[]>(() => (used ? '/api/v1/domains' : null));
 
-  async function load(): Promise<void> {
-    if (nodes) return;
-    try {
-      nodes = await panel.client.get('/api/v1/admin/nodes');
-    } catch {
-      nodes = [];
-    }
+  const SECTIONS: { page: Page; label: Key }[] = [
+    { page: 'overview', label: 'panel.nav.overview' },
+    { page: 'nodes', label: 'panel.nav.nodes' },
+    { page: 'masters', label: 'panel.nav.masters' },
+    { page: 'srmd', label: 'panel.nav.srmd' },
+    { page: 'journal', label: 'panel.nav.journal' },
+    { page: 'settings', label: 'panel.nav.settings' },
+    { page: 'owners', label: 'panel.nav.owners' },
+    { page: 'updates', label: 'panel.nav.updates' },
+  ];
+
+  interface Hit {
+    href: string;
+    label: string;
+    kind: string;
   }
-
-  const found = $derived.by(() => {
+  const found = $derived.by<Hit[]>(() => {
     const q = query.trim().toLowerCase();
-    if (!q || !nodes) return [];
-    return nodes.filter((n) => n.state !== 'banned' && (n.id.toLowerCase().includes(q) || n.full_ip.includes(q))).slice(0, 8);
+    if (!q) return [];
+    const nodes = (data.nodes.data ?? [])
+      .filter((n) => n.id.toLowerCase().includes(q) || n.full_ip.includes(q))
+      .map((n) => ({ href: hrefOf('node', n.id), label: n.id, kind: t('panel.search.node') }));
+    const doms = (domains.data ?? [])
+      .filter((d) => d.domain.includes(q))
+      .map((d) => ({ href: hrefOf('masters'), label: d.domain, kind: t('panel.search.domain') }));
+    const secs = SECTIONS.filter((s) => t(s.label).toLowerCase().includes(q)).map((s) => ({
+      href: hrefOf(s.page),
+      label: t(s.label),
+      kind: t('panel.search.section'),
+    }));
+    return [...nodes, ...doms, ...secs].slice(0, 8);
   });
 
-  function pick(id: string): void {
+  function pick(hit: Hit): void {
     query = '';
     open = false;
-    go('node', id);
+    window.location.hash = hit.href;
   }
 
   function hotkey(event: KeyboardEvent): void {
@@ -45,31 +66,35 @@
 
 <svelte:window onkeydown={hotkey} />
 
-<div class="srch">
+<div class="srch" role="search">
   <Icon name="search" />
   <input
     class="inp"
     bind:this={input}
     bind:value={query}
     type="search"
+    autocomplete="off"
     placeholder={t('panel.search.placeholder')}
-    aria-label={t('panel.search.placeholder')}
+    aria-label={t('panel.search.label')}
+    oninput={() => (active = 0)}
     onfocus={() => {
       open = true;
-      void load();
+      used = true;
     }}
     onblur={() => setTimeout(() => (open = false), 150)}
     onkeydown={(e) => {
-      if (e.key === 'Enter' && found[0]) pick(found[0].id);
+      if (e.key === 'ArrowDown') active = Math.min(active + 1, found.length - 1);
+      if (e.key === 'ArrowUp') active = Math.max(active - 1, 0);
+      if (e.key === 'Enter' && found[active]) pick(found[active]);
       if (e.key === 'Escape') input?.blur();
     }}
   />
   <kbd aria-hidden="true">/</kbd>
   {#if open && query.trim()}
     <div class="res">
-      {#each found as n (n.id)}
-        <a href={`#/nodes/${encodeURIComponent(n.id)}`} onclick={() => pick(n.id)}>
-          <span class="nm">{n.id}</span><span class="mono muted">{n.ip}</span>
+      {#each found as hit, i (hit.href + hit.label)}
+        <a href={hit.href} class={[i === active && 'on']} onclick={() => pick(hit)}>
+          <span>{hit.label}</span><span class="faint sm">{hit.kind}</span>
         </a>
       {:else}
         <div class="e">{t('panel.search.none')}</div>

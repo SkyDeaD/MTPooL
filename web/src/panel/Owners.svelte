@@ -1,16 +1,18 @@
 <script lang="ts">
   import { ApiError } from '../lib/api';
   import { formatWhen } from '../lib/dates';
-  import { t } from '../lib/i18n';
+  import { t } from './i18n';
   import { toast } from '../lib/toast.svelte';
-  import type { MessageKey } from '../strings.ru';
+  import type { Key as MessageKey } from './i18n';
   import { act } from './act';
   import { usePanel } from './context.svelte';
   import { usePolled } from './live.svelte';
   import type { NewTokenCreated, Owner, TokenMeta } from './types';
   import Choice from './ui/Choice.svelte';
   import Confirm from './ui/Confirm.svelte';
+  import Icon from './ui/Icon.svelte';
   import Modal from './ui/Modal.svelte';
+  import { Popover } from 'bits-ui';
 
   // The people whose servers join the pool, and the tokens that let them and the bots in.
   const panel = usePanel();
@@ -18,7 +20,7 @@
   const tokens = usePolled<TokenMeta[]>(() => '/api/v1/admin/tokens');
 
   const ownerName = (id: number | null | undefined) => owners.data?.find((o) => o.id === id)?.name ?? '';
-  const kindText = (kind: string) => (['enroll', 'bot', 'metrics'].includes(kind) ? t(`panel.tokens.kind.${kind}` as MessageKey) : kind);
+  const kindText = (kind: string) => (['admin', 'enroll', 'node', 'bot', 'metrics'].includes(kind) ? t(`panel.tokens.kind.${kind}` as MessageKey) : kind);
 
   // Owners.
   let ownerOpen = $state(false);
@@ -129,12 +131,18 @@
 <div class="view stack">
   <header class="ph">
     <h1>{t('panel.owners.title')}</h1>
+    <span class="sub">{t('panel.owners.sub')}</span>
     <span class="sp"></span>
-    <button class="btn" type="button" onclick={newOwner}>{t('panel.owners.add')}</button>
+    <button class="btn pri" type="button" onclick={openIssue}><Icon name="key" />{t('panel.tokens.issue')}</button>
   </header>
   {#if owners.stale || tokens.stale}<p class="note" role="status">{t('common.stale')}</p>{/if}
 
   <section class="t">
+    <div class="th">
+      <h2>{t('panel.owners.list')}</h2>
+      <span class="sp"></span>
+      <button class="btn s" type="button" onclick={newOwner}><Icon name="plus" />{t('panel.owners.add')}</button>
+    </div>
     <div class="tw">
       <table class="tb list">
         <thead>
@@ -152,10 +160,15 @@
               <td class="n" data-l={t('panel.owners.limit')}>{o.node_limit}</td>
               <td data-l={t('panel.owners.note')}>{o.note || '—'}</td>
               <td class="n">
-                <div class="row-actions">
-                  <button class="btn s" type="button" onclick={() => editOwner(o)}>{t('panel.owners.edit')}</button>
-                  <button class="btn s dng" type="button" onclick={() => (deleting = o)}>{t('panel.owners.delete')}</button>
-                </div>
+                <Popover.Root>
+                  <Popover.Trigger class="btn s ic txt" aria-label={`${t('panel.nodes.actions')}: ${o.name}`}><Icon name="more" /></Popover.Trigger>
+                  <Popover.Portal>
+                    <Popover.Content class="pop" align="end" sideOffset={4}>
+                      <button type="button" onclick={() => editOwner(o)}>{t('panel.owners.edit')}</button>
+                      <button type="button" class="dng" onclick={() => (deleting = o)}>{t('panel.owners.delete')}</button>
+                    </Popover.Content>
+                  </Popover.Portal>
+                </Popover.Root>
               </td>
             </tr>
           {/each}
@@ -167,8 +180,7 @@
   <section class="t">
     <div class="th">
       <h2>{t('panel.tokens.title')}</h2>
-      <span class="sp"></span>
-      <button class="btn pri s" type="button" onclick={openIssue}>{t('panel.tokens.issue')}</button>
+      <span class="sub">{t('panel.tokens.sub')}</span>
     </div>
     <div class="tw">
       <table class="tb list">

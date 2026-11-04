@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { t } from '../src/lib/i18n';
+import { t } from '../src/panel/i18n';
 import App from '../src/panel/App.svelte';
 import { MOCK_TOKEN } from '../scripts/admin-mock';
 import { FIXTURE_NOW, settle, setHidden } from './helpers';
@@ -112,35 +112,41 @@ describe('settings', () => {
     await settle(50);
   }
 
-  it('settings_human_labels_seconds_single_save_button', async () => {
+  const key = (k: string, root: ParentNode = document) => root.querySelector<HTMLInputElement>(`[data-key="${k}"]`)!;
+  const formOf = (k: string) => key(k).closest('form') as HTMLFormElement;
+
+  it('settings_human_labels_seconds_per_form_save_button', async () => {
     await openSettings();
-    const form = document.querySelector('form.settings') as HTMLFormElement;
-    expect(form).toBeTruthy();
-    // One save button for the whole page.
-    expect(form.querySelectorAll('button[type="submit"]')).toHaveLength(1);
-    // Every setting the server has is on the page, by its dotted name.
-    const shown = new Set([...form.querySelectorAll<HTMLElement>('[data-key]')].map((e) => e.dataset.key));
+    const forms = [...document.querySelectorAll<HTMLFormElement>('form.settings')];
+    expect(forms.length).toBeGreaterThan(4);
+    // Each group has its own save button.
+    for (const f of forms) expect(f.querySelectorAll('button[type="submit"]')).toHaveLength(1);
+    // Every setting the server has is on the page, by its dotted name (the SRMD ones are on its page).
+    const shown = new Set([...document.querySelectorAll<HTMLElement>('[data-key]')].map((e) => e.dataset.key));
     const flat = (obj: Record<string, unknown>, prefix = ''): string[] =>
       Object.entries(obj).flatMap(([k, v]) =>
         k === 'secrets' ? [] : v && typeof v === 'object' && !Array.isArray(v) ? flat(v as Record<string, unknown>, `${prefix}${k}.`) : [`${prefix}${k}`],
       );
-    for (const key of flat(api.mock.state.settings)) expect(shown, `field ${key}`).toContain(key);
-    // Labels are words, values are in seconds, and the code names stay out of sight.
-    expect(form.textContent).toContain(t('settings.heartbeat_interval_sec'));
-    expect(form.textContent).not.toContain('heartbeat_interval_sec');
-    expect(form.textContent).not.toContain('globalping_token');
-    const hb = form.querySelector<HTMLInputElement>('input[data-key="heartbeat_interval_sec"]');
-    expect(hb?.value).toBe('15');
-    expect(hb?.closest('.f')?.textContent).toContain(t('settings.unit.sec'));
+    for (const k of flat(api.mock.state.settings).filter((x) => !x.startsWith('srmd.'))) expect(shown, `field ${k}`).toContain(k);
+    const hbForm = formOf('heartbeat_interval_sec');
+    expect(hbForm.textContent).toContain(t('settings.heartbeat_interval_sec'));
+    expect(hbForm.textContent).not.toContain('heartbeat_interval_sec');
+    expect(document.body.textContent).not.toContain('globalping_token');
+    expect(key('heartbeat_interval_sec').value).toBe('15');
+    expect(key('heartbeat_interval_sec').closest('.f')?.textContent).toContain(t('settings.unit.sec'));
+    // Rotation is shown in minutes.
+    expect(key('rotation_ttl_sec').closest('.f')?.textContent).toContain(t('settings.unit.min'));
   });
 
   it('settings_unsaved_warning', async () => {
     await openSettings();
-    const form = document.querySelector('form.settings') as HTMLFormElement;
-    expect(text()).not.toContain(t('settings.unsaved'));
-    type(form.querySelector<HTMLInputElement>('input[data-key="rotation_ttl_sec"]')!, '2400');
-    expect(text()).toContain(t('settings.unsaved'));
-    // Leaving the tab asks for confirmation while there is something unsaved.
+    const form = formOf('rotation_ttl_sec');
+    expect(form.textContent).not.toContain(t('settings.unsaved'));
+    expect(form.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled).toBe(true);
+    type(key('rotation_ttl_sec'), '40');
+    expect(form.textContent).toContain(t('settings.unsaved'));
+    // Another group stays calm.
+    expect(formOf('heartbeat_interval_sec').textContent).not.toContain(t('settings.unsaved'));
     const leave = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(leave);
     expect(leave.defaultPrevented).toBe(true);
@@ -148,19 +154,32 @@ describe('settings', () => {
     form.requestSubmit();
     await settle(50);
     const patch = api.calls.find((c) => c.method === 'PATCH' && c.path === '/admin/settings');
-    expect(patch?.body).toEqual({ rotation_ttl_sec: 2400 });
+    // Only this group's fields are sent; minutes are written as seconds.
+    expect(Object.keys(patch?.body as object).sort()).toEqual(['domains', 'masters_per_domain', 'rotation_ttl_sec'].filter((k) => k in (patch?.body as object)).sort());
+    expect((patch?.body as Record<string, unknown>).rotation_ttl_sec).toBe(2400);
     expect(patch?.headers['x-csrf-token']).toBe('csrf-mock');
     expect(text()).toContain(t('settings.saved'));
-    expect(text()).not.toContain(t('settings.unsaved'));
+    expect(form.textContent).not.toContain(t('settings.unsaved'));
     const after = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(after);
     expect(after.defaultPrevented).toBe(false);
   });
 
+  it('settings_dirty_form_asks_before_leaving_the_page_inside_the_panel', async () => {
+    await openSettings();
+    type(key('rotation_ttl_sec'), '40');
+    window.location.hash = '#/nodes';
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    await settle(30);
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(t('panel.leave.title'));
+    await click(button(t('panel.leave.keep'), document.querySelector('[role="dialog"]')!));
+    expect(window.location.hash).toBe('#/settings');
+  });
+
   it('settings_invalid_value_blocks_the_save', async () => {
     await openSettings();
-    const form = document.querySelector('form.settings') as HTMLFormElement;
-    type(form.querySelector<HTMLInputElement>('input[data-key="heartbeat_interval_sec"]')!, '0');
+    const form = formOf('heartbeat_interval_sec');
+    type(key('heartbeat_interval_sec'), '0');
     form.requestSubmit();
     await settle(50);
     expect(api.writes()).not.toContain('PATCH /admin/settings');
@@ -169,14 +188,14 @@ describe('settings', () => {
 
   it('secret_fields_write_only', async () => {
     await openSettings();
-    const form = document.querySelector('form.settings') as HTMLFormElement;
+    const page = document.querySelector('.view') as HTMLElement;
     // The server says only whether a secret is set; no input holds a value.
-    expect(form.textContent).toContain(t('settings.secret.set'));
-    expect(form.textContent).toContain(t('settings.secret.unset'));
-    expect(form.querySelectorAll('input[type="password"]')).toHaveLength(0);
-    const replace = [...form.querySelectorAll('button')].filter((b) => b.textContent?.trim() === t('settings.secret.replace'));
+    expect(page.textContent).toContain(t('settings.secret.set'));
+    expect(page.textContent).toContain(t('settings.secret.unset'));
+    expect(page.querySelectorAll('input[type="password"]')).toHaveLength(0);
+    const replace = [...page.querySelectorAll('button')].filter((b) => b.textContent?.trim() === t('settings.secret.replace'));
     expect(replace.length).toBe(3);
-    await click(replace[2]);
+    await click(replace[0]);
     const dialog = document.querySelector('[role="dialog"]');
     expect(dialog?.textContent).toContain(t('settings.secret.title', { label: t('settings.secret.cloudflare_api_token') }));
     const field = dialog!.querySelector<HTMLInputElement>('input')!;
@@ -190,6 +209,63 @@ describe('settings', () => {
     // The value is gone from the page for good.
     expect(document.body.outerHTML).not.toContain('cf-secret-value');
     for (const input of document.querySelectorAll('input')) expect(input.value).not.toContain('cf-secret-value');
+  });
+});
+
+describe('nodes list and search', () => {
+  const rowsOf = () => [...document.querySelectorAll<HTMLElement>('tbody tr.go a.nm')].map((a) => a.textContent);
+  const chip = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('.chips .chip')].find((c) => c.textContent?.includes(name))!;
+
+  it('nodes_chips_filter_and_count', async () => {
+    start('#/nodes');
+    await login();
+    await settle(50);
+    const all = rowsOf();
+    expect(all).toContain('alpha-k3m2q');
+    expect(chip(t('panel.nodes.filter.all')).getAttribute('aria-pressed')).toBe('true');
+    await click(chip(t('panel.nodes.filter.master')));
+    expect(chip(t('panel.nodes.filter.master')).getAttribute('aria-pressed')).toBe('true');
+    expect(rowsOf().slice(0, 3)).toEqual(['alpha-k3m2q', 'beta-r8t4w', 'gamma-x2n9d']);
+    expect(rowsOf()).not.toContain('epsilon-h4j6s');
+    expect(chip(t('panel.nodes.filter.master')).querySelector('b')?.textContent).toBe('3');
+    await click(chip(t('panel.nodes.filter.prob')));
+    expect(rowsOf()[0]).toBe('theta-m1d7z');
+    expect(rowsOf()).not.toContain('alpha-k3m2q');
+  });
+
+  it('nodes_sort_by_clients_and_search_text', async () => {
+    start('#/nodes');
+    await login();
+    await settle(50);
+    await click(chip(t('panel.nodes.filter.queue')));
+    const before = rowsOf();
+    await click(button(t('stats.col.clients')));
+    const sorted = rowsOf();
+    expect(new Set(sorted)).toEqual(new Set(before));
+    expect(sorted[0]).toBe('epsilon-h4j6s');
+    expect(sorted.indexOf('zeta-w9b3y')).toBeLessThan(sorted.indexOf('eta-c5f8l'));
+    await click(chip(t('panel.nodes.filter.all')));
+    type(document.querySelector<HTMLInputElement>('.th input[type="search"]')!, 'gamma');
+    expect(rowsOf()).toEqual(['gamma-x2n9d']);
+  });
+
+  it('global_search_finds_nodes_domains_and_sections', async () => {
+    start('#/overview');
+    await login();
+    await settle(50);
+    const input = document.querySelector<HTMLInputElement>('[role="search"] input')!;
+    input.focus();
+    input.dispatchEvent(new Event('focus'));
+    await settle(50);
+    const hits = () => [...document.querySelectorAll<HTMLAnchorElement>('.res a')].map((a) => a.textContent ?? '');
+    type(input, 'alpha');
+    expect(hits().some((h) => h.includes('alpha-k3m2q') && h.includes(t('panel.search.node')))).toBe(true);
+    type(input, 'журнал');
+    expect(hits().some((h) => h.includes(t('panel.nav.journal')) && h.includes(t('panel.search.section')))).toBe(true);
+    const domain = ((await (await api.fetchFn('/api/v1/domains')).json()) as { domain: string }[])[0].domain;
+    type(input, domain);
+    await settle(50);
+    expect(hits().some((h) => h.includes(domain) && h.includes(t('panel.search.domain')))).toBe(true);
   });
 });
 

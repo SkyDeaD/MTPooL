@@ -3,12 +3,15 @@ import { defineConfig } from 'vitest/config';
 import { devApi } from './scripts/dev-api.ts';
 
 // Entries: the public pages (prerendered, see scripts/prerender.ts) and the panel, a single page
-// app under /panel. The server answers /panel/* with panel/index.html. Each public page is its
+// app under /panel, built in a second pass. The server answers /panel/* with panel/index.html. Each public page is its
 // own entry, so a page loads only the code it uses.
 //
 // `npm run dev` serves /api/v1/* from tests/fixtures (scripts/dev-api.ts), so the pages show data
 // without a registrar. `npm run dev:real` proxies /api/v1 to a registrar on 127.0.0.1:8080 instead.
 export default defineConfig(({ command }) => {
+  // The panel is built on its own (second pass, MTPOOL_PANEL=1). In one build the bundler moves what
+  // the panel and a public page both use into a chunk every public page preloads, and the budget grows.
+  const panelPass = Boolean(process.env.MTPOOL_PANEL);
   const mock = command === 'serve' && !process.env.VITEST && !process.env.MTPOOL_REAL_API;
   return {
     plugins: [svelte(), ...(mock ? [devApi()] : [])],
@@ -17,19 +20,20 @@ export default defineConfig(({ command }) => {
     test: { include: ['tests/**/*.test.ts'], setupFiles: ['tests/setup.ts'] },
     build: {
       outDir: 'dist',
-      emptyOutDir: true,
+      emptyOutDir: !panelPass,
       // Fonts stay files (hashed, immutable), nothing is inlined into the CSS.
       assetsInlineLimit: 0,
       modulePreload: { polyfill: false },
       rollupOptions: {
-        input: {
-          index: 'index.html',
-          dashboard: 'dashboard/index.html',
-          links: 'links/index.html',
-          api: 'api/index.html',
-          node: 'node/index.html',
-          panel: 'panel/index.html',
-        },
+        input: (panelPass
+          ? { panel: 'panel/index.html' }
+          : {
+              index: 'index.html',
+              dashboard: 'dashboard/index.html',
+              links: 'links/index.html',
+              api: 'api/index.html',
+              node: 'node/index.html',
+            }) as Record<string, string>,
       },
     },
     server: {

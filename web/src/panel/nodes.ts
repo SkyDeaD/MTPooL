@@ -1,7 +1,7 @@
 // How the panel sorts the nodes it shows. A banned node is in none of these lists: it is the
 // business of the ban history, which opens the node's own page. Only a quarantine stays visible.
-import { t } from '../lib/i18n';
-import { messages, type MessageKey } from '../strings.ru';
+import { t } from './i18n';
+import { messages, type Key as MessageKey } from './i18n';
 import type { AdminNode } from './types';
 
 export interface PanelGroups {

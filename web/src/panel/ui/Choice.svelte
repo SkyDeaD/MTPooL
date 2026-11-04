@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Select } from 'bits-ui';
-  import Icon from '../../shared/Icon.svelte';
+  import Icon from './Icon.svelte';
 
   // A list to choose one from, on Bits UI: keyboard, typeahead and the screen reader come with it.
   let {

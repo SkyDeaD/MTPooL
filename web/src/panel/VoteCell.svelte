@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { t } from '../lib/i18n';
-  import Icon from '../shared/Icon.svelte';
-  import { messages, type MessageKey } from '../strings.ru';
+  import { t } from './i18n';
+  import Icon from './ui/Icon.svelte';
+  import { messages, type Key as MessageKey } from './i18n';
   import type { AdminVote } from './types';
 
   // One sensor's vote in one round. The measurements come from the sensor's own document, which

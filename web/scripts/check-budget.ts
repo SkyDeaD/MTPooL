@@ -12,6 +12,8 @@ const BUDGET = 50 * 1024;
 const dist = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 const PAGES = ['index.html', 'stats/index.html', 'dashboard/index.html', 'links/index.html', 'api/index.html', 'node/index.html'];
 const UNSCANNED = new Set(['rapidoc-min.js']);
+// Texts only the panel uses: finding one in a public page means the panel's strings leaked into it.
+const PANEL_MARKERS = ['panel.overview', 'panel.nodes.title', 'settings.group.checks', 'bits-ui'];
 
 async function* walk(dir: string): AsyncGenerator<string> {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -37,6 +39,12 @@ async function weigh(page: string): Promise<number> {
     seen.add(url);
     const data = await readFile(join(dist, url));
     total += gzipSync(data, { level: 9 }).length;
+    for (const marker of PANEL_MARKERS) {
+      if (data.includes(marker)) {
+        console.error(`panel text "${marker}" in the script ${url} of ${page}`);
+        failed = true;
+      }
+    }
     // Static imports of the chunk: `from"./x.js"` or `import"./x.js"`.
     for (const m of data.toString('utf8').matchAll(/(?:from|import)\s*"\.\/([^"]+\.js)"/g)) {
       pending.push(`${dirname(url)}/${m[1]}`.replace(/^\.\//, ''));

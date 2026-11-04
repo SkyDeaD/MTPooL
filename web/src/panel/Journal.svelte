@@ -1,103 +1,110 @@
 <script lang="ts">
-  import { Tabs } from 'bits-ui';
+  import { useNow } from '../lib/clock.svelte';
   import { formatWhen } from '../lib/dates';
-  import { t } from '../lib/i18n';
-  import { messages, type MessageKey } from '../strings.ru';
+  import EventRow from './EventRow.svelte';
+  import { CATEGORIES, describeAudit, describeEvent, type Category } from './events';
+  import { t, type Key } from './i18n';
   import { usePolled } from './live.svelte';
-  import { go, hrefOf } from './route.svelte';
+  import { hrefOf } from './route.svelte';
   import type { AuditEntry, EventEntry } from './types';
+  import Icon from './ui/Icon.svelte';
 
-  // The pool's events and, in the second tab, what the admins did.
+  // The pool's events with a filter and a search and, in the second tab, what people did.
   let { tab }: { tab?: string } = $props();
 
-  const events = usePolled<EventEntry[]>(() => '/api/v1/admin/events');
+  const events = usePolled<EventEntry[]>(() => '/api/v1/admin/events?limit=200');
   const audit = usePolled<AuditEntry[]>(() => '/api/v1/admin/audit');
+  const clock = useNow(1000);
   const active = $derived(tab === 'audit' ? 'audit' : 'events');
+  let query = $state('');
+  let filter = $state<Category | 'all'>('all');
 
-  const word = (prefix: string, key: string) => {
-    const full = `${prefix}.${key}`;
-    return full in messages ? t(full as MessageKey) : key;
-  };
-  /** The facts of an entry as "name: value", for the ones that are plain values. */
-  const facts = (detail: unknown): string =>
-    Object.entries((detail ?? {}) as Record<string, unknown>)
-      .filter(([, v]) => ['string', 'number', 'boolean'].includes(typeof v))
-      .map(([k, v]) => `${word('panel.journal.field', k)}: ${v}`)
-      .join(', ');
-  const fields = (detail: unknown): string => {
-    const list = (detail as { fields?: unknown } | null)?.fields;
-    return Array.isArray(list) ? list.map((f) => t(`settings.${String(f)}` as MessageKey)).join(', ') : '';
-  };
+  const described = $derived((events.data ?? []).map((event) => ({ event, d: describeEvent(event) })));
+  const counts = $derived.by(() => {
+    const c: Record<string, number> = { all: described.length };
+    for (const k of CATEGORIES) c[k] = described.filter((x) => x.d.category === k).length;
+    return c;
+  });
+  const shown = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    return described.filter((x) => (filter === 'all' || x.d.category === filter) && (!q || x.d.haystack.includes(q)));
+  });
+  // The list is newest first; a separator goes before the first entry of each day.
+  const dayKey = (iso: string) => new Date(iso).toDateString();
+  function dayLabel(iso: string): string {
+    const at = new Date(iso);
+    const today = new Date(clock.ms);
+    const yesterday = new Date(clock.ms - 86_400_000);
+    if (at.toDateString() === today.toDateString()) return t('panel.journal.today');
+    if (at.toDateString() === yesterday.toDateString()) return t('panel.journal.yesterday');
+    return formatWhen(at.getTime()).split(',')[0];
+  }
+  const who = (actor: string) => (actor.startsWith('token:') ? t('panel.journal.byToken', { id: actor.slice(6) }) : t('panel.journal.bySession'));
 </script>
 
 <div class="view stack">
-  <header class="ph"><h1>{t('panel.journal.title')}</h1></header>
+  <header class="ph">
+    <h1>{t('panel.journal.title')}</h1>
+    <span class="sub">{t('panel.journal.sub')}</span>
+  </header>
 
-  <Tabs.Root value={active} onValueChange={(v) => go('journal', v === 'audit' ? 'audit' : undefined)}>
-    <Tabs.List class="tabs" aria-label={t('panel.journal.title')}>
-      <Tabs.Trigger value="events">{t('panel.journal.events')}</Tabs.Trigger>
-      <Tabs.Trigger value="audit">{t('panel.journal.audit')}</Tabs.Trigger>
-    </Tabs.List>
+  <div class="tabs" role="tablist" aria-label={t('panel.journal.title')}>
+    <a role="tab" href={hrefOf('journal')} aria-selected={active === 'events'}>{t('panel.journal.events')}</a>
+    <a role="tab" href={hrefOf('journal', 'audit')} aria-selected={active === 'audit'}>{t('panel.journal.audit')}</a>
+  </div>
 
-    <Tabs.Content value="events">
-      {#if events.stale}<p class="note" role="status">{t('common.stale')}</p>{/if}
-      <div class="t">
-        <div class="tw">
-          <table class="tb list">
-            <thead>
-              <tr>
-                <th>{t('panel.journal.when')}</th>
-                <th>{t('panel.journal.what')}</th>
-                <th>{t('panel.journal.who')}</th>
-                <th>{t('panel.journal.details')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each events.data ?? [] as e (e.id)}
-                <tr>
-                  <td data-l={t('panel.journal.when')}>{formatWhen(Date.parse(e.at))}</td>
-                  <td data-l={t('panel.journal.what')}>{word('panel.event', e.kind)}</td>
-                  <td data-l={t('panel.journal.who')}>
-                    {#if e.node}<a class="nm" href={hrefOf('node', e.node)}>{e.node}</a>{/if}
-                    {#if e.domain}<span class="mono">{e.domain}</span>{/if}
-                  </td>
-                  <td data-l={t('panel.journal.details')}>{facts(e.detail)}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
+  {#if active === 'events'}
+    {#if events.stale}<p class="note" role="status">{t('common.stale')}</p>{/if}
+    <section class="t">
+      <div class="th">
+        <div class="srch">
+          <Icon name="search" />
+          <input class="inp" type="search" bind:value={query} placeholder={t('panel.journal.search')} aria-label={t('panel.journal.search')} />
         </div>
-        {#if events.settled && (events.data ?? []).length === 0}<div class="tb-b muted">{t('panel.journal.none')}</div>{/if}
-      </div>
-    </Tabs.Content>
-
-    <Tabs.Content value="audit">
-      {#if audit.stale}<p class="note" role="status">{t('common.stale')}</p>{/if}
-      <div class="t">
-        <div class="tw">
-          <table class="tb list">
-            <thead>
-              <tr>
-                <th>{t('panel.journal.when')}</th>
-                <th>{t('panel.journal.action')}</th>
-                <th>{t('panel.journal.target')}</th>
-                <th>{t('panel.journal.details')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each audit.data ?? [] as a (a.id)}
-                <tr>
-                  <td data-l={t('panel.journal.when')}>{formatWhen(Date.parse(a.at))}</td>
-                  <td data-l={t('panel.journal.action')}>{word('panel.audit', a.action)}</td>
-                  <td data-l={t('panel.journal.target')}>{a.target ?? ''}</td>
-                  <td data-l={t('panel.journal.details')}>{fields(a.detail) || facts(a.detail)}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
+        <div class="chips">
+          {#each ['all', ...CATEGORIES] as const as k (k)}
+            <button class="chip" type="button" aria-pressed={filter === k} onclick={() => (filter = k)}>
+              {t(`panel.journal.cat.${k}` as Key)} <b>{counts[k]}</b>
+            </button>
+          {/each}
         </div>
-        {#if audit.settled && (audit.data ?? []).length === 0}<div class="tb-b muted">{t('panel.journal.none')}</div>{/if}
       </div>
-    </Tabs.Content>
-  </Tabs.Root>
+      {#each shown as x, i (x.event.id)}
+        {#if i === 0 || dayKey(shown[i - 1].event.at) !== dayKey(x.event.at)}
+          <div class="day">{dayLabel(x.event.at)}</div>
+        {/if}
+        <EventRow event={x.event} now={clock.ms} />
+      {:else}
+        {#if events.settled}<div class="tb-b"><p class="muted">{t('panel.journal.noMatch')}</p></div>{/if}
+      {/each}
+    </section>
+  {:else}
+    {#if audit.stale}<p class="note" role="status">{t('common.stale')}</p>{/if}
+    <section class="t">
+      <div class="tw">
+        <table class="tb list">
+          <thead>
+            <tr>
+              <th>{t('panel.journal.when')}</th>
+              <th>{t('panel.journal.who')}</th>
+              <th>{t('panel.journal.action')}</th>
+              <th>{t('panel.journal.target')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each audit.data ?? [] as a (a.id)}
+              {@const d = describeAudit(a)}
+              <tr>
+                <td data-l={t('panel.journal.when')}>{formatWhen(Date.parse(a.at))}</td>
+                <td data-l={t('panel.journal.who')}>{who(a.actor)}</td>
+                <td class="full" data-l={t('panel.journal.action')}>{d.what}</td>
+                <td class="mono sm" data-l={t('panel.journal.target')}>{d.target || '—'}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+      {#if audit.settled && (audit.data ?? []).length === 0}<div class="tb-b muted">{t('panel.journal.none')}</div>{/if}
+    </section>
+  {/if}
 </div>

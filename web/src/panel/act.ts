@@ -1,6 +1,6 @@
 // Runs a change the reader asked for: tells the result in a toast and reads the data again.
 import { ApiError } from '../lib/api';
-import { t } from '../lib/i18n';
+import { t } from './i18n';
 import { toast } from '../lib/toast.svelte';
 import type { Panel } from './context.svelte';
 

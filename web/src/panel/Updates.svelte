@@ -1,7 +1,7 @@
 <script lang="ts">
   import { formatWhen } from '../lib/dates';
-  import { t } from '../lib/i18n';
-  import type { MessageKey } from '../strings.ru';
+  import { t } from './i18n';
+  import type { Key as MessageKey } from './i18n';
   import { act } from './act';
   import { usePanel } from './context.svelte';
   import { usePolled } from './live.svelte';
@@ -29,7 +29,7 @@
     if (r.phase === 'done') return 'done';
     if (r.phase === 'cancelled') return i < position(r) ? 'done' : i === position(r) ? 'stop' : 'todo';
     if (r.phase === 'paused' && i === position(r)) return 'stop';
-    return i < position(r) ? 'done' : i === position(r) ? 'now' : 'todo';
+    return i < position(r) ? 'done' : i === position(r) ? 'cur' : 'todo';
   };
 
   let cancelling = $state<RolloutView | null>(null);
@@ -49,7 +49,11 @@
 </script>
 
 <div class="view stack">
-  <header class="ph"><h1>{t('panel.updates.title')}</h1></header>
+  <header class="ph">
+    <h1>{t('panel.updates.title')}</h1>
+    <span class="sub">{t('panel.updates.sub')}</span>
+    {#if current}<span class="sp"></span><span class="mono sm">{current.version}</span>{/if}
+  </header>
   {#if rollouts.stale}<p class="note" role="status">{t('common.stale')}</p>{/if}
 
   {#if !rollouts.settled}
@@ -61,11 +65,6 @@
       <div class="th">
         <h2>{t('panel.updates.release', { version: current.version })}</h2>
         <span class="sub">{t(`panel.updates.phase.${current.phase}` as MessageKey)}</span>
-        <span class="sp"></span>
-        <div class="row-actions">
-          {#if current.can_resume}<button class="btn pri s" type="button" onclick={() => resume(current)}>{t('panel.updates.resume')}</button>{/if}
-          {#if current.can_cancel}<button class="btn dng s" type="button" onclick={() => (cancelling = current)}>{t('panel.updates.cancel')}</button>{/if}
-        </div>
       </div>
 
       <div class="stepper" role="list">
@@ -85,7 +84,7 @@
         <div class="tb-b"><p class="note">{current.note.text}</p></div>
       {/if}
 
-      <div class="kpis">
+      <div class="kpis cnt">
         {#each ['updated', 'offered', 'started', 'idle', 'failed', 'missed'] as const as key (key)}
           <section class="t kpi">
             <span class="l">{t(`panel.updates.count.${key}` as MessageKey)}</span>
@@ -94,7 +93,15 @@
         {/each}
       </div>
 
+      {#if current.can_resume || current.can_cancel}
+        <div class="ff">
+          {#if current.can_resume}<button class="btn pri" type="button" onclick={() => resume(current)}>{t('panel.updates.resume')}</button>{/if}
+          {#if current.can_cancel}<button class="btn dng" type="button" onclick={() => (cancelling = current)}>{t('panel.updates.cancel')}</button>{/if}
+        </div>
+      {/if}
+
       {#if current.nodes.length > 0}
+        <div class="th"><h2>{t('panel.updates.versions')}</h2></div>
         <div class="tw">
           <table class="tb list">
             <thead>
@@ -149,7 +156,8 @@
 </div>
 
 <Confirm
-  bind:open={() => cancelling !== null, (v) => { if (!v) cancelling = null; }}  title={t('panel.updates.cancelTitle', { version: cancelling?.version ?? '' })}
+  bind:open={() => cancelling !== null, (v) => { if (!v) cancelling = null; }}
+  title={t('panel.updates.cancelTitle', { version: cancelling?.version ?? '' })}
   text={t('panel.updates.cancelText')}
   keep={t('panel.updates.cancelKeep')}
   confirm={t('panel.updates.cancelConfirm')}

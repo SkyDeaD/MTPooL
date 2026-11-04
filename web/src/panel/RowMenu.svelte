@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Popover } from 'bits-ui';
-  import { t } from '../lib/i18n';
-  import Icon from '../shared/Icon.svelte';
+  import { t } from './i18n';
+  import Icon from './ui/Icon.svelte';
   import { hrefOf } from './route.svelte';
 
   // The actions of one node row. Retiring is the only one that does not run at once.

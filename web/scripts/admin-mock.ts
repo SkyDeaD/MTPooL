@@ -45,7 +45,16 @@ function merge(into: any, patch: any): any {
   return into;
 }
 
-export function createAdminMock() {
+export type Scenario = 'quarantine' | 'calm';
+
+/** The fixtures describe a pool with a node in quarantine and one sensor that sees a block. */
+function calmDown(state: { nodes: any[]; status: any; events: any[] }): void {
+  for (const n of state.nodes) if (n.state === 'quarantine') n.state = 'healthy';
+  for (const s of state.status.sensors) if (s.last_vote === 'blocked') s.last_vote = 'clear';
+  state.events = state.events.filter((e) => e.kind !== 'sensor_round');
+}
+
+export function createAdminMock(scenario: Scenario = 'quarantine') {
   let session = false;
   const state = {
     nodes: load<any[]>('admin-nodes'),
@@ -60,6 +69,7 @@ export function createAdminMock() {
     rollouts: load<any[]>('admin-rollouts'),
     domains: load<any>('admin-settings').domains as string[],
   };
+  if (scenario === 'calm') calmDown(state);
   let nextId = 100;
 
   const problem = (status: number, code: string, detail = ''): MockAnswer => ({
@@ -203,7 +213,8 @@ export function createAdminMock() {
       const kind = req.query.get('kind');
       const node = req.query.get('node');
       const rows = state.events.filter((e) => (!kind || e.kind === kind) && (!node || e.node === node));
-      return { status: 200, body: rows };
+      const limit = Number(req.query.get('limit'));
+      return { status: 200, body: limit > 0 ? rows.slice(0, limit) : rows };
     }
     if (route === '/audit') return { status: 200, body: state.audit };
     if (route === '/rollouts') return { status: 200, body: state.rollouts };

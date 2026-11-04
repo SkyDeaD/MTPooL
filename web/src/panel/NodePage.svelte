@@ -1,11 +1,15 @@
 <script lang="ts">
   import { useNow } from '../lib/clock.svelte';
   import { formatWhen } from '../lib/dates';
-  import { t } from '../lib/i18n';
+  import { t, tp } from './i18n';
   import { clock, ENGINE_NAMES, formatAvailability, historySlots, secondsUntil, shortDomain } from '../lib/model';
   import type { NodeHistory } from '../lib/types';
+  import Sparkline from '../shared/Sparkline.svelte';
+  import StateCell from '../shared/StateCell.svelte';
+  import Votes from '../shared/Votes.svelte';
+  import EventRow from './EventRow.svelte';
   import HistStrip from '../shared/HistStrip.svelte';
-  import Icon from '../shared/Icon.svelte';
+  import Icon from './ui/Icon.svelte';
   import MasterTag from '../shared/MasterTag.svelte';
   import { act } from './act';
   import { usePanel } from './context.svelte';
@@ -13,7 +17,7 @@
   import { failedText } from './nodes';
   import RetireDialog from './RetireDialog.svelte';
   import { hrefOf } from './route.svelte';
-  import type { AdminNodeDetail } from './types';
+  import type { AdminNodeDetail, EventEntry } from './types';
   import VoteCell from './VoteCell.svelte';
 
   // One node for the admin: the state, who owns it, and every round of checks with each sensor's
@@ -23,12 +27,17 @@
   const panel = usePanel();
   const node = usePolled<AdminNodeDetail>(() => `/api/v1/admin/nodes/${encodeURIComponent(id)}`);
   const history = usePolled<NodeHistory>(() => `/api/v1/nodes/${encodeURIComponent(id)}/history`);
+  const events = usePolled<EventEntry[]>(() => `/api/v1/admin/events?node=${encodeURIComponent(id)}`);
   const clock1 = useNow(1000);
   let retiring = $state<string | null>(null);
 
   const missing = $derived(node.data === null && node.status === 404);
   const slots = $derived(history.data ? historySlots(history.data, clock1.ms) : null);
   const rotate = $derived(node.data ? secondsUntil(node.data.rotates_at, clock1.ms) : null);
+  const spark = $derived(slots ? slots.map((s) => s.clients) : []);
+  const days = $derived(node.data ? Math.max(0, Math.floor((clock1.ms - Date.parse(node.data.registered_at)) / 86_400_000)) : 0);
+  const round = $derived(node.data ? secondsUntil(node.data.next_round_at, clock1.ms) : null);
+  const mine = $derived((events.data ?? []).filter((e) => e.node === id).slice(0, 8));
   const SENSORS = ['globalping', 'cheburcheck', 'red_flag'] as const;
 
   const recheck = () =>
@@ -38,7 +47,7 @@
 </script>
 
 <div class="view stack">
-  <a class="row sm" href={hrefOf('nodes')} style="width:max-content"><Icon name="back" />{t('node.back')}</a>
+  <a class="row sm" href={hrefOf('nodes')} style="width:max-content"><Icon name="back" />{t('panel.node.all')}</a>
 
   {#if missing}
     <div class="t pad">
@@ -51,11 +60,9 @@
       <h1>{id}</h1>
       {#if node.data}
         {@const n = node.data}
-        <span class="st {n.state === 'banned' ? 'bad' : n.state === 'quarantine' ? 'warn' : n.state === 'healthy' ? 'ok' : 'off'}">
-          {t(`panel.state.${n.state}` as 'panel.state.pending')}
-        </span>
+        <StateCell state={n.state} />
         {#if n.is_master}<MasterTag domain={n.domains[0] ? shortDomain(n.domains[0]) : undefined} />{/if}
-        <span class="sub"><span class="mono">{n.full_ip}:{n.port}</span>, {t('node.engine', { name: ENGINE_NAMES[n.engine] ?? n.engine })}</span>
+        <span class="sub"><span class="mono">{n.full_ip}:{n.port}</span>, {t('node.engine', { name: ENGINE_NAMES[n.engine] ?? n.engine })}, <a href={`/node/?id=${encodeURIComponent(id)}`}>{t('panel.node.public')}</a></span>
         <span class="sp"></span>
         <div class="row-actions">
           {#if n.state === 'banned'}
@@ -81,6 +88,7 @@
         <section class="t kpi">
           <span class="l">{t('node.kpi.clients')}</span>
           <span class="v">{n.clients ?? '—'}</span>
+          {#if spark.length > 1}<Sparkline values={spark} />{/if}
         </section>
         <section class={['t kpi', n.is_master && 'mk']}>
           <span class="l">{t('node.kpi.role')}</span>
@@ -99,10 +107,24 @@
         </section>
         <section class="t kpi">
           <span class="l">{t('node.kpi.inPool')}</span>
-          <span class="v">{t(`panel.state.${n.state}` as 'panel.state.pending')}</span>
+          <span class="v">{days || '<1'} <small>{tp('unit.day', days || 2)}</small></span>
           <span class="s">{t('node.kpi.since', { date: formatWhen(Date.parse(n.state_since)) })}</span>
         </section>
       </div>
+
+      {#if n.last_round}
+        <section class="t">
+          <div class="th">
+            <h2>{t(`node.round.${n.last_round.verdict}`)}</h2>
+            <span class="sub">{t(`node.round.${n.last_round.verdict}Text`)}</span>
+            <span class="sp"></span>
+            <span class="faint sm nowrap">
+              {formatWhen(Date.parse(n.last_round.at))}{#if round !== null}, {t('node.round.next', { time: clock(round) })}{/if}
+            </span>
+          </div>
+          <div class="tb-b"><Votes votes={n.last_round.votes} /></div>
+        </section>
+      {/if}
 
       <section class="t">
         <div class="th"><h2>{t('panel.node.about')}</h2></div>
@@ -166,6 +188,19 @@
           <p class="muted sm">{t('chart.noData')}</p>
         {/if}
       </div>
+    </section>
+
+    <section class="t">
+      <div class="th">
+        <h2>{t('panel.node.events')}</h2>
+        <span class="sp"></span>
+        <a href={hrefOf('journal')}>{t('panel.overview.allEvents')}</a>
+      </div>
+      {#each mine as e (e.id)}
+        <EventRow event={e} now={clock1.ms} />
+      {:else}
+        <div class="tb-b"><p class="muted">{t('panel.journal.none')}</p></div>
+      {/each}
     </section>
   {/if}
 </div>

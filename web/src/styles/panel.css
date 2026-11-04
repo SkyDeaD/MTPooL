@@ -6,6 +6,8 @@
 .rail { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; border-right: 1px solid var(--line); background: var(--surf); overflow-y: auto; }
 .rail .logo { padding: 2px 8px 12px; }
 .rail a.nav { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: var(--r2); color: var(--fg2); font-size: 13.5px; background: none; border: 0; width: 100%; text-align: left; cursor: pointer; font-family: inherit; }
+.rail .nav { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: var(--r2); color: var(--fg2); font-size: 13.5px; background: none; border: 0; width: 100%; text-align: left; cursor: pointer; font-family: inherit; }
+.rail .nav:hover { background: var(--surf2); color: var(--fg); text-decoration: none; }
 .rail a.nav:hover { background: var(--surf2); color: var(--fg); text-decoration: none; }
 .rail a.nav.on { background: var(--acc-t); color: var(--acc); font-weight: 500; }
 .rail a.nav .cnt { margin-left: auto; color: var(--fg3); font-size: 12.5px; font-weight: 400; }
@@ -21,7 +23,7 @@
 .srch kbd { position: absolute; right: 8px; top: 8px; height: 20px; min-width: 20px; padding: 0 5px; display: grid; place-items: center; border: 1px solid var(--line2); border-radius: 4px; color: var(--fg3); font: 12px var(--sans); }
 .res { position: absolute; z-index: 30; top: 42px; left: 0; right: 0; background: var(--surf); border: 1px solid var(--line2); border-radius: var(--r); padding: 4px; max-height: 320px; overflow: auto; }
 .res a { display: flex; justify-content: space-between; gap: 12px; padding: 8px 10px; border-radius: var(--r3); color: var(--fg); }
-.res a:hover { background: var(--surf2); text-decoration: none; }
+.res a.on, .res a:hover { background: var(--surf2); text-decoration: none; }
 .res .e { padding: 10px; color: var(--fg3); }
 .mhead, .bnav { display: none; }
 
@@ -99,15 +101,42 @@ pre.code { margin: 0; padding: 12px 14px; background: var(--surf2); border: 1px 
 
 /* Rollout stepper */
 .stepper { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 16px; }
-.sx { display: grid; gap: 7px; min-width: 0; }
+.sx { display: grid; gap: 7px; min-width: 0; align-content: start; }
 .sx .ln { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
-.sx .ln i { display: block; height: 100%; background: var(--acc); width: 0; }
+.sx .ln i { display: block; height: 100%; background: var(--acc); width: 0; transition: width 0.5s ease; }
 .sx.done .ln i { width: 100%; background: var(--ok); }
-.sx.now .ln i { width: 50%; }
-.sx.stop .ln i { width: 100%; background: var(--bad); }
+.sx.stop .ln i { background: var(--bad); }
+.sx.cur .ln i { width: 50%; }
+.kpis.cnt { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 0 16px 16px; }
 .sx .a { font-weight: 500; font-size: 13.5px; }
 .sx .s { font-size: 12.5px; color: var(--fg3); }
 .sx.todo .a { color: var(--fg3); }
+
+/* Carried over from the prototype */
+.t.warn-e { border-color: var(--warn); }
+.t.bad-e { border-color: var(--bad); }
+.tb td.tp { vertical-align: top; }
+.elb { color: var(--fg3); }
+.tb tr.foldr td { background: transparent; }
+.day { padding: 7px 16px; background: var(--surf2); color: var(--fg2); font-size: 12.5px; border-top: 1px solid var(--line); }
+.ev.new { animation: evin 0.45s ease-out; }
+@keyframes evin { from { opacity: 0; transform: translateY(-6px); background: var(--acc-t); } to { opacity: 1; transform: none; background: transparent; } }
+.ev details { grid-column: 2 / -1; margin-top: 3px; }
+.ev summary { cursor: pointer; color: var(--fg3); font-size: 12.5px; list-style: none; display: inline-flex; gap: 4px; align-items: center; }
+.ev summary:hover { color: var(--fg); }
+.ev summary::-webkit-details-marker { display: none; }
+.ev details[open] .chev { transform: rotate(90deg); }
+.chev { transition: transform 0.14s; }
+.th .srch { max-width: 260px; flex: 1 1 200px; }
+.th .sp { margin-left: auto; }
+.rail a.nav.out { cursor: pointer; }
+.tb th button { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.tb th button:hover { color: var(--fg); }
+@media (max-width: 860px) {
+  .ev { grid-template-columns: 18px minmax(0, 1fr); }
+  .ev .ts { grid-column: 2; grid-row: 3; }
+  .th .srch { max-width: none; }
+}
 
 /* Dialog (Bits UI renders it in a portal, so the native rules do not apply) */
 .dlg-ov { position: fixed; inset: 0; z-index: 50; background: var(--scrim); }
@@ -124,11 +153,16 @@ pre.code { margin: 0; padding: 12px 14px; background: var(--surf2); border: 1px 
 .login { min-height: 100vh; display: grid; place-items: center; padding: var(--gutter); }
 .login .t { width: min(420px, 100%); }
 .login form { display: grid; gap: 14px; padding: 16px; }
-.login h1 { margin: 0; padding: 16px 16px 0; font-size: var(--fs-title); }
+.login h1 { margin: 0; font-size: var(--fs-title); }
+.login form > p { margin: 0; }
 
 /* The live mark and tables in the panel */
 .live-state { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--fg3); }
 .live-state.on { color: var(--ok); }
+.live-state .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg3); flex: none; }
+.live-state.on .dot { background: var(--ok); }
+.mrow-link { display: flex; align-items: center; gap: 10px; justify-content: flex-start; width: 100%; }
+.lb { color: var(--fg3); }
 .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--gap); }
 .cols > * { min-width: 0; }
 .stack { display: grid; gap: var(--gap); }

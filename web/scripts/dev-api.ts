@@ -77,7 +77,9 @@ function answer(path: string, query: URLSearchParams): { status: number; body: u
 
 // The admin API: one mock for the whole dev server, so a login and the changes made in the panel
 // last until the server restarts. The token to sign in with is `good-token`.
-const admin = createAdminMock();
+// `MTPOOL_MOCK=calm npm run dev` starts without a node in quarantine; `/api/v1/admin/_mock?state=calm`
+// (or `=quarantine`) switches a running dev server and signs the mock out.
+let admin = createAdminMock(process.env.MTPOOL_MOCK === 'calm' ? 'calm' : 'quarantine');
 
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve) => {
@@ -100,6 +102,12 @@ async function handleAdmin(req: IncomingMessage, res: ServerResponse, path: stri
     res.write(': open\n\n');
     const beat = setInterval(() => res.write(': beat\n\n'), 15_000);
     req.on('close', () => clearInterval(beat));
+    return;
+  }
+  if (path === '/admin/_mock') {
+    admin = createAdminMock(query.get('state') === 'calm' ? 'calm' : 'quarantine');
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ state: query.get('state') === 'calm' ? 'calm' : 'quarantine' }));
     return;
   }
   const headers: Record<string, string> = {};

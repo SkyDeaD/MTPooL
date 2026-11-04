@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { t } from '../lib/i18n';
+  import { t } from './i18n';
   import { act } from './act';
   import { usePanel } from './context.svelte';
   import Confirm from './ui/Confirm.svelte';

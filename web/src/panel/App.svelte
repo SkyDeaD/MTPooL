@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
-  import { t } from '../lib/i18n';
+  import { t } from './i18n';
   import Toasts from '../shared/Toasts.svelte';
   import { createPanel, providePanel } from './context.svelte';
   import Journal from './Journal.svelte';

@@ -13,7 +13,7 @@
     "gen:api": "openapi-typescript ../docs/openapi.json -o src/lib/api-types.ts",
     "test": "vitest run",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "build:client": "vite build",
+    "build:client": "vite build && MTPOOL_PANEL=1 vite build",
     "build:ssr": "vite build --ssr src/public/entry-server.ts --outDir .ssr",
     "build": "rm -rf dist .ssr && npm run gen:docs && npm run build:client && npm run build:ssr && node scripts/prerender.ts && node scripts/copy-rapidoc.ts && node scripts/compress.ts",
     "check:budget": "node scripts/check-budget.ts"
