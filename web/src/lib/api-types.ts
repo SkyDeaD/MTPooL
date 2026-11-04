@@ -20,6 +20,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/dns/push": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["admin_dns_push"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/domains": {
         parameters: {
             query?: never;
@@ -60,6 +76,38 @@ export interface paths {
             cookie?: never;
         };
         get: operations["list_events"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["admin_list_nodes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/nodes/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["admin_get_node"];
         put?: never;
         post?: never;
         delete?: never;
@@ -228,6 +276,22 @@ export interface paths {
         patch: operations["patch_settings"];
         trace?: never;
     };
+    "/api/v1/admin/srmd": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["admin_srmd"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/srmd/{domain}/release": {
         parameters: {
             query?: never;
@@ -254,6 +318,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["srmd_take"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["admin_status"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -654,6 +734,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/{id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_node_history"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/openapi.json": {
         parameters: {
             query?: never;
@@ -770,6 +866,55 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description A node as the admin sees it: the public document and what stays out of the public one. */
+        AdminNode: components["schemas"]["PublicNode"] & {
+            /** @description The agent version from the rollout record; absent until the node has polled. */
+            agent_version?: string | null;
+            /**
+             * @description The conditions that do not hold now: `tcp`, `metrics`, `globalping`, `port`,
+             *     `heartbeat_stale`, `report_stale`.
+             */
+            failed: string[];
+            /**
+             * @description The whole address.
+             * @example 203.0.113.7
+             */
+            full_ip: string;
+            /** @description RFC 3339, UTC: the last heartbeat; absent if none came. */
+            last_heartbeat?: string | null;
+            /** Format: int64 */
+            owner_id: number;
+            /** @description Absent when the owner is gone. */
+            owner_name?: string | null;
+        };
+        /** @description `GET /admin/nodes/{id}`. */
+        AdminNodeDetail: components["schemas"]["AdminNode"] & {
+            /** @description The last 20 rounds, newest first. */
+            rounds: components["schemas"]["AdminRound"][];
+        };
+        /** @description A sensor round with the evidence of its votes. */
+        AdminRound: {
+            /** @description RFC 3339, UTC. */
+            at: string;
+            verdict: components["schemas"]["Verdict"];
+            votes: components["schemas"]["AdminVote"][];
+        };
+        /** @description `GET /admin/status`. */
+        AdminStatus: {
+            counts: components["schemas"]["StatusCounts"];
+            dns: components["schemas"]["DnsStatus"];
+            sensors: components["schemas"]["SensorStatus"][];
+        };
+        /** @description One sensor's vote in a round, with what it measured. */
+        AdminVote: {
+            /** @description The sensor's own document, as stored. */
+            evidence: unknown;
+            /** @description Why the sensor abstained; only for `abstain`. */
+            reason?: string | null;
+            /** @example globalping */
+            sensor: string;
+            vote: components["schemas"]["Vote"];
+        };
         /** @description `GET /agent/config`: what the node's proxy has to be set up with. */
         AgentConfig: {
             /** @description Whether the agent defends the port against active probing. */
@@ -929,6 +1074,26 @@ export interface components {
         };
         /** @enum {string} */
         DnsRecordType: "A" | "CNAME";
+        /** @description The DNS part of `GET /admin/status`. */
+        DnsStatus: {
+            /** Format: int64 */
+            applied_24h: number;
+            /** Format: int64 */
+            failed_24h: number;
+            /** @description RFC 3339, UTC. */
+            last_applied_at?: string | null;
+            /** @description The provider's message of the last failure. */
+            last_error?: string | null;
+            /** @description RFC 3339, UTC. */
+            last_failed_at?: string | null;
+            /** @description Whether a Cloudflare token is stored. */
+            token_set: boolean;
+            /**
+             * Format: int64
+             * @description Domains whose record in DNS differs from the wanted one.
+             */
+            unsynced_domains: number;
+        };
         /** @description `POST /admin/domains`. */
         DomainRequest: {
             domain: string;
@@ -980,6 +1145,11 @@ export interface components {
             kind: string;
             node?: string | null;
         };
+        /**
+         * @description The state of the Globalping check of a node.
+         * @enum {string}
+         */
+        GlobalpingCheck: "ok" | "failed" | "no_data" | "unknown";
         /** @description What the agent says about its Globalping check. */
         GpReport: {
             /** @example abc123 */
@@ -1095,6 +1265,43 @@ export interface components {
             /** @description Shown once; it cannot be read again. */
             token: string;
         };
+        /** @description What the pool sees on a node right now. */
+        NodeChecks: {
+            globalping: components["schemas"]["GlobalpingCheck"];
+            /** @description The engine metrics answer. */
+            metrics: boolean;
+            /** @description The port answers from outside. */
+            tcp: boolean;
+        };
+        /** @description `GET /nodes/{id}/history`: the last 96 buckets of a node that have samples, oldest first. */
+        NodeHistory: {
+            /**
+             * Format: int64
+             * @description The length of one bucket in seconds (900).
+             */
+            bucket_sec: number;
+            buckets: components["schemas"]["NodeHistoryBucket"][];
+        };
+        /** @description One bucket of the node history. */
+        NodeHistoryBucket: {
+            /**
+             * Format: int64
+             * @description The most clients seen in the bucket.
+             */
+            clients: number;
+            /** @description RFC 3339, UTC: the start of the bucket. */
+            start: string;
+            /**
+             * Format: int32
+             * @description Samples of the bucket.
+             */
+            total: number;
+            /**
+             * Format: int32
+             * @description Samples of the bucket in which the node was up.
+             */
+            up: number;
+        };
         /** @enum {string} */
         NodeState: "pending" | "healthy" | "quarantine" | "banned" | "dead" | "pruned";
         /** @description A node of the owner, with its full address. */
@@ -1190,14 +1397,36 @@ export interface components {
             user: string;
         };
         PublicDomain: {
+            /**
+             * Format: int64
+             * @description Clients on the domain; absent while unknown.
+             */
+            clients?: number | null;
             dns?: components["schemas"]["DnsRecord"] | null;
+            /** @description Whether the record in DNS is the one the pool wants. */
+            dns_synced: boolean;
             /** @example proxy.example.com */
             domain: string;
+            /** @description The domain this one is folded into (it is a CNAME onto it); absent otherwise. */
+            folded_into?: string | null;
             /** @description The node ids that are masters of the domain. */
             masters: string[];
         };
         /** @description A node of the pool. */
         PublicNode: {
+            /**
+             * Format: int32
+             * @description Uptime over the last 30 days in hundredths of a percent (9997 is 99.97 %). Absent while
+             *     the node has no samples.
+             */
+            availability_bp?: number | null;
+            /** @description The conditions the pool watches on the node. */
+            checks: components["schemas"]["NodeChecks"];
+            /**
+             * Format: int64
+             * @description Clients connected to the node, as its last report said; absent until it reported one.
+             */
+            clients?: number | null;
             /** @description The domains the node is master of. */
             domains: string[];
             engine: components["schemas"]["Engine"];
@@ -1211,10 +1440,23 @@ export interface components {
             /** @description Whether the node is the master of at least one domain. */
             is_master: boolean;
             last_round?: components["schemas"]["LastRound"] | null;
+            /** @description When the next sensor round of the node is due (RFC 3339, UTC). */
+            next_round_at?: string | null;
             /** Format: int32 */
             port: number;
+            /**
+             * Format: int32
+             * @description Place in the queue for a master slot, from 1: only for a healthy node that is not a
+             *     master.
+             */
+            queue_position?: number | null;
             /** @description RFC 3339, UTC. */
             registered_at: string;
+            /**
+             * @description For a master: when its slot is due to rotate (RFC 3339, UTC). Absent when rotation is
+             *     off.
+             */
+            rotates_at?: string | null;
             state: components["schemas"]["NodeState"];
             /** @description When the node entered its current state. RFC 3339, UTC. */
             state_since: string;
@@ -1340,6 +1582,40 @@ export interface components {
             /** @description The release version being rolled out. */
             version: string;
         };
+        /** @description One sensor in `GET /admin/status`. */
+        SensorStatus: {
+            configured: boolean;
+            /** @description RFC 3339, UTC: the last time the sensor gave an answer other than an abstention. */
+            last_answer_at?: string | null;
+            /** @description Why the last vote was an abstention. */
+            last_reason?: string | null;
+            last_vote?: components["schemas"]["Vote"] | null;
+            /** @example cheburcheck */
+            name: string;
+        };
+        /** @description `GET /admin/srmd`. */
+        SrmdOverview: {
+            /** @description Domains that are not folded. */
+            active: string[];
+            /** @description Clients per domain. */
+            clients: {
+                [key: string]: number;
+            };
+            /** @description Folded domain to the one it points to. */
+            cnames: {
+                [key: string]: string;
+            };
+            /** @description Domains SRMD created. */
+            created: string[];
+            enabled: boolean;
+            /** @description Domains that are folded into another. */
+            folded: string[];
+            /**
+             * Format: int32
+             * @description How many domains the queue needs now.
+             */
+            needed: number;
+        };
         StatsBucket: components["schemas"]["StatsPoint"] & {
             /** @description RFC 3339, UTC: the start of the bucket. */
             start_ts: string;
@@ -1413,6 +1689,13 @@ export interface components {
             recent: components["schemas"]["RecentBan"][];
             /** Format: int64 */
             step_sec: number;
+        };
+        /** @description Counts of things that happened lately. */
+        StatusCounts: {
+            /** Format: int64 */
+            bans_7d: number;
+            /** Format: int64 */
+            master_changes_24h: number;
         };
         /**
          * @description The body of a 403 to a node that is out of the pool: it stops its proxy and, if the reason
@@ -1576,6 +1859,40 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No valid admin credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    admin_dns_push: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Empty, or `{}` */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmptyRequest"];
+            };
+        };
+        responses: {
+            /** @description Every domain is pushed to DNS again on the next ticks; one that is being pushed now is left alone */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Empty"];
                 };
             };
             /** @description No valid admin credential */
@@ -1757,6 +2074,76 @@ export interface operations {
             };
             /** @description No valid admin credential */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    admin_list_nodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every node, banned, dead and pruned ones too, with the whole address and the owner */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminNode"][];
+                };
+            };
+            /** @description No valid admin credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    admin_get_node: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The node id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The node with its last 20 sensor rounds and their evidence */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminNodeDetail"];
+                };
+            };
+            /** @description No valid admin credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such node */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2367,6 +2754,35 @@ export interface operations {
             };
         };
     };
+    admin_srmd: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The domains SRMD keeps and how many the queue needs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SrmdOverview"];
+                };
+            };
+            /** @description No valid admin credential */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     srmd_release: {
         parameters: {
             query?: never;
@@ -2468,6 +2884,35 @@ export interface operations {
             };
             /** @description Taken already (`already_managed`) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    admin_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sensors, DNS and the counters of the last days */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminStatus"];
+                };
+            };
+            /** @description No valid admin credential */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3800,6 +4245,52 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicNode"];
+                };
+            };
+            /** @description No such node */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests */
+            429: {
+                headers: {
+                    /** @description Seconds until the limit window ends */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_node_history: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Node id
+                 * @example alpha-a1b2c
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The last 96 buckets of 15 minutes that have samples, oldest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeHistory"];
                 };
             };
             /** @description No such node */

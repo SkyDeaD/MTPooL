@@ -135,3 +135,142 @@ async fn the_loop_samples_every_30_seconds_and_ends_with_the_owner() {
     assert!(times.windows(2).all(|w| w[1] - w[0] == 30_000), "{times:?}");
     worker.abort();
 }
+
+fn node_rows(path: &std::path::Path) -> Vec<(String, i64, i64, i64)> {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    let mut stmt = conn
+        .prepare("SELECT node, up, total, clients FROM node_samples ORDER BY node, bucket")
+        .unwrap();
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+fn spawn_actor(state: PoolState, store: &Store) -> (ActorHandle, Clock) {
+    let clock: Clock = Arc::new(|| Ts(NOW));
+    let actor = Actor::spawn_with(
+        state,
+        store.clone(),
+        Vec::new(),
+        ActorOptions {
+            clock: Arc::clone(&clock),
+            ..ActorOptions::default()
+        },
+    );
+    (actor, clock)
+}
+
+#[tokio::test]
+async fn a_tick_adds_the_nodes_to_their_bucket() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("registrar.db");
+    let store = Store::open(&path).unwrap();
+    let mut state = PoolState::new(Settings::default());
+    add(&mut state, "good-00001", NodeState::Healthy, 7);
+    add(&mut state, "quar-00001", NodeState::Quarantine, 1);
+    add(&mut state, "pend-00001", NodeState::Pending, 1);
+    add(&mut state, "banned-00001", NodeState::Banned, 500);
+    let (actor, clock) = spawn_actor(state, &store);
+
+    for _ in 0..2 {
+        sample_once(&actor, &store, &clock).await.unwrap();
+    }
+    store.flush().unwrap();
+
+    assert_eq!(
+        node_rows(&path),
+        [
+            ("good-00001".to_owned(), 2, 2, 7),
+            ("quar-00001".to_owned(), 0, 2, 1),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn the_refresh_hands_the_stored_availability_to_the_state_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("registrar.db");
+    let store = Store::open(&path).unwrap();
+    let mut state = PoolState::new(Settings::default());
+    add(&mut state, "good-00001", NodeState::Healthy, 7);
+    add(&mut state, "fresh-00001", NodeState::Healthy, 7);
+    let (actor, clock) = spawn_actor(state, &store);
+    let at = aligned(Ts(NOW));
+    for up in [true, true, true, false] {
+        store.send(HistoryOp::NodeSamples {
+            at,
+            rows: vec![mtpool_core::NodeSample {
+                node: NodeId::parse("good-00001").unwrap(),
+                up,
+                clients: None,
+            }],
+        });
+    }
+    // A node that is gone from the pool still has rows.
+    store.send(HistoryOp::NodeSamples {
+        at,
+        rows: vec![mtpool_core::NodeSample {
+            node: NodeId::parse("gone-00001").unwrap(),
+            up: true,
+            clients: None,
+        }],
+    });
+    store.flush().unwrap();
+
+    refresh_availability(&actor, &store, &clock).await.unwrap();
+
+    let seen = actor
+        .inspect(|state| {
+            state
+                .stats
+                .iter()
+                .map(|(id, s)| (id.to_string(), s.availability_bp))
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        seen,
+        [
+            ("fresh-00001".to_owned(), None),
+            ("good-00001".to_owned(), Some(7500)),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn retention_removes_old_samples_and_keeps_fresh_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("registrar.db");
+    let store = Store::open(&path).unwrap();
+    let bucket_now = NOW / 1000 / 900;
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        for (at, bucket) in [
+            (NOW - 40 * 86_400_000, bucket_now - 40 * 96),
+            (NOW, bucket_now),
+        ] {
+            conn.execute(
+                "INSERT INTO client_samples(at, domain, clients) VALUES (?1, '', 1)",
+                [at],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO node_samples(node, bucket, up, total, clients) VALUES ('alpha-00001', ?1, 1, 1, 0)",
+                [bucket],
+            )
+            .unwrap();
+        }
+    }
+    let clock: Clock = Arc::new(|| Ts(NOW));
+
+    retain_once(&store, &clock).await;
+
+    assert_eq!(samples(&path).len(), 1);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let nodes: i64 = conn
+        .query_row("SELECT count(*) FROM node_samples", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(nodes, 1);
+}

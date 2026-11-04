@@ -46,7 +46,7 @@ use super::webhook_url;
 use crate::auth::middleware::BotAuth;
 use crate::auth::tokens::SCOPE_POOL_READ;
 use crate::server::AppState;
-use crate::snapshot::public_node_of;
+use crate::snapshot::View;
 use crate::store::AdminOp;
 use crate::webhooks;
 
@@ -180,12 +180,13 @@ pub async fn list_nodes(State(app): State<AppState>, auth: BotAuth) -> Result<Re
     let mut nodes = app
         .actor
         .inspect(move |state| {
+            let view = View::new(state);
             state
                 .nodes
                 .values()
                 .filter(|n| n.owner == owner)
                 .map(|n| {
-                    let public = public_node_of(state, n);
+                    let public = view.node(n);
                     OwnNode {
                         id: public.id,
                         state: public.state,

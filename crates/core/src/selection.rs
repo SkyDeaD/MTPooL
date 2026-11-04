@@ -58,8 +58,33 @@ pub fn queue_order(nodes: &[NodeRecord]) -> Vec<NodeId> {
         .iter()
         .filter(|n| n.state == NodeState::Healthy)
         .collect();
-    queue.sort_by_key(|n| (n.queued_at, n.registered_at, &n.id));
+    queue.sort_by_key(|n| queue_key(n, n.queued_at));
     queue.into_iter().map(|n| n.id.clone()).collect()
+}
+
+/// The sort key of the queue: when the node queued, then when it registered, then its id.
+/// `select` and the position shown to the owner both order by it.
+fn queue_key(n: &NodeRecord, queued_at: Ts) -> (Ts, Ts, &NodeId) {
+    (queued_at, n.registered_at, &n.id)
+}
+
+/// The 1-based place of each waiting node in the queue: Healthy nodes that hold no slot in
+/// `assignments`, in the order `select` takes candidates. Masters have no place.
+pub fn queue_positions<'a>(
+    nodes: impl IntoIterator<Item = &'a NodeRecord>,
+    assignments: &Assignments,
+) -> BTreeMap<NodeId, u32> {
+    let masters: BTreeSet<&NodeId> = assignments.0.values().flatten().map(|s| &s.node).collect();
+    let mut waiting: Vec<&NodeRecord> = nodes
+        .into_iter()
+        .filter(|n| n.state == NodeState::Healthy && !masters.contains(&n.id))
+        .collect();
+    waiting.sort_by_key(|n| queue_key(n, n.queued_at));
+    waiting
+        .into_iter()
+        .zip(1u32..)
+        .map(|(n, place)| (n.id.clone(), place))
+        .collect()
 }
 
 pub fn select(
@@ -137,10 +162,8 @@ impl<'a> Round<'a> {
 
     fn sort_queue(&mut self) {
         let requeued = &self.requeued;
-        self.queue.sort_by_key(|n| {
-            let queued_at = requeued.get(&n.id).copied().unwrap_or(n.queued_at);
-            (queued_at, n.registered_at, &n.id)
-        });
+        self.queue
+            .sort_by_key(|n| queue_key(n, requeued.get(&n.id).copied().unwrap_or(n.queued_at)));
     }
 
     fn domains(&self) -> Vec<String> {
@@ -405,6 +428,31 @@ mod tests {
 
     fn ids(list: &[u32]) -> Vec<NodeId> {
         list.iter().map(|n| nid(*n)).collect()
+    }
+
+    #[test]
+    fn queue_positions_number_the_waiting_nodes_in_selection_order() {
+        let mut a = node(3, "95.216.0.3", 10);
+        let b = node(2, "95.216.0.2", 10);
+        let c = node(1, "95.216.0.1", 10);
+        let master = node(4, "95.216.0.4", 1);
+        let early = node(5, "95.216.0.5", 5);
+        a.registered_at = at(1);
+        let mut quarantined = node(6, "95.216.0.6", 0);
+        quarantined.state = NodeState::Quarantine;
+        let nodes = [a, b, c, master, early, quarantined];
+        let assignments = assigned(&[("d.example.com", &[(4, 0)])]);
+
+        let places = queue_positions(&nodes, &assignments);
+
+        // Same order as `queue_order`, minus the master; others have no place.
+        assert_eq!(places.len(), 4);
+        assert_eq!(places[&nid(5)], 1);
+        assert_eq!(places[&nid(1)], 2);
+        assert_eq!(places[&nid(2)], 3);
+        assert_eq!(places[&nid(3)], 4);
+        assert!(!places.contains_key(&nid(4)));
+        assert!(!places.contains_key(&nid(6)));
     }
 
     #[test]

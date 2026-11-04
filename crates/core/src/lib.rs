@@ -16,7 +16,7 @@ pub mod types;
 pub mod votes;
 
 pub use apply::apply;
-pub use clients::{ClientSample, TOTAL_DOMAIN, client_sample};
+pub use clients::{ClientSample, NodeSample, TOTAL_DOMAIN, client_sample, node_samples};
 pub use dns::{
     DnsOp, DnsPlanError, DnsState, LiveRecord, NewRecord, RecordKind, RecordValue, backoff,
     plan_changes,
@@ -28,12 +28,15 @@ pub use lifecycle::{
     reset_tombstones, tick_node, unban,
 };
 pub use links::{build_proxy_link, link_secret};
-pub use selection::{Assignments, MasterChange, SelectionResult, Slot, queue_order, select};
+pub use selection::{
+    Assignments, MasterChange, SelectionResult, Slot, queue_order, queue_positions, select,
+};
 pub use settings::{
     GlobalpingSettings, ProxyUser, RolloutSettings, Settings, SettingsError, SrmdSettings,
 };
 pub use srmd::{
-    SrmdAction, SrmdError, SrmdState, rebalance, release, required_domains, set_clients, take,
+    SrmdAction, SrmdError, SrmdState, needed_domains, rebalance, release, required_domains,
+    set_clients, take,
 };
 pub use state::{
     Command, Durability, Effect, EnrollRequest, Event, EventKind, HeartbeatRequest, NodeAction,

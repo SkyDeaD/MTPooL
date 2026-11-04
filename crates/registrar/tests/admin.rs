@@ -722,3 +722,347 @@ async fn admin_api_has_no_public_rate_limit_and_needs_a_token() {
         StatusCode::OK
     );
 }
+
+// ----- the panel's read paths ----------------------------------------------------------------
+
+fn id_of(name: &str) -> mtpool_core::NodeId {
+    mtpool_core::NodeId::parse(name).expect("a node id")
+}
+
+fn round(
+    env: &Env,
+    node: &str,
+    at: i64,
+    verdict: mtpool_core::RoundVerdict,
+    votes: Vec<(mtpool_core::SensorKind, mtpool_core::SensorVote)>,
+) {
+    env.store.send(mtpool_core::PersistOp::RecordRound {
+        node: id_of(node),
+        generation: mtpool_core::Generation(1),
+        at: mtpool_core::Ts(at),
+        verdict,
+        votes,
+    });
+}
+
+fn log(env: &Env, kind: mtpool_core::EventKind, at: i64, detail: Value) {
+    env.store.send(mtpool_core::Event {
+        kind,
+        at: mtpool_core::Ts(at),
+        node: None,
+        domain: None,
+        detail,
+    });
+}
+
+#[tokio::test]
+async fn the_new_admin_paths_need_a_login() {
+    let env = env(pool(vec![alpha()]));
+    for path in [
+        "/api/v1/admin/nodes",
+        "/api/v1/admin/nodes/alpha-00001",
+        "/api/v1/admin/status",
+        "/api/v1/admin/srmd",
+    ] {
+        let resp = send(&env, request("GET", path, None, None)).await;
+        assert_problem(&resp, StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+    let resp = send(&env, request("POST", "/api/v1/admin/dns/push", None, None)).await;
+    assert_problem(&resp, StatusCode::UNAUTHORIZED, "unauthorized");
+}
+
+#[tokio::test]
+async fn admin_nodes_list_every_node_with_the_whole_address_and_the_owner() {
+    let mut banned = beta();
+    banned.state = NodeState::Banned;
+    let env = env(pool(vec![alpha(), banned]));
+    let admin = admin_token(&env);
+    assert_eq!(owner(&env, "owner-a", 1), mtpool_core::OwnerId(1));
+    assert_eq!(owner(&env, "owner-b", 1), mtpool_core::OwnerId(2));
+
+    // The version comes from the rollout record, and only once the node has polled.
+    assert!(env.rollouts.offer_release(
+        "2.0.0",
+        mtpool_core::Ts(NOW),
+        mtpool_core::RolloutSettings::default()
+    ));
+    env.rollouts
+        .poll(&id_of("alpha-00001"), "1.9.0", mtpool_core::Ts(NOW));
+
+    let resp = get(&env, "/api/v1/admin/nodes", &admin).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let nodes = resp.json();
+    let nodes = nodes.as_array().expect("an array");
+    assert_eq!(nodes.len(), 2, "the banned node is listed too");
+    let a = nodes.iter().find(|n| n["id"] == "alpha-00001").unwrap();
+    let b = nodes.iter().find(|n| n["id"] == "beta-00002").unwrap();
+    assert_eq!(a["full_ip"], "45.33.1.5");
+    assert_eq!(a["ip"], "45.x.x.5", "the public part stays masked");
+    assert_eq!(a["owner_id"], 1);
+    assert_eq!(a["owner_name"], "owner-a");
+    assert_eq!(a["agent_version"], "1.9.0");
+    assert!(a["last_heartbeat"].is_string(), "{a}");
+    assert!(a["failed"].is_array(), "{a}");
+    assert_eq!(b["state"], "banned");
+    assert_eq!(b["full_ip"], "45.33.1.6");
+    assert_eq!(b["owner_name"], "owner-b");
+    assert!(b.get("agent_version").is_none(), "never polled: {b}");
+
+    // The public list still leaves the banned node out and never shows the whole address.
+    let public = send(&env, request("GET", "/api/v1/nodes", None, None)).await;
+    assert!(!public.body.contains("45.33.1"), "{}", public.body);
+    assert!(!public.body.contains("beta-00002"), "{}", public.body);
+}
+
+#[tokio::test]
+async fn an_admin_node_has_its_rounds_with_evidence_newest_first() {
+    use mtpool_core::{AbstainReason, RoundVerdict, SensorKind, SensorVote, Vote};
+    let env = env(pool(vec![alpha()]));
+    let admin = admin_token(&env);
+    round(
+        &env,
+        "alpha-00001",
+        NOW - 120_000,
+        RoundVerdict::Clean,
+        vec![(
+            SensorKind::Cheburcheck,
+            SensorVote {
+                vote: Vote::Clear,
+                evidence: json!({"checked": "old"}),
+            },
+        )],
+    );
+    round(
+        &env,
+        "alpha-00001",
+        NOW - 60_000,
+        RoundVerdict::Undecided,
+        vec![
+            (
+                SensorKind::Globalping,
+                SensorVote {
+                    vote: Vote::Blocked,
+                    evidence: json!({"probes": 12}),
+                },
+            ),
+            (
+                SensorKind::RedFlag,
+                SensorVote {
+                    vote: Vote::Abstain(AbstainReason::Timeout),
+                    evidence: json!({"waited_ms": 5000}),
+                },
+            ),
+        ],
+    );
+    env.store.flush().unwrap();
+
+    let resp = get(&env, "/api/v1/admin/nodes/alpha-00001", &admin).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let node = resp.json();
+    assert_eq!(node["id"], "alpha-00001");
+    assert_eq!(node["full_ip"], "45.33.1.5");
+    let rounds = node["rounds"].as_array().expect("rounds");
+    assert_eq!(rounds.len(), 2);
+    assert_eq!(rounds[0]["verdict"], "undecided");
+    assert_eq!(rounds[1]["verdict"], "clean");
+    let votes = rounds[0]["votes"].as_array().unwrap();
+    let gp = votes.iter().find(|v| v["sensor"] == "globalping").unwrap();
+    assert_eq!(gp["vote"], "blocked");
+    assert_eq!(gp["evidence"], json!({"probes": 12}));
+    let rf = votes.iter().find(|v| v["sensor"] == "red_flag").unwrap();
+    assert_eq!(rf["vote"], "abstain");
+    assert_eq!(rf["reason"], "timeout");
+    assert_eq!(rf["evidence"], json!({"waited_ms": 5000}));
+
+    // The evidence stays in the admin API.
+    let public = send(
+        &env,
+        request("GET", "/api/v1/nodes/alpha-00001", None, None),
+    )
+    .await;
+    assert!(!public.body.contains("probes"), "{}", public.body);
+    assert!(!public.body.contains("evidence"), "{}", public.body);
+
+    let unknown = get(&env, "/api/v1/admin/nodes/nobody-00009", &admin).await;
+    assert_problem(&unknown, StatusCode::NOT_FOUND, "not_found");
+}
+
+#[tokio::test]
+async fn status_shows_sensors_dns_and_counters() {
+    use mtpool_core::{AbstainReason, EventKind, RoundVerdict, SensorKind, SensorVote, Vote};
+    let env = env(pool(vec![alpha()]));
+    let admin = admin_token(&env);
+    round(
+        &env,
+        "alpha-00001",
+        NOW - 60_000,
+        RoundVerdict::Undecided,
+        vec![
+            (
+                SensorKind::Globalping,
+                SensorVote {
+                    vote: Vote::Blocked,
+                    evidence: json!({}),
+                },
+            ),
+            (
+                SensorKind::RedFlag,
+                SensorVote {
+                    vote: Vote::Abstain(AbstainReason::Timeout),
+                    evidence: json!({}),
+                },
+            ),
+        ],
+    );
+    let day = 86_400_000;
+    log(&env, EventKind::DnsApplied, NOW - 1_000, json!({}));
+    log(&env, EventKind::DnsApplied, NOW - 2_000, json!({}));
+    log(&env, EventKind::DnsApplied, NOW - 3 * day, json!({}));
+    log(
+        &env,
+        EventKind::DnsFailed,
+        NOW - 500,
+        json!({"error": "provider said no"}),
+    );
+    log(&env, EventKind::MasterChanged, NOW - 100, json!({}));
+    log(&env, EventKind::MasterChanged, NOW - 2 * day, json!({}));
+    let ban = |at: i64, reverify: bool| {
+        env.store.send(mtpool_core::PersistOp::RecordBan {
+            ip: std::net::Ipv4Addr::new(203, 0, 113, 7),
+            node: id_of("alpha-00001"),
+            at: mtpool_core::Ts(at),
+            votes: vec![(SensorKind::Globalping, Vote::Blocked)],
+            reverify,
+        });
+    };
+    ban(NOW - 1_000, false);
+    ban(NOW - 2_000, true);
+    ban(NOW - 8 * day, false);
+    env.store.flush().unwrap();
+    let set = patch(
+        &env,
+        &admin,
+        json!({ "secrets": { "globalping_token": GP_SECRET, "cloudflare_api_token": CF_SECRET } }),
+    )
+    .await;
+    assert_eq!(set.status, StatusCode::OK, "{}", set.body);
+
+    let resp = get(&env, "/api/v1/admin/status", &admin).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert!(!resp.body.contains(GP_SECRET) && !resp.body.contains(CF_SECRET));
+    let status = resp.json();
+    let sensor = |name: &str| {
+        status["sensors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["name"] == name)
+            .unwrap_or_else(|| panic!("no sensor {name}: {status}"))
+            .clone()
+    };
+    let gp = sensor("globalping");
+    assert_eq!(gp["configured"], true);
+    assert_eq!(gp["last_vote"], "blocked");
+    assert_eq!(gp["last_answer_at"], mtpool_protocol::rfc3339(NOW - 60_000));
+    assert_eq!(sensor("cheburcheck")["configured"], true);
+    let rf = sensor("red_flag");
+    assert_eq!(rf["last_vote"], "abstain");
+    assert_eq!(rf["last_reason"], "timeout");
+    assert!(
+        rf.get("last_answer_at").is_none(),
+        "only an abstention: {rf}"
+    );
+
+    let dns = &status["dns"];
+    assert_eq!(dns["token_set"], true);
+    assert_eq!(dns["applied_24h"], 2, "{dns}");
+    assert_eq!(dns["failed_24h"], 1, "{dns}");
+    assert_eq!(
+        dns["last_applied_at"],
+        mtpool_protocol::rfc3339(NOW - 1_000)
+    );
+    assert_eq!(dns["last_failed_at"], mtpool_protocol::rfc3339(NOW - 500));
+    assert_eq!(dns["last_error"], "provider said no");
+    assert_eq!(dns["unsynced_domains"], 1, "no DNS entry yet: {dns}");
+    assert_eq!(status["counts"]["master_changes_24h"], 1);
+    assert_eq!(
+        status["counts"]["bans_7d"], 1,
+        "a failed reverify and an old ban do not count"
+    );
+}
+
+#[tokio::test]
+async fn srmd_overview_reports_the_domains_and_how_many_are_needed() {
+    let mut state = pool(vec![alpha(), beta()]);
+    state.settings.domains = vec!["proxy.example.com".into(), "edge.example.com".into()];
+    state
+        .srmd
+        .cnames
+        .insert("edge.example.com".into(), "proxy.example.com".into());
+    state.srmd.created.insert("edge.example.com".into());
+    state
+        .srmd
+        .domain_clients
+        .insert("proxy.example.com".into(), 42);
+    let env = env(state);
+    let admin = admin_token(&env);
+
+    let resp = get(&env, "/api/v1/admin/srmd", &admin).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let body = resp.json();
+    assert_eq!(body["active"], json!(["proxy.example.com"]));
+    assert_eq!(body["folded"], json!(["edge.example.com"]));
+    assert_eq!(body["created"], json!(["edge.example.com"]));
+    assert_eq!(
+        body["cnames"],
+        json!({"edge.example.com": "proxy.example.com"})
+    );
+    assert_eq!(body["clients"], json!({"proxy.example.com": 42}));
+    assert_eq!(body["needed"], 1);
+    assert!(body["enabled"].is_boolean(), "{body}");
+}
+
+#[tokio::test]
+async fn dns_push_marks_every_domain_but_one_that_is_being_pushed() {
+    use mtpool_core::{DnsState, Generation, RecordValue, Ts};
+    let mut state = pool(vec![alpha()]);
+    let value = RecordValue::A(vec![std::net::Ipv4Addr::new(203, 0, 113, 7)]);
+    let entry = |in_flight| DnsState {
+        desired: value.clone(),
+        applied: Some(value.clone()),
+        generation: Generation(1),
+        retries: 3,
+        next_try: Ts(NOW + 3_600_000),
+        in_flight,
+    };
+    state.dns.insert("idle.example.com".into(), entry(None));
+    state
+        .dns
+        .insert("busy.example.com".into(), entry(Some(Generation(1))));
+    let env = env(state);
+    let admin = admin_token(&env);
+
+    let resp = post(&env, "/api/v1/admin/dns/push", &admin, None).await;
+    assert_eq!(resp.status, StatusCode::ACCEPTED, "{}", resp.body);
+
+    let (idle, busy) = env
+        .actor
+        .inspect(|s| {
+            (
+                s.dns["idle.example.com"].clone(),
+                s.dns["busy.example.com"].clone(),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(idle.applied, None);
+    assert_eq!(idle.retries, 0);
+    assert_eq!(idle.next_try, Ts(NOW));
+    assert_eq!(busy, entry(Some(Generation(1))), "left alone");
+
+    let entries = audit(&env, &admin).await;
+    assert!(
+        entries.iter().any(|e| e["action"] == "dns.push"),
+        "{entries:?}"
+    );
+}

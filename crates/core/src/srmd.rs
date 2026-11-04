@@ -84,6 +84,19 @@ pub fn required_domains(queue: usize, max_nodes: u32, masters: u32) -> usize {
     usize::try_from(needed).unwrap_or(usize::MAX)
 }
 
+/// How many domains the pool wants for `queue_len` waiting and serving nodes: the number
+/// `rebalance` aims for, within `max_domains` and never below one.
+pub fn needed_domains(queue_len: usize, settings: &Settings) -> usize {
+    let cfg = &settings.srmd;
+    required_domains(
+        queue_len,
+        cfg.max_nodes_per_domain,
+        settings.masters_per_domain,
+    )
+    .min(cfg.max_domains as usize)
+    .max(1)
+}
+
 /// Stores the clients of a domain. `None` (no metric) keeps the last known value.
 pub fn set_clients(state: &mut SrmdState, domain: &str, clients: Option<u64>) {
     if let Some(n) = clients {
@@ -100,13 +113,7 @@ pub fn rebalance(
 ) -> Vec<SrmdAction> {
     let mut actions = normalize_chains(state);
     let cfg = &settings.srmd;
-    let required = required_domains(
-        queue_len,
-        cfg.max_nodes_per_domain,
-        settings.masters_per_domain,
-    )
-    .min(cfg.max_domains as usize)
-    .max(1);
+    let required = needed_domains(queue_len, settings);
     let have = active.len();
 
     if !cfg.enabled || required == have {
@@ -344,6 +351,17 @@ mod tests {
 
     fn unfold(name: &str) -> SrmdAction {
         SrmdAction::Unfold(name.into())
+    }
+
+    #[test]
+    fn needed_domains_is_capped_by_max_domains_and_floored_at_one() {
+        let mut settings = Settings::default();
+        settings.srmd.max_nodes_per_domain = 5;
+        settings.srmd.max_domains = 3;
+        settings.masters_per_domain = 2;
+        assert_eq!(needed_domains(0, &settings), 1);
+        assert_eq!(needed_domains(11, &settings), 2);
+        assert_eq!(needed_domains(1000, &settings), 3);
     }
 
     #[test]

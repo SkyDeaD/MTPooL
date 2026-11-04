@@ -35,14 +35,16 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use mtpool_core::{
     Command, NodeAction, NodeId, NodeState, OwnerId, ReplyId, Settings, SettingsError,
-    SrmdManualAction, SrmdManualRequest, Ts,
+    SrmdManualAction, SrmdManualRequest, Ts, failed_conditions, needed_domains,
 };
 use mtpool_protocol::admin::{
-    AuditEntry, DomainRequest, EventEntry, NewOwner, NewToken as NewTokenRequest, NewTokenCreated,
-    Owner, OwnerPatch, TokenMeta,
+    AdminNode, AdminNodeDetail, AdminRound, AdminStatus, AdminVote, AuditEntry, DnsStatus,
+    DomainRequest, EventEntry, NewOwner, NewToken as NewTokenRequest, NewTokenCreated, Owner,
+    OwnerPatch, SensorStatus, SrmdOverview, StatusCounts, TokenMeta,
 };
 use mtpool_protocol::agent::{Empty, EmptyRequest};
 use mtpool_protocol::problem::Problem;
+use mtpool_protocol::public::{Verdict, Vote};
 use mtpool_protocol::{parse_rfc3339, rfc3339};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Map, Value, json};
@@ -91,6 +93,11 @@ pub fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_audit))
         .routes(routes!(list_events))
         .routes(routes!(stream))
+        .routes(routes!(list_nodes))
+        .routes(routes!(get_node))
+        .routes(routes!(status))
+        .routes(routes!(srmd_overview))
+        .routes(routes!(dns_push))
 }
 
 // ----- helpers -----------------------------------------------------------------------------
@@ -1254,4 +1261,404 @@ pub async fn list_events(
 )]
 pub async fn stream(State(app): State<AppState>, _auth: AdminAuth) -> Response {
     app.events.subscribe(app.actor.clone())
+}
+
+// ----- the panel's read paths --------------------------------------------------------------
+
+const ROUNDS_SHOWN: i64 = 20;
+const DAY_MS: i64 = 24 * 3600 * 1000;
+/// The sensors in the order the panel lists them, under the names their votes are stored with.
+const SENSORS: [&str; 3] = ["globalping", "cheburcheck", "red_flag"];
+
+/// What of a node only the state owner knows.
+struct NodeExtras {
+    id: String,
+    full_ip: String,
+    owner_id: i64,
+    last_heartbeat: Option<String>,
+    failed: Vec<String>,
+}
+
+/// Every node, banned, dead and pruned ones too, as the admin sees it: the public document of
+/// the snapshot plus the address, the owner, the heartbeat, the agent version and the failed
+/// conditions.
+async fn admin_nodes(app: &AppState) -> Result<Vec<AdminNode>, Failure> {
+    let now = (app.clock)();
+    let extras: Vec<NodeExtras> = app
+        .actor
+        .inspect(move |state| {
+            state
+                .nodes
+                .values()
+                .map(|n| NodeExtras {
+                    id: n.id.as_str().to_owned(),
+                    full_ip: n.ip.to_string(),
+                    owner_id: n.owner.0,
+                    last_heartbeat: (n.health.last_heartbeat.0 > 0)
+                        .then(|| rfc3339(n.health.last_heartbeat.0)),
+                    failed: failed_conditions(&n.health, now, &state.settings)
+                        .into_iter()
+                        .filter_map(|c| match serde_json::to_value(c) {
+                            Ok(Value::String(name)) => Some(name),
+                            _ => None,
+                        })
+                        .collect(),
+                })
+                .collect()
+        })
+        .await
+        .map_err(|_| actor_stopped())?;
+    let owners: HashMap<i64, String> = read(app, |conn| {
+        conn.prepare_cached("SELECT id, name FROM owners")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()
+    })
+    .await?;
+    let versions = app.rollouts.agent_versions();
+    let snapshot = app.snapshots.load();
+    Ok(extras
+        .into_iter()
+        .filter_map(|e| {
+            let node = snapshot.node_docs.get(&e.id)?.clone();
+            Some(AdminNode {
+                agent_version: NodeId::parse(&e.id)
+                    .ok()
+                    .and_then(|id| versions.get(&id).cloned()),
+                owner_name: owners.get(&e.owner_id).cloned(),
+                node,
+                full_ip: e.full_ip,
+                owner_id: e.owner_id,
+                last_heartbeat: e.last_heartbeat,
+                failed: e.failed,
+            })
+        })
+        .collect())
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/nodes",
+    operation_id = "admin_list_nodes",
+    tag = "admin",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Every node, banned, dead and pruned ones too, with the whole address and the owner", body = Vec<AdminNode>),
+        (status = 401, description = "No valid admin credential", body = Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn list_nodes(
+    State(app): State<AppState>,
+    _auth: AdminAuth,
+) -> Result<Response, Failure> {
+    Ok(json_status(StatusCode::OK, &admin_nodes(&app).await?))
+}
+
+/// The last rounds of `node`, newest first, with the evidence of each vote as it was stored.
+fn admin_rounds(conn: &rusqlite::Connection, node: &str) -> rusqlite::Result<Vec<AdminRound>> {
+    let rounds: Vec<(i64, i64, String)> = conn
+        .prepare_cached(
+            "SELECT id, at, verdict FROM sensor_rounds WHERE node = ?1 \
+             ORDER BY at DESC, id DESC LIMIT ?2",
+        )?
+        .query_map(params![node, ROUNDS_SHOWN], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut out = Vec::with_capacity(rounds.len());
+    for (round_id, at, verdict) in rounds {
+        let Ok(verdict) = serde_json::from_value::<Verdict>(Value::String(verdict)) else {
+            tracing::warn!(node, "a sensor round has a verdict the API does not know");
+            continue;
+        };
+        let rows: Vec<(String, String, String)> = conn
+            .prepare_cached(
+                "SELECT sensor, vote, data FROM sensor_votes WHERE round_id = ?1 ORDER BY sensor",
+            )?
+            .query_map([round_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        let votes = rows
+            .into_iter()
+            .filter_map(|(sensor, vote, data)| {
+                let vote = serde_json::from_value::<Vote>(Value::String(vote)).ok()?;
+                let data = serde_json::from_str::<Value>(&data).unwrap_or(Value::Null);
+                let reason = (vote == Vote::Abstain)
+                    .then(|| data.pointer("/vote/abstain")?.as_str().map(str::to_owned))
+                    .flatten();
+                Some(AdminVote {
+                    sensor,
+                    vote,
+                    reason,
+                    evidence: data.get("evidence").cloned().unwrap_or(Value::Null),
+                })
+            })
+            .collect();
+        out.push(AdminRound {
+            at: rfc3339(at),
+            verdict,
+            votes,
+        });
+    }
+    Ok(out)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/nodes/{id}",
+    operation_id = "admin_get_node",
+    tag = "admin",
+    security(("bearer" = [])),
+    params(("id" = String, Path, description = "The node id")),
+    responses(
+        (status = 200, description = "The node with its last 20 sensor rounds and their evidence", body = AdminNodeDetail),
+        (status = 401, description = "No valid admin credential", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "No such node", body = Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn get_node(
+    State(app): State<AppState>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+) -> Result<Response, Failure> {
+    let node = node_of(&id)?;
+    let found = admin_nodes(&app)
+        .await?
+        .into_iter()
+        .find(|n| n.node.id == node.as_str())
+        .ok_or_else(|| not_found("node"))?;
+    flushed(&app).await?;
+    let name = node.as_str().to_owned();
+    let rounds = read(&app, move |conn| admin_rounds(conn, &name)).await?;
+    Ok(json_status(
+        StatusCode::OK,
+        &AdminNodeDetail {
+            node: found,
+            rounds,
+        },
+    ))
+}
+
+/// What one sensor did lately, read from the votes of the rounds.
+fn sensor_status(
+    conn: &rusqlite::Connection,
+    name: &str,
+    configured: bool,
+) -> rusqlite::Result<SensorStatus> {
+    let last: Option<(String, String)> = conn
+        .prepare_cached(
+            "SELECT v.vote, v.data FROM sensor_votes v JOIN sensor_rounds r ON r.id = v.round_id \
+             WHERE v.sensor = ?1 ORDER BY r.at DESC, r.id DESC LIMIT 1",
+        )?
+        .query_row([name], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let mut answered: Option<i64> = conn
+        .prepare_cached(
+            "SELECT MAX(r.at) FROM sensor_votes v JOIN sensor_rounds r ON r.id = v.round_id \
+             WHERE v.sensor = ?1 AND v.vote <> 'abstain'",
+        )?
+        .query_row([name], |r| r.get(0))?;
+    if name == "globalping" {
+        // A measurement is an answer too, even when the round that asked for it abstained.
+        let measured: Option<i64> = conn
+            .prepare_cached("SELECT MAX(at) FROM gp_measurements")?
+            .query_row([], |r| r.get(0))?;
+        answered = answered.max(measured);
+    }
+    let last_vote = last
+        .as_ref()
+        .and_then(|(vote, _)| serde_json::from_value::<Vote>(Value::String(vote.clone())).ok());
+    let last_reason = last.as_ref().and_then(|(vote, data)| {
+        (vote == "abstain")
+            .then(|| {
+                serde_json::from_str::<Value>(data)
+                    .ok()?
+                    .pointer("/vote/abstain")?
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .flatten()
+    });
+    Ok(SensorStatus {
+        name: name.to_owned(),
+        configured,
+        last_answer_at: answered.map(rfc3339),
+        last_vote,
+        last_reason,
+    })
+}
+
+/// The DNS and event counters of the status page.
+fn event_status(
+    conn: &rusqlite::Connection,
+    now: Ts,
+) -> rusqlite::Result<(DnsStatus, StatusCounts)> {
+    let day_ago = now.0 - DAY_MS;
+    let latest = |kind: &str| -> rusqlite::Result<Option<(i64, String)>> {
+        conn.prepare_cached(
+            "SELECT at, detail FROM events WHERE kind = ?1 ORDER BY at DESC, id DESC LIMIT 1",
+        )?
+        .query_row([kind], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()
+    };
+    let since = |kind: &str, from: i64| -> rusqlite::Result<i64> {
+        conn.prepare_cached("SELECT COUNT(*) FROM events WHERE kind = ?1 AND at >= ?2")?
+            .query_row(params![kind, from], |r| r.get(0))
+    };
+    let applied = latest("dns_applied")?;
+    let failed = latest("dns_failed")?;
+    let dns = DnsStatus {
+        token_set: false,
+        last_applied_at: applied.map(|(at, _)| rfc3339(at)),
+        last_error: failed.as_ref().and_then(|(_, detail)| {
+            serde_json::from_str::<Value>(detail)
+                .ok()?
+                .get("error")?
+                .as_str()
+                .map(str::to_owned)
+        }),
+        last_failed_at: failed.map(|(at, _)| rfc3339(at)),
+        applied_24h: since("dns_applied", day_ago)?,
+        failed_24h: since("dns_failed", day_ago)?,
+        unsynced_domains: 0,
+    };
+    // A row with `reverify` set is a failed attempt to lift a ban, not a new ban.
+    let bans_7d = conn
+        .prepare_cached("SELECT COUNT(*) FROM bans WHERE at >= ?1 AND reverify = 0")?
+        .query_row([now.0 - 7 * DAY_MS], |r| r.get(0))?;
+    let counts = StatusCounts {
+        master_changes_24h: since("master_changed", day_ago)?,
+        bans_7d,
+    };
+    Ok((dns, counts))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/status",
+    operation_id = "admin_status",
+    tag = "admin",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "The sensors, DNS and the counters of the last days", body = AdminStatus),
+        (status = 401, description = "No valid admin credential", body = Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn status(State(app): State<AppState>, _auth: AdminAuth) -> Result<Response, Failure> {
+    let now = (app.clock)();
+    flushed(&app).await?;
+    let unsynced = app
+        .actor
+        .inspect(|state| {
+            let synced = |domain: &String| {
+                state
+                    .dns
+                    .get(domain)
+                    .is_some_and(|d| d.applied.as_ref() == Some(&d.desired))
+            };
+            i64::try_from(state.settings.domains.iter().filter(|d| !synced(d)).count())
+                .unwrap_or(i64::MAX)
+        })
+        .await
+        .map_err(|_| actor_stopped())?;
+    let store = app.store.clone();
+    let (token_set, configured) = blocking(move || {
+        (
+            secrets::is_set(&store, "cloudflare_api_token"),
+            [
+                secrets::is_set(&store, "globalping_token"),
+                true,
+                secrets::is_set(&store, "redflag_api_key"),
+            ],
+        )
+    })
+    .await?;
+    let (sensors, (mut dns, counts)) = read(&app, move |conn| {
+        let sensors = SENSORS
+            .iter()
+            .zip(configured)
+            .map(|(name, configured)| sensor_status(conn, name, configured))
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok((sensors, event_status(conn, now)?))
+    })
+    .await?;
+    dns.token_set = token_set;
+    dns.unsynced_domains = unsynced;
+    Ok(json_status(
+        StatusCode::OK,
+        &AdminStatus {
+            sensors,
+            dns,
+            counts,
+        },
+    ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/srmd",
+    operation_id = "admin_srmd",
+    tag = "admin",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "The domains SRMD keeps and how many the queue needs", body = SrmdOverview),
+        (status = 401, description = "No valid admin credential", body = Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn srmd_overview(
+    State(app): State<AppState>,
+    _auth: AdminAuth,
+) -> Result<Response, Failure> {
+    let overview = app
+        .actor
+        .inspect(|state| {
+            // The same count `rebalance` balances the domains for.
+            let queue = state
+                .nodes
+                .values()
+                .filter(|n| n.state == NodeState::Healthy)
+                .count();
+            let (folded, active): (Vec<String>, Vec<String>) = state
+                .settings
+                .domains
+                .iter()
+                .cloned()
+                .partition(|d| state.srmd.cnames.contains_key(d));
+            SrmdOverview {
+                enabled: state.settings.srmd.enabled,
+                needed: u32::try_from(needed_domains(queue, &state.settings)).unwrap_or(u32::MAX),
+                active,
+                folded,
+                created: state.srmd.created.iter().cloned().collect(),
+                cnames: state.srmd.cnames.clone(),
+                clients: state.srmd.domain_clients.clone(),
+            }
+        })
+        .await
+        .map_err(|_| actor_stopped())?;
+    Ok(json_status(StatusCode::OK, &overview))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/dns/push",
+    operation_id = "admin_dns_push",
+    tag = "admin",
+    security(("bearer" = [])),
+    request_body(content = EmptyRequest, description = "Empty, or `{}`"),
+    responses(
+        (status = 202, description = "Every domain is pushed to DNS again on the next ticks; one that is being pushed now is left alone", body = Empty),
+        (status = 401, description = "No valid admin credential", body = Problem, content_type = "application/problem+json"),
+    )
+)]
+pub async fn dns_push(
+    State(app): State<AppState>,
+    auth: AdminAuth,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Response, Failure> {
+    parse_empty(&body_bytes(body)?)?;
+    app.actor
+        .send(Command::DnsPushAll)
+        .await
+        .map_err(|_| actor_stopped())?;
+    record(&app, &auth, "dns.push", None, json!({}));
+    Ok(json_status(StatusCode::ACCEPTED, &json!({})))
 }

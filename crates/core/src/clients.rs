@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::state::PoolState;
-use crate::types::{NodeState, Ts};
+use crate::types::{NodeId, NodeState, Ts};
 
 /// The domain key of the pool total in a stored sample row.
 pub const TOTAL_DOMAIN: &str = "";
@@ -55,6 +55,36 @@ pub fn client_sample(state: &PoolState, now: Ts) -> ClientSample {
         total,
         domains,
     }
+}
+
+/// One node as one tick saw it, for the availability history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeSample {
+    pub node: NodeId,
+    /// Healthy counts as up; Quarantine and Dead as down.
+    pub up: bool,
+    pub clients: Option<u64>,
+}
+
+/// The nodes that count for availability at this moment. Pending, Banned and Pruned nodes
+/// are left out: they were never in service, or were taken out on purpose.
+pub fn node_samples(state: &PoolState) -> Vec<NodeSample> {
+    state
+        .nodes
+        .values()
+        .filter_map(|n| {
+            let up = match n.state {
+                NodeState::Healthy => true,
+                NodeState::Quarantine | NodeState::Dead => false,
+                _ => return None,
+            };
+            Some(NodeSample {
+                node: n.id.clone(),
+                up,
+                clients: state.stats.get(&n.id).and_then(|s| s.clients),
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -157,6 +187,31 @@ mod tests {
                 (String::new(), 10),
                 ("a.example.com".to_owned(), 4),
                 ("b.example.com".to_owned(), 6),
+            ]
+        );
+    }
+
+    #[test]
+    fn node_samples_count_healthy_up_quarantine_and_dead_down_and_skip_the_rest() {
+        let mut state = PoolState::default();
+        add(&mut state, "pend", NodeState::Pending, Some(1));
+        add(&mut state, "good", NodeState::Healthy, Some(10));
+        add(&mut state, "quar", NodeState::Quarantine, None);
+        add(&mut state, "banned", NodeState::Banned, Some(1000));
+        add(&mut state, "dead", NodeState::Dead, Some(7));
+        add(&mut state, "pruned", NodeState::Pruned, Some(100_000));
+        let mut samples = node_samples(&state);
+        samples.sort_by(|a, b| a.node.cmp(&b.node));
+        let view: Vec<_> = samples
+            .iter()
+            .map(|s| (s.node.as_str().split('-').next().unwrap(), s.up, s.clients))
+            .collect();
+        assert_eq!(
+            view,
+            [
+                ("dead", false, Some(7)),
+                ("good", true, Some(10)),
+                ("quar", false, None),
             ]
         );
     }

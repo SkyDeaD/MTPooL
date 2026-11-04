@@ -77,6 +77,14 @@ pub fn apply(state: &mut PoolState, command: Command, now: Ts) -> Vec<Effect> {
         Command::AdminUnban(a) => Some(admin_unban(state, a, now, &mut out)),
         Command::Recheck(a) => Some(recheck(state, a, now, &mut out)),
         Command::SrmdManual(r) => Some(srmd_manual(state, r, now, &mut out)),
+        Command::AvailabilityRefreshed(list) => {
+            availability_refreshed(state, list);
+            None
+        }
+        Command::DnsPushAll => {
+            dns_push_all(state, now, &mut out);
+            None
+        }
         Command::SettingsChanged(s) => {
             settings_changed(state, s, &mut out);
             None
@@ -1031,6 +1039,37 @@ fn update_dns(state: &mut PoolState, now: Ts, out: &mut Out) {
     }
 }
 
+/// Marks the record of every domain as not applied, so the next tick writes all of them.
+fn dns_push_all(state: &mut PoolState, now: Ts, out: &mut Out) {
+    for (domain, entry) in &mut state.dns {
+        if entry.in_flight.is_some() {
+            continue;
+        }
+        entry.applied = None;
+        entry.retries = 0;
+        entry.next_try = now;
+        persist(
+            out,
+            PersistOp::UpsertDns {
+                domain: domain.clone(),
+                dns: entry.clone(),
+            },
+        );
+    }
+}
+
+/// Stores the fresh availability. Nodes without samples lose a stale value.
+fn availability_refreshed(state: &mut PoolState, list: Vec<(NodeId, u32)>) {
+    for stats in state.stats.values_mut() {
+        stats.availability_bp = None;
+    }
+    for (node, bp) in list {
+        if let Some(stats) = state.stats.get_mut(&node) {
+            stats.availability_bp = Some(bp);
+        }
+    }
+}
+
 fn dns_done(
     state: &mut PoolState,
     domain: &str,
@@ -1942,6 +1981,67 @@ mod tests {
         p.advance(SEC);
         p.beat("n1");
         assert!(pushes(&p.run(Command::Tick)).is_empty());
+    }
+
+    #[test]
+    fn dns_push_all_marks_records_unapplied_and_skips_the_one_in_flight() {
+        let mut p = Pool::with(Settings {
+            domains: vec![DOMAIN.to_owned(), "q.example.com".to_owned()],
+            ..settings()
+        });
+        p.make_healthy("n1", ip(1));
+        for domain in [DOMAIN, "q.example.com"] {
+            let generation = p.state.dns[domain].generation;
+            p.run(Command::DnsDone {
+                domain: domain.to_owned(),
+                generation,
+                result: Err("later".to_owned()),
+            });
+        }
+        // The first domain succeeds, the second stays failing with a backoff.
+        p.run(Command::DnsDone {
+            domain: DOMAIN.to_owned(),
+            generation: Generation(1),
+            result: Ok(()),
+        });
+        assert!(p.state.dns[DOMAIN].applied.is_some());
+        p.state.dns.get_mut("q.example.com").unwrap().in_flight = Some(Generation(1));
+        let q_before = p.state.dns["q.example.com"].clone();
+
+        let effects = p.run(Command::DnsPushAll);
+
+        let dns = &p.state.dns[DOMAIN];
+        assert_eq!(dns.applied, None);
+        assert_eq!(dns.retries, 0);
+        assert_eq!(dns.next_try, p.now);
+        assert_eq!(p.state.dns["q.example.com"], q_before);
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::Persist(PersistOp::UpsertDns { domain, .. })] if domain == DOMAIN
+        ));
+        // The next tick pushes it again.
+        p.advance(SEC);
+        p.beat("n1");
+        assert_eq!(pushes(&p.run(Command::Tick)).len(), 1);
+    }
+
+    #[test]
+    fn availability_refreshed_sets_listed_nodes_clears_others_and_ignores_strangers() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.make_healthy("n2", ip(2));
+        let stranger = id("gone");
+        p.run(Command::AvailabilityRefreshed(vec![
+            (id("n1"), 9997),
+            (stranger.clone(), 5000),
+        ]));
+        assert_eq!(p.state.stats[&id("n1")].availability_bp, Some(9997));
+        assert_eq!(p.state.stats[&id("n2")].availability_bp, None);
+        assert!(!p.state.stats.contains_key(&stranger));
+
+        p.run(Command::AvailabilityRefreshed(vec![(id("n2"), 1)]));
+        assert_eq!(p.state.stats[&id("n1")].availability_bp, None);
+        assert_eq!(p.state.stats[&id("n2")].availability_bp, Some(1));
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! It never calls the network and the state owner never waits for it: the worker only reads
 //! the state owner through `inspect`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -32,6 +32,9 @@ struct Inner {
     /// The newest version a rollout was ever started for.
     newest: Option<Version>,
     dirty: bool,
+    /// The version each node reported on its last poll. Memory only: agents poll every 30
+    /// seconds, so it fills again after a restart.
+    versions: BTreeMap<NodeId, String>,
 }
 
 /// The rollout in progress or the last one, and its saved copy.
@@ -72,6 +75,7 @@ impl RolloutService {
                 current,
                 newest,
                 dirty: false,
+                versions: BTreeMap::new(),
             })),
             store,
             clock,
@@ -90,6 +94,9 @@ impl RolloutService {
     /// A node polled with the version it runs. `true` when it is told to update.
     pub fn poll(&self, node: &NodeId, version: &str, now: Ts) -> bool {
         let mut inner = lock(&self.inner);
+        if inner.versions.get(node).map(String::as_str) != Some(version) {
+            inner.versions.insert(node.clone(), version.to_owned());
+        }
         let Some(r) = inner.current.as_mut().filter(|r| r.is_open()) else {
             return false;
         };
@@ -123,6 +130,12 @@ impl RolloutService {
             r.on_status(node, status, now);
             inner.dirty = true;
         }
+    }
+
+    /// The agent version each node reported on its last poll, rollout or not. A node that has
+    /// not polled since the registrar started is not in it.
+    pub fn agent_versions(&self) -> BTreeMap<NodeId, String> {
+        lock(&self.inner).versions.clone()
     }
 
     /// The rollout with `id`, the current one included.

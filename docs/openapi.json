@@ -80,6 +80,52 @@
         ]
       }
     },
+    "/api/v1/admin/dns/push": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "admin_dns_push",
+        "requestBody": {
+          "description": "Empty, or `{}`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmptyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Every domain is pushed to DNS again on the next ticks; one that is being pushed now is left alone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/domains": {
       "get": {
         "tags": [
@@ -319,6 +365,100 @@
           },
           "401": {
             "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/nodes": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "admin_list_nodes",
+        "responses": {
+          "200": {
+            "description": "Every node, banned, dead and pruned ones too, with the whole address and the owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminNode"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/nodes/{id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "admin_get_node",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The node id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The node with its last 20 sensor rounds and their evidence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminNodeDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1147,6 +1287,41 @@
         ]
       }
     },
+    "/api/v1/admin/srmd": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "admin_srmd",
+        "responses": {
+          "200": {
+            "description": "The domains SRMD keeps and how many the queue needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SrmdOverview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/srmd/{domain}/release": {
       "post": {
         "tags": [
@@ -1285,6 +1460,41 @@
           },
           "409": {
             "description": "Taken already (`already_managed`)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/status": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "admin_status",
+        "responses": {
+          "200": {
+            "description": "The sensors, DNS and the counters of the last days",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin credential",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3113,6 +3323,68 @@
         }
       }
     },
+    "/api/v1/nodes/{id}/history": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "get_node_history",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "alpha-a1b2c"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The last 96 buckets of 15 minutes that have samples, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeHistory"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the limit window ends"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/openapi.json": {
       "get": {
         "tags": [
@@ -3552,6 +3824,159 @@
   },
   "components": {
     "schemas": {
+      "AdminNode": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PublicNode"
+          },
+          {
+            "type": "object",
+            "required": [
+              "full_ip",
+              "owner_id",
+              "failed"
+            ],
+            "properties": {
+              "agent_version": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The agent version from the rollout record; absent until the node has polled."
+              },
+              "failed": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The conditions that do not hold now: `tcp`, `metrics`, `globalping`, `port`,\n`heartbeat_stale`, `report_stale`."
+              },
+              "full_ip": {
+                "type": "string",
+                "description": "The whole address.",
+                "example": "203.0.113.7"
+              },
+              "last_heartbeat": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "RFC 3339, UTC: the last heartbeat; absent if none came."
+              },
+              "owner_id": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "owner_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Absent when the owner is gone."
+              }
+            }
+          }
+        ],
+        "description": "A node as the admin sees it: the public document and what stays out of the public one."
+      },
+      "AdminNodeDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AdminNode"
+          },
+          {
+            "type": "object",
+            "required": [
+              "rounds"
+            ],
+            "properties": {
+              "rounds": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AdminRound"
+                },
+                "description": "The last 20 rounds, newest first."
+              }
+            }
+          }
+        ],
+        "description": "`GET /admin/nodes/{id}`."
+      },
+      "AdminRound": {
+        "type": "object",
+        "description": "A sensor round with the evidence of its votes.",
+        "required": [
+          "at",
+          "verdict",
+          "votes"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/Verdict"
+          },
+          "votes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminVote"
+            }
+          }
+        }
+      },
+      "AdminStatus": {
+        "type": "object",
+        "description": "`GET /admin/status`.",
+        "required": [
+          "sensors",
+          "dns",
+          "counts"
+        ],
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/StatusCounts"
+          },
+          "dns": {
+            "$ref": "#/components/schemas/DnsStatus"
+          },
+          "sensors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SensorStatus"
+            }
+          }
+        }
+      },
+      "AdminVote": {
+        "type": "object",
+        "description": "One sensor's vote in a round, with what it measured.",
+        "required": [
+          "sensor",
+          "vote",
+          "evidence"
+        ],
+        "properties": {
+          "evidence": {
+            "description": "The sensor's own document, as stored."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the sensor abstained; only for `abstain`."
+          },
+          "sensor": {
+            "type": "string",
+            "example": "globalping"
+          },
+          "vote": {
+            "$ref": "#/components/schemas/Vote"
+          }
+        }
+      },
       "AgentConfig": {
         "type": "object",
         "description": "`GET /agent/config`: what the node's proxy has to be set up with.",
@@ -3969,6 +4394,56 @@
           "CNAME"
         ]
       },
+      "DnsStatus": {
+        "type": "object",
+        "description": "The DNS part of `GET /admin/status`.",
+        "required": [
+          "token_set",
+          "applied_24h",
+          "failed_24h",
+          "unsynced_domains"
+        ],
+        "properties": {
+          "applied_24h": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failed_24h": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_applied_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339, UTC."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The provider's message of the last failure."
+          },
+          "last_failed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339, UTC."
+          },
+          "token_set": {
+            "type": "boolean",
+            "description": "Whether a Cloudflare token is stored."
+          },
+          "unsynced_domains": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Domains whose record in DNS differs from the wanted one."
+          }
+        }
+      },
       "DomainRequest": {
         "type": "object",
         "description": "`POST /admin/domains`.",
@@ -4100,6 +4575,16 @@
             ]
           }
         }
+      },
+      "GlobalpingCheck": {
+        "type": "string",
+        "description": "The state of the Globalping check of a node.",
+        "enum": [
+          "ok",
+          "failed",
+          "no_data",
+          "unknown"
+        ]
       },
       "GpReport": {
         "oneOf": [
@@ -4423,6 +4908,83 @@
           }
         }
       },
+      "NodeChecks": {
+        "type": "object",
+        "description": "What the pool sees on a node right now.",
+        "required": [
+          "tcp",
+          "metrics",
+          "globalping"
+        ],
+        "properties": {
+          "globalping": {
+            "$ref": "#/components/schemas/GlobalpingCheck"
+          },
+          "metrics": {
+            "type": "boolean",
+            "description": "The engine metrics answer."
+          },
+          "tcp": {
+            "type": "boolean",
+            "description": "The port answers from outside."
+          }
+        }
+      },
+      "NodeHistory": {
+        "type": "object",
+        "description": "`GET /nodes/{id}/history`: the last 96 buckets of a node that have samples, oldest first.",
+        "required": [
+          "bucket_sec",
+          "buckets"
+        ],
+        "properties": {
+          "bucket_sec": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The length of one bucket in seconds (900)."
+          },
+          "buckets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeHistoryBucket"
+            }
+          }
+        }
+      },
+      "NodeHistoryBucket": {
+        "type": "object",
+        "description": "One bucket of the node history.",
+        "required": [
+          "start",
+          "up",
+          "total",
+          "clients"
+        ],
+        "properties": {
+          "clients": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The most clients seen in the bucket.",
+            "minimum": 0
+          },
+          "start": {
+            "type": "string",
+            "description": "RFC 3339, UTC: the start of the bucket."
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Samples of the bucket.",
+            "minimum": 0
+          },
+          "up": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Samples of the bucket in which the node was up.",
+            "minimum": 0
+          }
+        }
+      },
       "NodeState": {
         "type": "string",
         "enum": [
@@ -4657,9 +5219,19 @@
         "type": "object",
         "required": [
           "domain",
-          "masters"
+          "masters",
+          "dns_synced"
         ],
         "properties": {
+          "clients": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Clients on the domain; absent while unknown.",
+            "minimum": 0
+          },
           "dns": {
             "oneOf": [
               {
@@ -4671,9 +5243,20 @@
               }
             ]
           },
+          "dns_synced": {
+            "type": "boolean",
+            "description": "Whether the record in DNS is the one the pool wants."
+          },
           "domain": {
             "type": "string",
             "example": "proxy.example.com"
+          },
+          "folded_into": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The domain this one is folded into (it is a CNAME onto it); absent otherwise."
           },
           "masters": {
             "type": "array",
@@ -4696,9 +5279,32 @@
           "registered_at",
           "state_since",
           "is_master",
-          "domains"
+          "domains",
+          "checks"
         ],
         "properties": {
+          "availability_bp": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Uptime over the last 30 days in hundredths of a percent (9997 is 99.97 %). Absent while\nthe node has no samples.",
+            "minimum": 0
+          },
+          "checks": {
+            "$ref": "#/components/schemas/NodeChecks",
+            "description": "The conditions the pool watches on the node."
+          },
+          "clients": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Clients connected to the node, as its last report said; absent until it reported one.",
+            "minimum": 0
+          },
           "domains": {
             "type": "array",
             "items": {
@@ -4733,14 +5339,37 @@
               }
             ]
           },
+          "next_round_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the next sensor round of the node is due (RFC 3339, UTC)."
+          },
           "port": {
             "type": "integer",
             "format": "int32",
             "minimum": 0
           },
+          "queue_position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Place in the queue for a master slot, from 1: only for a healthy node that is not a\nmaster.",
+            "minimum": 0
+          },
           "registered_at": {
             "type": "string",
             "description": "RFC 3339, UTC."
+          },
+          "rotates_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For a master: when its slot is due to rotate (RFC 3339, UTC). Absent when rotation is\noff."
           },
           "state": {
             "$ref": "#/components/schemas/NodeState"
@@ -5092,6 +5721,114 @@
           }
         }
       },
+      "SensorStatus": {
+        "type": "object",
+        "description": "One sensor in `GET /admin/status`.",
+        "required": [
+          "name",
+          "configured"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "last_answer_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339, UTC: the last time the sensor gave an answer other than an abstention."
+          },
+          "last_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last vote was an abstention."
+          },
+          "last_vote": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Vote"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "example": "cheburcheck"
+          }
+        }
+      },
+      "SrmdOverview": {
+        "type": "object",
+        "description": "`GET /admin/srmd`.",
+        "required": [
+          "enabled",
+          "needed",
+          "active",
+          "folded",
+          "created",
+          "cnames",
+          "clients"
+        ],
+        "properties": {
+          "active": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Domains that are not folded."
+          },
+          "clients": {
+            "type": "object",
+            "description": "Clients per domain.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "cnames": {
+            "type": "object",
+            "description": "Folded domain to the one it points to.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "created": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Domains SRMD created."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "folded": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Domains that are folded into another."
+          },
+          "needed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many domains the queue needs now.",
+            "minimum": 0
+          }
+        }
+      },
       "StatsBucket": {
         "allOf": [
           {
@@ -5255,6 +5992,24 @@
             "description": "The last 30 bans, newest first."
           },
           "step_sec": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "StatusCounts": {
+        "type": "object",
+        "description": "Counts of things that happened lately.",
+        "required": [
+          "master_changes_24h",
+          "bans_7d"
+        ],
+        "properties": {
+          "bans_7d": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "master_changes_24h": {
             "type": "integer",
             "format": "int64"
           }

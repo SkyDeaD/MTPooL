@@ -23,7 +23,7 @@ use rusqlite::{Connection, OpenFlags};
 
 pub use admin::AdminOp;
 pub use auth::{AuthOp, NewTokenRow};
-pub use history::HistoryOp;
+pub use history::{BUCKET_SEC, HistoryOp, NodeBucket, availability, node_history};
 pub use reports::{ReportOp, measurement_seen};
 
 mod admin;
@@ -51,6 +51,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (4, include_str!("../../migrations/0004_admin.sql")),
     (5, include_str!("../../migrations/0005_rollouts.sql")),
     (6, include_str!("../../migrations/0006_client_samples.sql")),
+    (7, include_str!("../../migrations/0007_node_samples.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

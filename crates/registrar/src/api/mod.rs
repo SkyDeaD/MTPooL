@@ -206,6 +206,7 @@ pub fn public_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(public::list_nodes))
         .routes(routes!(public::get_node))
+        .routes(routes!(public::get_node_history))
         .routes(routes!(public::list_domains))
         .routes(routes!(public::list_links))
         .routes(routes!(public::link_qr))

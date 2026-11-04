@@ -7,10 +7,11 @@ use axum::extract::rejection::PathRejection;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, header};
 use axum::response::Response;
-use mtpool_core::mask_ip;
+use mtpool_core::{NodeId, mask_ip};
 use mtpool_protocol::problem::Problem;
 use mtpool_protocol::public::{
-    BanRecord, BanVote, LastRound, LastVote, ProxyLink, PublicDomain, PublicNode, Verdict, Vote,
+    BanRecord, BanVote, LastRound, LastVote, NodeHistory, NodeHistoryBucket, ProxyLink,
+    PublicDomain, PublicNode, Verdict, Vote,
 };
 use mtpool_protocol::rfc3339;
 use rusqlite::{Connection, OptionalExtension};
@@ -18,6 +19,7 @@ use serde_json::Value;
 
 use super::{ApiError, RawQuery, json, qr, query_map, tagged};
 use crate::server::AppState;
+use crate::store::{BUCKET_SEC, node_history};
 
 const DEFAULT_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 200;
@@ -124,6 +126,56 @@ pub async fn get_node(
     node.last_round = read(&app, move |conn| last_round(conn, &id)).await?;
     Ok(json(
         serde_json::to_string(&node).expect("a node serializes"),
+    ))
+}
+
+/// Buckets in `GET /nodes/{id}/history`: a day of 15-minute ones.
+const HISTORY_BUCKETS: i64 = 96;
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/nodes/{id}/history",
+    tag = "public",
+    params(("id" = String, Path, description = "Node id", example = "alpha-a1b2c")),
+    responses(
+        (status = 200, description = "The last 96 buckets of 15 minutes that have samples, oldest first", body = NodeHistory),
+        (status = 404, description = "No such node", body = Problem, content_type = "application/problem+json"),
+        (status = 429, description = "Too many requests", body = Problem, content_type = "application/problem+json",
+            headers(("Retry-After" = u64, description = "Seconds until the limit window ends"))),
+    )
+)]
+pub async fn get_node_history(
+    State(app): State<AppState>,
+    id: Result<Path<String>, PathRejection>,
+) -> Result<Response, ApiError> {
+    let Ok(Path(id)) = id else {
+        return Err(unknown("node"));
+    };
+    let snapshot = app.snapshots.load();
+    if !snapshot.node_docs.contains_key(&id) {
+        return Err(unknown("node"));
+    }
+    let node = NodeId::parse(&id).map_err(|_| unknown("node"))?;
+    let now = (app.clock)();
+    let buckets = read(&app, move |conn| {
+        node_history(conn, &node, now, HISTORY_BUCKETS)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+    })
+    .await?;
+    let history = NodeHistory {
+        bucket_sec: BUCKET_SEC,
+        buckets: buckets
+            .into_iter()
+            .map(|b| NodeHistoryBucket {
+                start: rfc3339(b.start.0),
+                up: b.up,
+                total: b.total,
+                clients: b.clients,
+            })
+            .collect(),
+    };
+    Ok(json(
+        serde_json::to_string(&history).expect("a history serializes"),
     ))
 }
 

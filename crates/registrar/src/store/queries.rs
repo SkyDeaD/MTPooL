@@ -18,6 +18,7 @@ const TRAFFIC_TTL_MS: i64 = 35 * DAY_MS;
 const ROUNDS_TTL_MS: i64 = 35 * DAY_MS;
 const TOMBSTONE_TTL_MS: i64 = 7 * DAY_MS;
 const SAMPLES_TTL_MS: i64 = 8 * DAY_MS;
+const NODE_SAMPLES_TTL_MS: i64 = 31 * DAY_MS;
 
 fn invalid(what: &str, detail: impl std::fmt::Display) -> StoreError {
     StoreError::InvalidData(format!("{what}: {detail}"))
@@ -209,7 +210,7 @@ fn load_srmd(conn: &Connection) -> Result<SrmdState, StoreError> {
 }
 
 /// Events older than 30 days, traffic and sensor rounds older than 35 days, client samples
-/// older than 8 days, tombstones past their 7 days. Bans are kept: they are the audit of bans.
+/// older than 8 days, node samples older than 31 days, tombstones past their 7 days. Bans are kept: they are the audit of bans.
 pub(super) fn retain(conn: &Connection, now: Ts) -> Result<(), StoreError> {
     let cutoff = |ttl: i64| now.0.saturating_sub(ttl);
     conn.execute("DELETE FROM events WHERE at < ?1", [cutoff(EVENTS_TTL_MS)])?;
@@ -225,6 +226,11 @@ pub(super) fn retain(conn: &Connection, now: Ts) -> Result<(), StoreError> {
     conn.execute(
         "DELETE FROM client_samples WHERE at < ?1",
         [cutoff(SAMPLES_TTL_MS)],
+    )?;
+    // Buckets are Unix seconds divided by their length: compare in the same unit.
+    conn.execute(
+        "DELETE FROM node_samples WHERE bucket < ?1",
+        [cutoff(NODE_SAMPLES_TTL_MS).div_euclid(1000) / super::history::BUCKET_SEC],
     )?;
     // `Tombstone::expired` counts the 7th day as expired.
     conn.execute(

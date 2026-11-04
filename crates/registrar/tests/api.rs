@@ -394,7 +394,9 @@ async fn nodes_mask_ip_and_hide_measurement_id() {
             "registered_at",
             "state_since",
             "is_master",
-            "domains"
+            "domains",
+            "checks",
+            "rotates_at"
         ]),
         "no last_round in the list"
     );
@@ -658,11 +660,13 @@ async fn links_public_without_token() {
                 "domain": "proxy.example.com",
                 "masters": ["alpha-00001"],
                 "dns": {"type": "A", "values": ["203.x.x.7"]},
+                "dns_synced": false,
             },
             {
                 "domain": "edge.example.com",
                 "masters": [],
                 "dns": {"type": "CNAME", "values": ["proxy.example.com"]},
+                "dns_synced": false,
             },
         ])
     );
@@ -1466,4 +1470,97 @@ async fn clients_answer_is_cached_for_ten_seconds() {
     let later = get(&env, path).await;
     assert_ne!(later.body, first.body, "recomputed once the cache is old");
     assert_eq!(later.json()["points"][0]["total"], 8);
+}
+
+fn node_sample(node: &str, up: bool, clients: Option<u64>) -> mtpool_core::NodeSample {
+    mtpool_core::NodeSample {
+        node: node_id(node),
+        up,
+        clients,
+    }
+}
+
+#[tokio::test]
+async fn node_history_returns_buckets_oldest_first() {
+    let env = env(pool());
+    // Two ticks in one 15 minute bucket (one up, one down), one tick in the next.
+    let bucket = (NOW / 1000 / 900) * 900 * 1000;
+    for (at, up, clients) in [
+        (bucket - 900_000, true, Some(4)),
+        (bucket - 900_000 + 1_000, false, None),
+        (bucket, true, Some(9)),
+    ] {
+        env.store.send(HistoryOp::NodeSamples {
+            at: Ts(at),
+            rows: vec![node_sample("alpha-00001", up, clients)],
+        });
+    }
+    env.store.flush().unwrap();
+
+    let resp = get(&env, "/api/v1/nodes/alpha-00001/history").await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let body = resp.json();
+    assert_eq!(body["bucket_sec"], 900);
+    assert_eq!(
+        body["buckets"],
+        json!([
+            {"start": rfc3339(bucket - 900_000), "up": 1, "total": 2, "clients": 4},
+            {"start": rfc3339(bucket), "up": 1, "total": 1, "clients": 9},
+        ])
+    );
+    // No sample at all is an empty list, not an error.
+    let none = get(&env, "/api/v1/nodes/beta-00002/history").await;
+    assert_eq!(none.status, StatusCode::OK, "{}", none.body);
+    assert_eq!(none.json()["buckets"], json!([]));
+}
+
+#[tokio::test]
+async fn node_history_of_an_unknown_node_is_404() {
+    let env = env(pool());
+    assert_problem(
+        &get(&env, "/api/v1/nodes/nobody-00009/history").await,
+        StatusCode::NOT_FOUND,
+        "not_found",
+    );
+}
+
+#[tokio::test]
+async fn node_history_is_behind_the_request_limit() {
+    let env = env(pool());
+    let mut limited = false;
+    for _ in 0..400 {
+        let resp = get(&env, "/api/v1/nodes/alpha-00001/history").await;
+        if resp.status == StatusCode::TOO_MANY_REQUESTS {
+            limited = true;
+            break;
+        }
+    }
+    assert!(limited, "the public limit never applied to the history");
+}
+
+#[tokio::test]
+async fn public_nodes_carry_the_new_fields_and_no_evidence() {
+    let env = env(pool());
+    env.store.send(HistoryOp::NodeSamples {
+        at: Ts(NOW),
+        rows: vec![node_sample("alpha-00001", true, Some(3))],
+    });
+    env.store.flush().unwrap();
+
+    let list = get(&env, "/api/v1/nodes").await;
+    assert_eq!(list.status, StatusCode::OK, "{}", list.body);
+    for forbidden in ["203.0.113.7", "198.51.100.9", "evidence"] {
+        assert!(
+            !list.body.contains(forbidden),
+            "{forbidden} in {}",
+            list.body
+        );
+    }
+    let one = get(&env, "/api/v1/nodes/alpha-00001").await;
+    for forbidden in ["203.0.113.7", "evidence"] {
+        assert!(!one.body.contains(forbidden), "{forbidden} in {}", one.body);
+    }
+    let one = one.json();
+    assert_eq!(one["checks"]["tcp"], true, "{one}");
+    assert!(one["rotates_at"].is_string(), "{one}");
 }

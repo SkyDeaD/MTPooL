@@ -206,3 +206,126 @@ pub struct RolloutView {
     pub counts: RolloutCounts,
     pub nodes: Vec<RolloutNode>,
 }
+
+/// A node as the admin sees it: the public document and what stays out of the public one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AdminNode {
+    #[serde(flatten)]
+    pub node: crate::public::PublicNode,
+    /// The whole address.
+    #[schema(example = "203.0.113.7")]
+    pub full_ip: String,
+    pub owner_id: i64,
+    /// Absent when the owner is gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_name: Option<String>,
+    /// RFC 3339, UTC: the last heartbeat; absent if none came.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat: Option<String>,
+    /// The agent version from the rollout record; absent until the node has polled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_version: Option<String>,
+    /// The conditions that do not hold now: `tcp`, `metrics`, `globalping`, `port`,
+    /// `heartbeat_stale`, `report_stale`.
+    pub failed: Vec<String>,
+}
+
+/// One sensor's vote in a round, with what it measured.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AdminVote {
+    #[schema(example = "globalping")]
+    pub sensor: String,
+    pub vote: crate::public::Vote,
+    /// Why the sensor abstained; only for `abstain`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The sensor's own document, as stored.
+    pub evidence: Value,
+}
+
+/// A sensor round with the evidence of its votes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AdminRound {
+    /// RFC 3339, UTC.
+    pub at: String,
+    pub verdict: crate::public::Verdict,
+    pub votes: Vec<AdminVote>,
+}
+
+/// `GET /admin/nodes/{id}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AdminNodeDetail {
+    #[serde(flatten)]
+    pub node: AdminNode,
+    /// The last 20 rounds, newest first.
+    pub rounds: Vec<AdminRound>,
+}
+
+/// One sensor in `GET /admin/status`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SensorStatus {
+    #[schema(example = "cheburcheck")]
+    pub name: String,
+    pub configured: bool,
+    /// RFC 3339, UTC: the last time the sensor gave an answer other than an abstention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_answer_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_vote: Option<crate::public::Vote>,
+    /// Why the last vote was an abstention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_reason: Option<String>,
+}
+
+/// The DNS part of `GET /admin/status`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct DnsStatus {
+    /// Whether a Cloudflare token is stored.
+    pub token_set: bool,
+    /// RFC 3339, UTC.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_applied_at: Option<String>,
+    /// RFC 3339, UTC.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_failed_at: Option<String>,
+    /// The provider's message of the last failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    pub applied_24h: i64,
+    pub failed_24h: i64,
+    /// Domains whose record in DNS differs from the wanted one.
+    pub unsynced_domains: i64,
+}
+
+/// Counts of things that happened lately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct StatusCounts {
+    pub master_changes_24h: i64,
+    pub bans_7d: i64,
+}
+
+/// `GET /admin/status`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AdminStatus {
+    pub sensors: Vec<SensorStatus>,
+    pub dns: DnsStatus,
+    pub counts: StatusCounts,
+}
+
+/// `GET /admin/srmd`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct SrmdOverview {
+    pub enabled: bool,
+    /// How many domains the queue needs now.
+    pub needed: u32,
+    /// Domains that are not folded.
+    pub active: Vec<String>,
+    /// Domains that are folded into another.
+    pub folded: Vec<String>,
+    /// Domains SRMD created.
+    pub created: Vec<String>,
+    /// Folded domain to the one it points to.
+    pub cnames: std::collections::BTreeMap<String, String>,
+    /// Clients per domain.
+    pub clients: std::collections::BTreeMap<String, u64>,
+}

@@ -353,6 +353,16 @@ pub async fn run_with(
             store.clone(),
             system_clock(),
         )),
+        tokio::spawn(crate::clients::run_availability(
+            actor.clone(),
+            store.clone(),
+            system_clock(),
+        )),
+        tokio::spawn(crate::clients::run_retention(
+            actor.clone(),
+            store.clone(),
+            system_clock(),
+        )),
     ];
     // The poller only fetches and checks files; it has no say over the state owner.
     workers.extend(crate::update::spawn_poller(store.clone()));

@@ -5,9 +5,9 @@ use std::time::{Duration, Instant};
 
 use mtpool_core::{
     AbstainReason, Assignments, DnsState, EngineKind, Event, EventKind, Generation, GpStatus,
-    IpBlock, NodeHealth, NodeId, NodeRecord, NodeState, NodeStats, OwnerId, PersistOp, PoolState,
-    RecordValue, RoundVerdict, SensorKind, SensorVote, Settings, Slot, SrmdState, Tombstone,
-    TrafficCounters, Ts, Vote,
+    IpBlock, NodeHealth, NodeId, NodeRecord, NodeSample, NodeState, NodeStats, OwnerId, PersistOp,
+    PoolState, RecordValue, RoundVerdict, SensorKind, SensorVote, Settings, Slot, SrmdState,
+    Tombstone, TrafficCounters, Ts, Vote,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -108,6 +108,7 @@ fn migrations_apply_on_empty_db() {
         "sessions",
         "gp_measurements",
         "client_samples",
+        "node_samples",
     ] {
         let found: i64 = conn
             .query_row(
@@ -123,7 +124,7 @@ fn migrations_apply_on_empty_db() {
             r.get(0)
         })
         .unwrap();
-    assert_eq!(version, 6);
+    assert_eq!(version, 7);
     let mode: String = conn
         .query_row("PRAGMA journal_mode", [], |r| r.get(0))
         .unwrap();
@@ -140,7 +141,7 @@ fn migrations_apply_on_empty_db() {
     // Opening again applies nothing twice.
     let store = Store::open(&path).unwrap();
     store.close().unwrap();
-    assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 6);
+    assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 7);
 }
 
 #[test]
@@ -156,7 +157,8 @@ fn a_database_at_version_5_upgrades_cleanly() {
     // Take the database back to what version 5 left.
     let conn = fresh(&path);
     conn.execute_batch(
-        "DROP TABLE client_samples; DELETE FROM schema_migrations WHERE version = 6;",
+        "DROP TABLE client_samples; DROP TABLE node_samples; \
+         DELETE FROM schema_migrations WHERE version >= 6;",
     )
     .unwrap();
     drop(conn);
@@ -166,9 +168,157 @@ fn a_database_at_version_5_upgrades_cleanly() {
     store.close().unwrap();
     assert_eq!(
         count(&path, "SELECT max(version) FROM schema_migrations"),
-        6
+        7
     );
     assert_eq!(count(&path, "SELECT count(*) FROM client_samples"), 0);
+}
+
+#[test]
+fn a_database_at_version_6_upgrades_cleanly() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).unwrap();
+    store.send(PersistOp::SetSettings(Settings {
+        proxy_port: 8443,
+        ..Settings::default()
+    }));
+    store.flush().unwrap();
+    store.close().unwrap();
+    let conn = fresh(&path);
+    conn.execute_batch("DROP TABLE node_samples; DELETE FROM schema_migrations WHERE version = 7;")
+        .unwrap();
+    drop(conn);
+
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.load_at(NOW).unwrap().settings.proxy_port, 8443);
+    store.close().unwrap();
+    assert_eq!(
+        count(&path, "SELECT max(version) FROM schema_migrations"),
+        7
+    );
+    assert_eq!(count(&path, "SELECT count(*) FROM node_samples"), 0);
+}
+
+fn sample(name: &str, up: bool, clients: Option<u64>) -> NodeSample {
+    NodeSample {
+        node: id(name),
+        up,
+        clients,
+    }
+}
+
+#[test]
+fn node_samples_accumulate_in_a_bucket_and_split_across_buckets() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).unwrap();
+    let bucket_ms = BUCKET_SEC * 1000;
+    let start = NOW.0 - NOW.0 % bucket_ms;
+    for (offset, up, clients) in [
+        (0, true, Some(5)),
+        (30_000, true, Some(9)),
+        (60_000, false, None),
+        (bucket_ms, true, Some(2)),
+    ] {
+        store.send(HistoryOp::NodeSamples {
+            at: Ts(start + offset),
+            rows: vec![sample("alpha-00001", up, clients)],
+        });
+    }
+    store.flush().unwrap();
+
+    let now = Ts(start + bucket_ms + 1000);
+    let rows = node_history(&store.read(), &id("alpha-00001"), now, 96).unwrap();
+    assert_eq!(
+        rows,
+        [
+            NodeBucket {
+                start: Ts(start),
+                up: 2,
+                total: 3,
+                clients: 9
+            },
+            NodeBucket {
+                start: Ts(start + bucket_ms),
+                up: 1,
+                total: 1,
+                clients: 2
+            },
+        ]
+    );
+    // Only the last buckets asked for.
+    let last = node_history(&store.read(), &id("alpha-00001"), now, 1).unwrap();
+    assert_eq!(last.len(), 1);
+    assert_eq!(last[0].start, Ts(start + bucket_ms));
+    // Another node has no history.
+    assert!(
+        node_history(&store.read(), &id("beta-00002"), now, 96)
+            .unwrap()
+            .is_empty()
+    );
+    store.close().unwrap();
+}
+
+#[test]
+fn availability_is_up_over_total_in_30_days_and_none_without_samples() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).unwrap();
+    let conn = fresh(&path);
+    let bucket_now = NOW.0 / 1000 / BUCKET_SEC;
+    let insert = |node: &str, bucket: i64, up: i64, total: i64| {
+        conn.execute(
+            "INSERT INTO node_samples(node, bucket, up, total, clients) VALUES (?1, ?2, ?3, ?4, 0)",
+            rusqlite::params![node, bucket, up, total],
+        )
+        .unwrap();
+    };
+    // 3 of 10000 ticks down: 99.97 %.
+    insert("alpha-00001", bucket_now, 4997, 5000);
+    insert("alpha-00001", bucket_now - 100, 5000, 5000);
+    // Older than 30 days: not counted.
+    insert("alpha-00001", bucket_now - 30 * 96, 0, 5000);
+    // Always down: 0, which is a value, unlike no samples.
+    insert("beta-00002", bucket_now, 0, 10);
+    drop(conn);
+
+    let mut list = availability(&store.read(), NOW).unwrap();
+    list.sort();
+    assert_eq!(list, [(id("alpha-00001"), 9997), (id("beta-00002"), 0)]);
+    // A node with no samples is not in the list at all.
+    assert!(list.iter().all(|(n, _)| n != &id("gamma-00003")));
+    // Far in the future every sample is out of the window.
+    assert!(
+        availability(&store.read(), Ts(NOW.0 + 400 * DAY_MS))
+            .unwrap()
+            .is_empty()
+    );
+    store.close().unwrap();
+}
+
+#[test]
+fn retention_drops_node_samples_older_than_31_days() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).unwrap();
+    let bucket_now = NOW.0 / 1000 / BUCKET_SEC;
+    let conn = fresh(&path);
+    for (name, age_days) in [("alpha-00001", 30), ("beta-00002", 32)] {
+        conn.execute(
+            "INSERT INTO node_samples(node, bucket, up, total, clients) VALUES (?1, ?2, 1, 1, 0)",
+            rusqlite::params![name, bucket_now - age_days * 96],
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    store.retain(NOW).unwrap();
+
+    assert_eq!(count(&path, "SELECT count(*) FROM node_samples"), 1);
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM node_samples WHERE node = 'alpha-00001'"
+        ),
+        1
+    );
+    store.close().unwrap();
 }
 
 #[test]
@@ -253,7 +403,7 @@ fn unknown_schema_version_refuses_open() {
             err,
             StoreError::UnknownSchemaVersion {
                 found: 999,
-                supported: 6
+                supported: 7
             }
         ),
         "{err:?}"
@@ -419,6 +569,7 @@ fn full_state() -> (PoolState, Vec<PersistOp>) {
                 from_client_total: 100,
                 to_client_total: 200,
                 clients: Some(4),
+                availability_bp: None,
             },
         ),
         (quarantine.id.clone(), NodeStats::default()),

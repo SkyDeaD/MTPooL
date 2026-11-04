@@ -49,6 +49,10 @@ pub struct NodeStats {
     pub to_client_total: u64,
     /// Clients connected to the node, as the last report said.
     pub clients: Option<u64>,
+    /// Uptime of the last 30 days in hundredths of a percent (9997 is 99.97 %). Kept in
+    /// memory only: the registrar recomputes it from the stored samples.
+    #[serde(skip)]
+    pub availability_bp: Option<u32>,
 }
 
 // ---- commands ----
@@ -86,6 +90,13 @@ pub enum Command {
     /// An extra sensor round outside the schedule. The caller limits how often.
     Recheck(NodeAction),
     SrmdManual(SrmdManualRequest),
+    /// The 30-day availability of the nodes that have samples, in hundredths of a percent.
+    /// A node missing from the list has no samples and so no value; a name that is not in the
+    /// pool is ignored. Not tied to a generation: it describes the past.
+    AvailabilityRefreshed(Vec<(NodeId, u32)>),
+    /// The admin asks for every DNS record to be written again: they all count as not
+    /// applied and their backoff starts over. A record being pushed is left alone.
+    DnsPushAll,
     /// Only valid settings are applied; the caller validates and reports the error.
     SettingsChanged(Settings),
     Tick,

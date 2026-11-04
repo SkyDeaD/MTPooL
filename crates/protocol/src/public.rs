@@ -61,9 +61,49 @@ pub struct PublicNode {
     pub is_master: bool,
     /// The domains the node is master of.
     pub domains: Vec<String>,
+    /// Clients connected to the node, as its last report said; absent until it reported one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clients: Option<u64>,
+    /// The conditions the pool watches on the node.
+    pub checks: NodeChecks,
+    /// Place in the queue for a master slot, from 1: only for a healthy node that is not a
+    /// master.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_position: Option<u32>,
+    /// For a master: when its slot is due to rotate (RFC 3339, UTC). Absent when rotation is
+    /// off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotates_at: Option<String>,
+    /// When the next sensor round of the node is due (RFC 3339, UTC).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_round_at: Option<String>,
+    /// Uptime over the last 30 days in hundredths of a percent (9997 is 99.97 %). Absent while
+    /// the node has no samples.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub availability_bp: Option<u32>,
     /// The latest sensor round. Only in the answer for a single node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_round: Option<LastRound>,
+}
+
+/// The state of the Globalping check of a node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GlobalpingCheck {
+    Ok,
+    Failed,
+    NoData,
+    Unknown,
+}
+
+/// What the pool sees on a node right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct NodeChecks {
+    /// The port answers from outside.
+    pub tcp: bool,
+    /// The engine metrics answer.
+    pub metrics: bool,
+    pub globalping: GlobalpingCheck,
 }
 
 /// The latest sensor round of a node. Evidence and measurement ids are not published.
@@ -111,6 +151,35 @@ pub struct PublicDomain {
     pub masters: Vec<String>,
     /// `null` while the domain has no DNS state yet.
     pub dns: Option<DnsRecord>,
+    /// Clients on the domain; absent while unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clients: Option<u64>,
+    /// The domain this one is folded into (it is a CNAME onto it); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folded_into: Option<String>,
+    /// Whether the record in DNS is the one the pool wants.
+    pub dns_synced: bool,
+}
+
+/// One bucket of the node history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct NodeHistoryBucket {
+    /// RFC 3339, UTC: the start of the bucket.
+    pub start: String,
+    /// Samples of the bucket in which the node was up.
+    pub up: u32,
+    /// Samples of the bucket.
+    pub total: u32,
+    /// The most clients seen in the bucket.
+    pub clients: u64,
+}
+
+/// `GET /nodes/{id}/history`: the last 96 buckets of a node that have samples, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct NodeHistory {
+    /// The length of one bucket in seconds (900).
+    pub bucket_sec: i64,
+    pub buckets: Vec<NodeHistoryBucket>,
 }
 
 /// A Telegram proxy link of one user on one domain.

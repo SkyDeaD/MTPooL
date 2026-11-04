@@ -84,3 +84,25 @@ fn a_closed_rollout_offers_nothing() {
     svc.cancel(1, T0);
     assert!(!svc.poll(&id(1), "0.1.0", T0));
 }
+
+#[test]
+fn a_poll_without_a_rollout_makes_the_version_visible_and_is_not_a_change() {
+    let (_d, _s, svc) = service();
+    assert!(!svc.poll(&id(1), "1.9.0", T0));
+    assert_eq!(
+        svc.agent_versions().get(&id(1)).map(String::as_str),
+        Some("1.9.0")
+    );
+    assert!(!lock(&svc.inner).dirty);
+    assert!(!svc.poll(&id(1), "1.9.1", T0));
+    assert_eq!(svc.agent_versions()[&id(1)], "1.9.1");
+}
+
+#[test]
+fn the_version_stays_after_the_rollout_is_over() {
+    let (_d, _s, svc) = service();
+    svc.offer_release("2.0.0", T0, RolloutSettings::default());
+    svc.poll(&id(1), "1.9.0", T0);
+    assert_eq!(svc.cancel(1, T0), Some(true));
+    assert_eq!(svc.agent_versions()[&id(1)], "1.9.0");
+}
