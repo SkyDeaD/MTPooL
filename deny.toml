@@ -18,9 +18,16 @@ allow = [
   "CDLA-Permissive-2.0",
 ]
 
+# Reached only through the embed macro at build time, and used as is.
+[[licenses.exceptions]]
+allow = ["MPL-2.0"]
+crate = "option-ext"
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# The crates of this workspace name each other by path; none of them is published.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
