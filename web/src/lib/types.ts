@@ -11,6 +11,7 @@ export type NodeHistory = S['NodeHistory'];
 export type ProxyLink = S['ProxyLink'];
 export type BanRecord = S['BanRecord'];
 export type ClientsSeries = S['ClientsSeries'];
+export type ClientsPoint = S['ClientsPoint'];
 export type ClientsRange = S['ClientsRange'];
 export type StatsSummary = S['StatsSummary'];
 export type StatsSeries = S['StatsSeries'];

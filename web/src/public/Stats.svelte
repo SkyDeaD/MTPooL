@@ -3,6 +3,8 @@
   import { formatSpan } from '../lib/dates';
   import { t, tp } from '../lib/i18n';
   import { buildScheme, formatAvailability, groupNodes, poolCounts } from '../lib/model';
+  import { LIVE_STEP_MS, mergeLive, withLiveClients } from '../lib/clients-live';
+  import { useClientsLive } from '../lib/clients-live.svelte';
   import { useResource } from '../lib/resource.svelte';
   import type { ClientsRange, ClientsSeries, PublicDomain, PublicNode, StatsSummary } from '../lib/types';
   import ClientsChart from '../shared/ClientsChart.svelte';
@@ -21,16 +23,22 @@
   const summary = useResource<StatsSummary>(() => '/api/v1/stats/summary?range=7d', fetchFn);
   const clients = useResource<ClientsSeries>(() => `/api/v1/stats/clients?range=${range}`, fetchFn);
   const clock = useNow(1000);
+  const live = useClientsLive(() => {
+    nodes.refresh();
+    domains.refresh();
+    summary.refresh();
+  });
 
   const nodeHref = (id: string) => `/node/?id=${encodeURIComponent(id)}`;
 
-  const groups = $derived(nodes.data ? groupNodes(nodes.data) : null);
-  const counts = $derived(nodes.data ? poolCounts(nodes.data) : null);
-  const scheme = $derived(nodes.data && domains.data ? buildScheme(domains.data, nodes.data) : null);
-  const series = $derived(clients.data && clients.data.range === range ? clients.data : null);
+  const current = $derived(withLiveClients(nodes.data ?? [], domains.data ?? [], live.last));
+  const groups = $derived(nodes.data ? groupNodes(current.nodes) : null);
+  const counts = $derived(nodes.data ? poolCounts(current.nodes) : null);
+  const scheme = $derived(nodes.data && domains.data ? buildScheme(current.domains, current.nodes) : null);
+  const series = $derived(clients.data && clients.data.range === range ? mergeLive(clients.data, live.ticks) : null);
   const empty = $derived(counts !== null && counts.shown === 0);
   const stale = $derived(nodes.stale || domains.stale || summary.stale || clients.stale);
-  const updatedAt = $derived(nodes.updatedAt);
+  const updatedAt = $derived(Math.max(nodes.updatedAt ?? 0, live.at ?? 0) || null);
 
   const healthy = $derived(
     groups !== null &&
@@ -100,7 +108,7 @@
     {/if}
 
     {#if !empty}
-      <ClientsChart {series} {range} onrange={(r) => (range = r)} />
+      <ClientsChart {series} {range} onrange={(r) => (range = r)} delayMs={live.connected ? LIVE_STEP_MS * 1.5 : undefined} />
 
       {#if scheme}<PoolScheme {scheme} href={nodeHref} now={clock.ms} />{/if}
 

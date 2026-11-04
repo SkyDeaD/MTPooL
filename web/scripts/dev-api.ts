@@ -129,8 +129,28 @@ async function handleAdmin(req: IncomingMessage, res: ServerResponse, path: stri
   res.end(text);
 }
 
+/** The public stream: numbers that wander near the fixtures, every 5 seconds. */
+function liveStream(req: IncomingMessage, res: ServerResponse): void {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+  res.write('retry: 5000\n\n');
+  const send = () => {
+    const nodes = load('nodes') as { id: string; clients?: number | null }[];
+    const wander = Math.round(Math.sin(Date.now() / 20_000) * 12);
+    const counts = Object.fromEntries(nodes.filter((n) => n.clients != null).map((n) => [n.id, Math.max(0, (n.clients ?? 0) + wander)]));
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    res.write(`event: clients\ndata: ${JSON.stringify({ at: new Date().toISOString(), total, domains: {}, nodes: counts })}\n\n`);
+  };
+  send();
+  const timer = setInterval(send, 5000);
+  req.on('close', () => clearInterval(timer));
+}
+
 function handle(req: IncomingMessage, res: ServerResponse, next: () => void): void {
   const url = new URL(req.url ?? '/', 'http://localhost');
+  if (url.pathname === '/api/v1/stream') {
+    liveStream(req, res);
+    return;
+  }
   if (url.pathname === '/api/v1/openapi.json') {
     res.setHeader('Content-Type', 'application/json');
     res.end(readFileSync(join(web, '..', 'docs', 'openapi.json')));

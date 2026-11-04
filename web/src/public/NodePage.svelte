@@ -3,6 +3,7 @@
   import { formatWhen } from '../lib/dates';
   import { t, tp } from '../lib/i18n';
   import { clock, ENGINE_NAMES, formatAvailability, historySlots, secondsUntil, shortDomain } from '../lib/model';
+  import { useClientsLive } from '../lib/clients-live.svelte';
   import { useResource } from '../lib/resource.svelte';
   import type { NodeHistory, PublicNode } from '../lib/types';
   import HistStrip from '../shared/HistStrip.svelte';
@@ -20,6 +21,10 @@
   const node = useResource<PublicNode>(() => `/api/v1/nodes/${encodeURIComponent(id)}`, fetchFn);
   const history = useResource<NodeHistory>(() => `/api/v1/nodes/${encodeURIComponent(id)}/history`, fetchFn);
   const clock1 = useNow(1000);
+  const live = useClientsLive(() => {
+    node.refresh();
+    history.refresh();
+  });
 
   const missing = $derived(node.data === null && node.status === 404);
   const slots = $derived(history.data ? historySlots(history.data, clock1.ms) : null);
@@ -60,7 +65,7 @@
           </section>
           <section class="t kpi">
             <span class="l">{t('node.kpi.clients')}</span>
-            <span class="v">{n.clients ?? '—'}</span>
+            <span class="v">{live.last?.nodes[n.id] ?? n.clients ?? '—'}</span>
             {#if spark.length > 1}<Sparkline values={spark} />{/if}
           </section>
           <section class={['t kpi', n.is_master && 'mk']}>

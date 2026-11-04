@@ -125,7 +125,7 @@ export function describeEvent(e: EventEntry): Described {
   switch (e.kind) {
     case 'sensor_round': {
       title = t('panel.ev.round', { node });
-      detail = [verdictText(d.verdict), votesText(votesOf(d.votes))].filter(Boolean).join('. ');
+      detail = [verdictText(d.verdict), sentence(votesText(votesOf(d.votes)))].filter(Boolean).join('. ');
       tone = d.verdict === 'clean' ? 'ok' : d.verdict === 'confirmed' ? 'bad' : 'warn';
       break;
     }

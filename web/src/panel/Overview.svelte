@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { LIVE_STEP_MS, mergeLive } from '../lib/clients-live';
+  import { useClientsLive } from '../lib/clients-live.svelte';
   import { useNow } from '../lib/clock.svelte';
   import { formatSpan, formatWhen } from '../lib/dates';
   import { buildScheme, secondsUntil, whyText } from '../lib/model';
@@ -24,6 +26,7 @@
   const panel = usePanel();
   const data = useData();
   const clock = useNow(1000);
+  const live = useClientsLive();
   let range = $state<ClientsRange>('10m');
   let adding = $state(false);
 
@@ -52,7 +55,7 @@
     return bans ? Math.round(days.reduce((sum, b) => sum + (b.avg_lifetime_sec ?? 0) * b.bans, 0) / bans) : 0;
   });
   const bars = $derived<Bar[]>((ser?.buckets ?? []).map((b) => ({ at: Date.parse(b.start_ts), value: b.bans })));
-  const chartSeries = $derived(clients.data && clients.data.range === range ? clients.data : null);
+  const chartSeries = $derived(clients.data && clients.data.range === range ? mergeLive(clients.data, live.ticks) : null);
   const recentBans = $derived((bans.data ?? []).filter((b) => !b.reverify).slice(0, 5));
   const known = $derived(new Set((nodes ?? []).map((n) => n.id)));
   const banHref = (id: string) => (known.has(id) ? hrefOf('node', id) : null);
@@ -156,7 +159,7 @@
     </section>
   </div>
 
-  <ClientsChart series={chartSeries} {range} onrange={(r) => (range = r)} />
+  <ClientsChart series={chartSeries} {range} onrange={(r) => (range = r)} delayMs={live.connected ? LIVE_STEP_MS * 1.5 : undefined} />
 
   {#if scheme}<PoolScheme {scheme} href={(id) => hrefOf('node', id)} now={clock.ms} />{/if}
 
