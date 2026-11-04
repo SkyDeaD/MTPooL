@@ -10,16 +10,20 @@ use axum::response::Response;
 use mtpool_core::{NodeId, mask_ip};
 use mtpool_protocol::problem::Problem;
 use mtpool_protocol::public::{
-    BanRecord, BanVote, LastRound, LastVote, NodeHistory, NodeHistoryBucket, ProxyLink,
-    PublicDomain, PublicNode, Verdict, Vote,
+    BanRecord, BanVote, LastRound, LastVote, LiveClients, NodeHistory, NodeHistoryBucket,
+    ProxyLink, PublicDomain, PublicNode, Verdict, Vote,
 };
 use mtpool_protocol::rfc3339;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
 use super::{ApiError, RawQuery, json, qr, query_map, tagged};
+use crate::auth::middleware::ClientIp;
 use crate::server::AppState;
 use crate::store::{BUCKET_SEC, node_history};
+
+/// What a client refused a stream waits before it tries again, in seconds.
+const BUSY_RETRY_SEC: u64 = 60;
 
 const DEFAULT_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 200;
@@ -96,6 +100,25 @@ pub async fn list_nodes(State(app): State<AppState>, headers: HeaderMap) -> Resp
         "application/json",
         snapshot.nodes_json.clone(),
     )
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/stream",
+    tag = "public",
+    responses(
+        (status = 200, description = "Server-sent events: `event: clients` with the numbers of the pool at once and every 5 seconds, `event: changed` with an empty document when the pool has changed and the lists are worth reading again", body = LiveClients, content_type = "text/event-stream"),
+        (status = 429, description = "Too many open streams or requests", body = Problem, content_type = "application/problem+json",
+            headers(("Retry-After" = u64, description = "Seconds to wait before trying again")))
+    )
+)]
+pub async fn live_stream(
+    State(app): State<AppState>,
+    ClientIp(ip): ClientIp,
+) -> Result<Response, ApiError> {
+    app.live
+        .subscribe(app.actor.clone(), (app.clock)(), ip)
+        .ok_or_else(|| ApiError::rate_limited(BUSY_RETRY_SEC))
 }
 
 #[utoipa::path(

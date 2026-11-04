@@ -16,7 +16,9 @@ pub mod types;
 pub mod votes;
 
 pub use apply::apply;
-pub use clients::{ClientSample, NodeSample, TOTAL_DOMAIN, client_sample, node_samples};
+pub use clients::{
+    ClientSample, LiveCounts, NodeSample, TOTAL_DOMAIN, client_sample, live_counts, node_samples,
+};
 pub use dns::{
     DnsOp, DnsPlanError, DnsState, LiveRecord, NewRecord, RecordKind, RecordValue, backoff,
     plan_changes,

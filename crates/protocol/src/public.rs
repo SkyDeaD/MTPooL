@@ -423,6 +423,22 @@ pub struct ClientsPoint {
     pub domains: BTreeMap<String, u64>,
 }
 
+/// One frame `clients` of the live stream: the numbers of the pool right now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LiveClients {
+    /// RFC 3339, UTC: when the frame was made.
+    pub at: String,
+    /// Clients of the whole pool: its users on the nodes in the pool.
+    pub total: u64,
+    /// Clients of each domain with a known number.
+    pub domains: BTreeMap<String, u64>,
+    /// Clients of the pool's users on each node in the pool with a known number.
+    pub nodes: BTreeMap<String, u64>,
+    /// The owner's own users on each node that has any. They are not in the numbers above.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub other_nodes: BTreeMap<String, u64>,
+}
+
 /// What an event mark on the chart stands for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]

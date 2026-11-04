@@ -834,6 +834,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["live_stream"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/install.sh": {
         parameters: {
             query?: never;
@@ -1239,6 +1255,28 @@ export interface components {
             /** @example globalping */
             sensor: string;
             vote: components["schemas"]["Vote"];
+        };
+        /** @description One frame `clients` of the live stream: the numbers of the pool right now. */
+        LiveClients: {
+            /** @description RFC 3339, UTC: when the frame was made. */
+            at: string;
+            /** @description Clients of each domain with a known number. */
+            domains: {
+                [key: string]: number;
+            };
+            /** @description Clients of the pool's users on each node in the pool with a known number. */
+            nodes: {
+                [key: string]: number;
+            };
+            /** @description The owner's own users on each node that has any. They are not in the numbers above. */
+            other_nodes?: {
+                [key: string]: number;
+            };
+            /**
+             * Format: int64
+             * @description Clients of the whole pool: its users on the nodes in the pool.
+             */
+            total: number;
         };
         LoginBody: {
             /** @description The admin token. */
@@ -4694,6 +4732,37 @@ export interface operations {
             429: {
                 headers: {
                     /** @description Seconds until the limit window ends */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    live_stream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-sent events: `event: clients` with the numbers of the pool at once and every 5 seconds, `event: changed` with an empty document when the pool has changed and the lists are worth reading again */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["LiveClients"];
+                };
+            };
+            /** @description Too many open streams or requests */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before trying again */
                     "Retry-After"?: number;
                     [name: string]: unknown;
                 };

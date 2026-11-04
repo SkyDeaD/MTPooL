@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::lifecycle::NodeRecord;
 use crate::state::PoolState;
 use crate::types::{NodeId, NodeState, Ts};
 
@@ -31,30 +32,68 @@ impl ClientSample {
 /// Reads the numbers off `state` at `now`. A node whose reports carry no client count keeps
 /// the last known value in `NodeStats::clients`, and so does a domain in `SrmdState`.
 pub fn client_sample(state: &PoolState, now: Ts) -> ClientSample {
-    let total = state
-        .nodes
-        .values()
-        .filter(|n| {
-            matches!(
-                n.state,
-                NodeState::Pending | NodeState::Healthy | NodeState::Quarantine
-            )
-        })
+    let total = counted_nodes(state)
         .filter_map(|n| state.stats.get(&n.id)?.clients)
         .fold(0, u64::saturating_add);
+    ClientSample {
+        at: now,
+        total,
+        domains: domain_clients(state),
+    }
+}
+
+/// The nodes whose clients are the pool's.
+fn counted_nodes(state: &PoolState) -> impl Iterator<Item = &NodeRecord> {
+    state.nodes.values().filter(|n| {
+        matches!(
+            n.state,
+            NodeState::Pending | NodeState::Healthy | NodeState::Quarantine
+        )
+    })
+}
+
+fn domain_clients(state: &PoolState) -> BTreeMap<String, u64> {
     // A folded domain is a CNAME onto another one: its clients are counted there.
-    let domains = state
+    state
         .settings
         .domains
         .iter()
         .filter(|d| !state.srmd.cnames.contains_key(d.as_str()))
         .filter_map(|d| Some((d.clone(), *state.srmd.domain_clients.get(d)?)))
-        .collect();
-    ClientSample {
-        at: now,
-        total,
-        domains,
+        .collect()
+}
+
+/// The numbers the public pages show live.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LiveCounts {
+    /// The same number as [`ClientSample::total`].
+    pub total: u64,
+    pub domains: BTreeMap<String, u64>,
+    /// Clients of the pool's users on each counted node with a known number.
+    pub nodes: BTreeMap<NodeId, u64>,
+    /// The owner's own users on each counted node that has any.
+    pub other_nodes: BTreeMap<NodeId, u64>,
+}
+
+/// Reads the numbers of the public pages off `state`.
+pub fn live_counts(state: &PoolState) -> LiveCounts {
+    let mut counts = LiveCounts {
+        domains: domain_clients(state),
+        ..LiveCounts::default()
+    };
+    for node in counted_nodes(state) {
+        let Some(stats) = state.stats.get(&node.id) else {
+            continue;
+        };
+        if let Some(clients) = stats.clients {
+            counts.total = counts.total.saturating_add(clients);
+            counts.nodes.insert(node.id.clone(), clients);
+        }
+        if let Some(other) = stats.other_clients.filter(|n| *n > 0) {
+            counts.other_nodes.insert(node.id.clone(), other);
+        }
     }
+    counts
 }
 
 /// One node as one tick saw it, for the availability history.
@@ -93,13 +132,38 @@ mod tests {
 
     use super::*;
     use crate::apply::apply;
-    use crate::lifecycle::NodeRecord;
     use crate::settings::Settings;
     use crate::state::{Command, EnrollRequest, NodeStats, ReplyId, ReportRequest};
     use crate::types::{EngineKind, NodeId, OwnerId};
     use crate::votes::Vote;
 
     const NOW: Ts = Ts(1_800_000_000_000);
+
+    #[test]
+    fn live_numbers_agree_with_the_sample_and_keep_the_owners_apart() {
+        let mut state = PoolState::new(Settings::default());
+        add(&mut state, "a", NodeState::Healthy, None);
+        add(&mut state, "b", NodeState::Quarantine, None);
+        add(&mut state, "c", NodeState::Dead, None);
+        let id = |name: &str| NodeId::parse(&format!("{name}-a1b2c")).unwrap();
+        let stats = |clients, other| NodeStats {
+            clients: Some(clients),
+            other_clients: Some(other),
+            ..NodeStats::default()
+        };
+        state.stats.insert(id("a"), stats(5, 30));
+        state.stats.insert(id("b"), stats(2, 0));
+        state.stats.insert(id("c"), stats(9, 9));
+
+        let live = live_counts(&state);
+        assert_eq!(live.total, 7);
+        assert_eq!(live.total, client_sample(&state, NOW).total);
+        assert_eq!(live.nodes.len(), 2);
+        assert_eq!(live.nodes[&id("a")], 5);
+        assert_eq!(live.nodes[&id("b")], 2);
+        assert_eq!(live.other_nodes.len(), 1);
+        assert_eq!(live.other_nodes[&id("a")], 30);
+    }
 
     #[test]
     fn only_the_pools_clients_reach_the_samples() {

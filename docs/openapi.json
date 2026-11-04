@@ -3773,6 +3773,46 @@
         }
       }
     },
+    "/api/v1/stream": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "live_stream",
+        "responses": {
+          "200": {
+            "description": "Server-sent events: `event: clients` with the numbers of the pool at once and every 5 seconds, `event: changed` with an empty document when the pool has changed and the lists are worth reading again",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveClients"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many open streams or requests",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds to wait before trying again"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/install.sh": {
       "get": {
         "tags": [
@@ -4889,6 +4929,64 @@
           },
           "vote": {
             "$ref": "#/components/schemas/Vote"
+          }
+        }
+      },
+      "LiveClients": {
+        "type": "object",
+        "description": "One frame `clients` of the live stream: the numbers of the pool right now.",
+        "required": [
+          "at",
+          "total",
+          "domains",
+          "nodes"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "RFC 3339, UTC: when the frame was made."
+          },
+          "domains": {
+            "type": "object",
+            "description": "Clients of each domain with a known number.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "nodes": {
+            "type": "object",
+            "description": "Clients of the pool's users on each node in the pool with a known number.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "other_nodes": {
+            "type": "object",
+            "description": "The owner's own users on each node that has any. They are not in the numbers above.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Clients of the whole pool: its users on the nodes in the pool.",
+            "minimum": 0
           }
         }
       },

@@ -21,6 +21,7 @@ use crate::server::AppState;
 pub mod admin;
 pub mod agent;
 pub mod bot;
+pub mod live;
 pub mod public;
 pub mod qr;
 pub mod ratelimit;
@@ -214,6 +215,7 @@ pub fn public_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(stats::summary))
         .routes(routes!(stats::series))
         .routes(routes!(stats::clients))
+        .routes(routes!(public::live_stream))
         .routes(routes!(public::openapi_document))
         .routes(routes!(crate::release::install_script))
         .routes(routes!(crate::release::release_file))

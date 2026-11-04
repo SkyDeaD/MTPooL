@@ -22,6 +22,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use crate::actor::{Actor, ActorHandle, Clock, EffectDriver, system_clock};
 use crate::api;
 use crate::api::agent::Ledger;
+use crate::api::live::LiveFan;
 use crate::api::ratelimit::{self as request_limit, RequestLimiter};
 use crate::api::stats::StatsCache;
 use crate::api::stream::EventFan;
@@ -68,6 +69,7 @@ pub struct AppState {
     pub ledger: Arc<Ledger>,
     /// The live event stream of the panel.
     pub events: EventFan,
+    pub live: LiveFan,
     /// Resolves the host of a webhook URL.
     pub resolver: Arc<dyn Resolver>,
     /// Held while the settings are read, changed and handed to the state owner, so that two
@@ -116,6 +118,7 @@ impl AppState {
             gp_settings: Arc::new(ArcSwap::from_pointee(GlobalpingSettings::default())),
             ledger: Arc::new(Ledger::new()),
             events: EventFan::new(),
+            live: LiveFan::new(),
             resolver: Arc::new(SystemResolver),
             settings_lock: Arc::new(AsyncMutex::new(())),
             rechecks: Arc::new(Mutex::new(HashMap::new())),
@@ -128,6 +131,12 @@ impl AppState {
     /// The same state with `events` as the fan the state owner feeds.
     pub fn with_events(mut self, events: EventFan) -> AppState {
         self.events = events;
+        self
+    }
+
+    /// The same state with `live` as the fan of the public pages.
+    pub fn with_live(mut self, live: LiveFan) -> AppState {
+        self.live = live;
         self
     }
 
@@ -314,6 +323,8 @@ pub async fn run_with(
     let fan = EventFan::new();
     let mut drivers = drivers;
     drivers.push(Arc::new(fan.clone()));
+    let live = LiveFan::new();
+    drivers.push(Arc::new(live.clone()));
     // The token is asked for on every request: a change in the panel applies at once.
     let gp_settings: SharedSettings =
         Arc::new(ArcSwap::from_pointee(state.settings.globalping.clone()));
@@ -349,6 +360,7 @@ pub async fn run_with(
             WebhookSender::new(store.clone(), Arc::new(SystemResolver), system_clock())
                 .run(actor.clone()),
         ),
+        tokio::spawn(live.clone().run(actor.clone(), system_clock())),
         tokio::spawn(crate::clients::run(
             actor.clone(),
             store.clone(),
@@ -369,6 +381,7 @@ pub async fn run_with(
     workers.extend(crate::update::spawn_poller(store.clone()));
     let state = AppState::new(store.clone(), actor.clone(), actor.snapshots())
         .with_events(fan.clone())
+        .with_live(live.clone())
         .with_gp_settings(gp_settings)
         .with_allow_private_ips(allow_private_ips)
         .with_releases_dir(releases_dir)
@@ -393,6 +406,7 @@ pub async fn run_with(
         stop.await;
         // Open event streams would hold the drain until its deadline.
         closing.close();
+        live.close();
         let _ = stop_fired.send(());
     };
     let serving = axum::serve(

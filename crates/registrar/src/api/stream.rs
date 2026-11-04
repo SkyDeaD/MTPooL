@@ -30,6 +30,8 @@ pub const CAPACITY: usize = 256;
 const CLIENT_BUFFER: usize = 16;
 /// What the browser waits before it reconnects, in milliseconds.
 const RETRY_MS: u64 = 5000;
+/// How long a connection may take to accept a frame before it is dropped.
+const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct Inner {
     tx: broadcast::Sender<Bytes>,
@@ -98,54 +100,85 @@ impl EventFan {
     /// The response of `GET /admin/stream`: `text/event-stream` that lives until the client
     /// leaves, the fan is closed or the actor stops.
     pub fn subscribe(&self, actor: ActorHandle) -> Response {
-        let mut frames = self.inner.tx.subscribe();
-        let mut closed = self.inner.closed.subscribe();
-        let keepalive = self.inner.keepalive;
-        let (out, chunks) = mpsc::channel::<Bytes>(CLIENT_BUFFER);
-        tokio::spawn(async move {
-            let hello = Bytes::from(format!("retry: {RETRY_MS}\n\n"));
-            if *closed.borrow() || out.send(hello).await.is_err() {
-                return;
-            }
-            let mut tick = tokio::time::interval(keepalive);
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            // The first tick is immediate.
-            tick.tick().await;
-            loop {
-                let chunk = tokio::select! {
-                    frame = frames.recv() => match frame {
-                        Ok(frame) => frame,
-                        Err(broadcast::error::RecvError::Lagged(missed)) => {
-                            tracing::warn!(missed, "an event stream client fell behind and was dropped");
-                            break;
-                        }
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    },
-                    _ = tick.tick() => Bytes::from_static(b": keepalive\n\n"),
-                    _ = closed.changed() => break,
-                    () = actor.stopped() => break,
-                    () = out.closed() => break,
-                };
-                if out.send(chunk).await.is_err() {
-                    break;
-                }
-            }
-        });
-        let mut response = Response::new(Body::from_stream(Chunks(chunks)));
-        *response.status_mut() = StatusCode::OK;
-        let headers = response.headers_mut();
-        headers.insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("text/event-stream"),
-        );
-        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-        // Tells nginx-style proxies not to hold the events back.
-        headers.insert(
-            HeaderName::from_static("x-accel-buffering"),
-            HeaderValue::from_static("no"),
-        );
-        response
+        event_stream(
+            self.inner.tx.subscribe(),
+            self.inner.closed.subscribe(),
+            self.inner.keepalive,
+            actor,
+            None,
+            (),
+        )
     }
+}
+
+/// A `text/event-stream` response fed from a broadcast channel. `first` goes out before anything
+/// else; `guard` is held for as long as the stream lives.
+pub(super) fn event_stream<G: Send + 'static>(
+    mut frames: broadcast::Receiver<Bytes>,
+    mut closed: watch::Receiver<bool>,
+    keepalive: Duration,
+    actor: ActorHandle,
+    first: Option<Bytes>,
+    guard: G,
+) -> Response {
+    let (out, chunks) = mpsc::channel::<Bytes>(CLIENT_BUFFER);
+    tokio::spawn(async move {
+        let _guard = guard;
+        let hello = Bytes::from(format!("retry: {RETRY_MS}\n\n"));
+        if *closed.borrow() || out.send(hello).await.is_err() {
+            return;
+        }
+        if let Some(first) = first
+            && out.send(first).await.is_err()
+        {
+            return;
+        }
+        let mut tick = tokio::time::interval(keepalive);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // The first tick is immediate.
+        tick.tick().await;
+        loop {
+            let chunk = tokio::select! {
+                frame = frames.recv() => match frame {
+                    Ok(frame) => frame,
+                    Err(broadcast::error::RecvError::Lagged(missed)) => {
+                        tracing::warn!(missed, "an event stream client fell behind and was dropped");
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
+                _ = tick.tick() => Bytes::from_static(b": keepalive\n\n"),
+                _ = closed.changed() => break,
+                () = actor.stopped() => break,
+                () = out.closed() => break,
+            };
+            // A connection that stopped reading must not hold this task or the drain.
+            let sent = tokio::select! {
+                sent = tokio::time::timeout(SEND_TIMEOUT, out.send(chunk)) => {
+                    matches!(sent, Ok(Ok(())))
+                }
+                _ = closed.changed() => false,
+                () = actor.stopped() => false,
+            };
+            if !sent {
+                break;
+            }
+        }
+    });
+    let mut response = Response::new(Body::from_stream(Chunks(chunks)));
+    *response.status_mut() = StatusCode::OK;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/event-stream"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    // Tells nginx-style proxies not to hold the events back.
+    headers.insert(
+        HeaderName::from_static("x-accel-buffering"),
+        HeaderValue::from_static("no"),
+    );
+    response
 }
 
 impl EffectDriver for EventFan {

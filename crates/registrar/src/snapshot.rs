@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use mtpool_core::{
-    EngineKind, GpStatus, NodeId, NodeRecord, NodeState as CoreState, PoolState, RecordValue,
-    build_proxy_link, mask_ip, next_round_at, queue_positions,
+    EngineKind, GpStatus, LiveCounts, NodeId, NodeRecord, NodeState as CoreState, PoolState,
+    RecordValue, build_proxy_link, live_counts, mask_ip, next_round_at, queue_positions,
 };
 use mtpool_protocol::public::{
     DnsRecord, DnsRecordType, Engine, GlobalpingCheck, NodeChecks, NodeState, ProxyLink,
@@ -33,6 +33,8 @@ pub struct Snapshot {
     pub link_index: BTreeMap<String, String>,
     /// How many masters each configured domain has now (0 for a domain without one).
     pub master_counts: BTreeMap<String, usize>,
+    /// The numbers of the live stream, so that it never has to ask the state owner.
+    pub live: LiveCounts,
 }
 
 fn node_state(state: CoreState) -> NodeState {
@@ -243,6 +245,7 @@ impl Snapshot {
                 .iter()
                 .map(|d| (d.clone(), state.assignments.0.get(d).map_or(0, Vec::len)))
                 .collect(),
+            live: live_counts(state),
         }
     }
 }
