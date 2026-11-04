@@ -2,6 +2,7 @@
 //! themselves, copied into the registrar's releases directory.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -34,7 +35,14 @@ pub struct Release {
 }
 
 pub(crate) fn scratch_dir(label: &str) -> Result<PathBuf> {
-    let dir = std::env::temp_dir().join(format!("mtpool-e2e-{label}-{}", std::process::id()));
+    // Tests of one binary run in one process: the process id alone would give them the same
+    // directory, and one would sign or delete another's files.
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "mtpool-e2e-{label}-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::create_dir_all(&dir)
         .map_err(|e| StandError(format!("cannot create {}: {e}", dir.display())))?;
     Ok(dir)

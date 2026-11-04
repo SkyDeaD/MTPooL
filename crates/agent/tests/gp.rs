@@ -213,11 +213,10 @@ async fn gp_5xx_and_garbage_are_unavailable() {
 
 #[tokio::test]
 async fn gp_unreachable_api_is_unavailable() {
-    let server = MockServer::start().await;
-    let uri = server.uri();
-    drop(server);
+    // Port 1 refuses. A dropped mock server would not do: its port goes back to a pool and the
+    // next test's server answers on it.
     let ports = FakePorts::new(true);
-    let gp = GpLoop::new(&uri, ports)
+    let gp = GpLoop::new("http://127.0.0.1:1", ports)
         .unwrap()
         .with_timing(Duration::from_millis(10), Duration::from_millis(100));
     gp.set_job(Some(job()));

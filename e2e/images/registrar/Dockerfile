@@ -10,6 +10,9 @@ COPY deploy ./deploy
 # The registrar verifies nothing itself but hands the key to the installer it serves: the public
 # half of the stand's test key.
 COPY e2e/keys/minisign.pub ./deploy/minisign.pub
+# The target directory is a cache shared by every build of this image, and cargo goes by the
+# file's time: a key older than the last build would leave that build's key in the binary.
+RUN touch deploy/minisign.pub
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --release --locked -p mtpool-registrar -p mtpool-fakes \

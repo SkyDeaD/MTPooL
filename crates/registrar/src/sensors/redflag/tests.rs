@@ -258,9 +258,9 @@ async fn a_redirect_is_not_followed_and_does_not_vote() {
 
 #[tokio::test]
 async fn an_unreachable_service_is_unavailable() {
-    let server = MockServer::start().await;
-    let base = Url::parse(&server.uri()).expect("uri");
-    drop(server);
+    // Port 1 refuses. A dropped mock server would not do: its port goes back to a pool and the
+    // next test's server answers on it.
+    let base = Url::parse("http://127.0.0.1:1").expect("url");
     let sensor = RedFlagSensor::new(base, key()).expect("sensor");
     let vote = sensor.vote(&target()).await;
     assert_eq!(vote.vote, Vote::Abstain(AbstainReason::Unavailable));
