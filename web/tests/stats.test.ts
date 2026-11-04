@@ -1,0 +1,128 @@
+// @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { mount, unmount } from 'svelte';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { t } from '../src/lib/i18n';
+import Stats from '../src/public/Stats.svelte';
+import { fakeApi, FIXTURE_NOW, settle, setHidden, type FakeApi } from './helpers';
+
+let app: ReturnType<typeof mount> | undefined;
+let target: HTMLElement;
+let api: FakeApi;
+
+function open() {
+  app = mount(Stats, { target, props: { fetchFn: api.fetchFn } });
+}
+
+beforeEach(() => {
+  vi.useFakeTimers({ now: FIXTURE_NOW });
+  setHidden(false);
+  target = document.createElement('div');
+  document.body.append(target);
+  api = fakeApi();
+});
+afterEach(() => {
+  if (app) unmount(app);
+  app = undefined;
+  target.remove();
+  vi.useRealTimers();
+});
+
+describe('stats page', () => {
+  it('shows_pool_groups_and_counters', async () => {
+    open();
+    await settle();
+    const groups = [...target.querySelectorAll('tr.grp')].map((g) => g.textContent ?? '');
+    expect(groups).toHaveLength(3);
+    expect(groups[0]).toContain(t('stats.group.masters'));
+    expect(groups[1]).toContain(t('stats.group.queue'));
+    expect(groups[2]).toContain(t('stats.group.quarantine'));
+    expect(target.querySelectorAll('tr.go')).toHaveLength(7);
+    // Six nodes are healthy among the seven shown.
+    expect(target.querySelector('[data-kpi="working"]')?.textContent).toContain('6');
+    // The mean of the six known availabilities; the node without a figure is not counted.
+    expect(target.querySelector('[data-kpi="availability"]')?.textContent).toContain('97,89');
+  });
+
+  it('stats_empty_pool_shows_explanation', async () => {
+    api.set('nodes', []);
+    api.set('domains', []);
+    open();
+    await settle();
+    const empty = target.querySelector('.empty');
+    expect(empty).not.toBeNull();
+    expect(empty!.textContent).toContain(t('stats.empty.title'));
+    expect(empty!.textContent).toContain(t('stats.empty.text'));
+    expect(target.querySelectorAll('tr.go')).toHaveLength(0);
+    expect(target.querySelector('.stale')).toBeNull();
+  });
+
+  it('api_error_keeps_last_data_and_shows_stale_note', async () => {
+    open();
+    await settle();
+    expect(target.textContent).toContain('alpha-k3m2q');
+    expect(target.querySelector('.stale')).toBeNull();
+
+    api.fail(true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await settle();
+    expect(target.textContent).toContain('alpha-k3m2q');
+    expect(target.querySelector('tr.go')).not.toBeNull();
+    const note = target.querySelector('.stale');
+    expect(note).not.toBeNull();
+    expect(note!.textContent).toContain(t('common.stale'));
+
+    // The note goes away with the next good answer.
+    api.fail(false);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await settle();
+    expect(target.querySelector('.stale')).toBeNull();
+  });
+
+  it('first_load_failure_shows_error_not_empty_pool', async () => {
+    api.fail(true);
+    open();
+    await settle();
+    expect(target.querySelector('.empty')).toBeNull();
+    expect(target.querySelector('.stale')).not.toBeNull();
+  });
+
+  it('table_becomes_list_at_360', async () => {
+    open();
+    await settle();
+    const table = target.querySelector('table.tb.list');
+    expect(table).not.toBeNull();
+    // Every cell that is not the node name carries its column name for the list layout.
+    const row = target.querySelector('tr.go')!;
+    const labels = [...row.querySelectorAll('td[data-l]')].map((c) => c.getAttribute('data-l'));
+    expect(labels).toContain(t('stats.col.state'));
+    expect(labels).toContain(t('stats.col.checks'));
+    expect(labels).toContain(t('stats.col.availability'));
+    expect(labels).toContain(t('stats.col.clients'));
+    // The stylesheet turns it into a list from 720px down, which covers 360.
+    const css = readFileSync(join(process.cwd(), 'src', 'styles', 'pages.css'), 'utf8');
+    const block = css.slice(css.indexOf('@media (max-width:720px)'));
+    expect(block).toContain('.tb.list td[data-l]::before');
+    expect(block).toContain('.tb.list thead{display:none}');
+  });
+
+  it('rows_link_to_the_node_page', async () => {
+    open();
+    await settle();
+    const link = target.querySelector<HTMLAnchorElement>('tr.go a');
+    expect(link?.getAttribute('href')).toBe('/node/?id=alpha-k3m2q');
+  });
+
+  it('clients_range_switch_asks_for_that_range', async () => {
+    open();
+    await settle();
+    expect(api.calls.some((c) => c.url === '/api/v1/stats/clients?range=10m')).toBe(true);
+    const button = [...target.querySelectorAll<HTMLButtonElement>('.cth .seg button')].find(
+      (b) => b.textContent?.trim() === t('clients.range.1h'),
+    );
+    button!.click();
+    await settle();
+    expect(api.calls.some((c) => c.url === '/api/v1/stats/clients?range=1h')).toBe(true);
+  });
+});

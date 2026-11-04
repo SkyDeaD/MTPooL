@@ -1,0 +1,62 @@
+[
+  {
+    "id": 41,
+    "ip": "203.x.x.91",
+    "node_id": "old-p7q2a",
+    "at": "2026-11-04T09:00:00Z",
+    "votes": [
+      {
+        "sensor": "globalping",
+        "vote": "blocked"
+      },
+      {
+        "sensor": "cheburcheck",
+        "vote": "blocked"
+      }
+    ],
+    "reverify": false,
+    "lifted_by_admin": false,
+    "lifetime_sec": 792000,
+    "gap_sec": 72000
+  },
+  {
+    "id": 40,
+    "ip": "203.x.x.92",
+    "node_id": "old-c1v8n",
+    "at": "2026-11-03T13:00:00Z",
+    "votes": [
+      {
+        "sensor": "globalping",
+        "vote": "blocked"
+      },
+      {
+        "sensor": "redflag",
+        "vote": "blocked"
+      }
+    ],
+    "reverify": false,
+    "lifted_by_admin": false,
+    "lifetime_sec": 259200,
+    "gap_sec": 172800
+  },
+  {
+    "id": 39,
+    "ip": "203.x.x.93",
+    "node_id": "theta-m1d7z",
+    "at": "2026-11-01T12:00:00Z",
+    "votes": [
+      {
+        "sensor": "cheburcheck",
+        "vote": "blocked"
+      },
+      {
+        "sensor": "globalping",
+        "vote": "blocked"
+      }
+    ],
+    "reverify": false,
+    "lifted_by_admin": false,
+    "lifetime_sec": 5400,
+    "gap_sec": null
+  }
+]

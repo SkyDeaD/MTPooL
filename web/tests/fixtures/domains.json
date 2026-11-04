@@ -1,0 +1,47 @@
+[
+  {
+    "domain": "proxy1.example.com",
+    "masters": [
+      "alpha-k3m2q",
+      "beta-r8t4w"
+    ],
+    "dns": {
+      "type": "A",
+      "values": [
+        "203.0.113.11",
+        "203.0.113.12"
+      ]
+    },
+    "clients": 238,
+    "folded_into": null,
+    "dns_synced": true
+  },
+  {
+    "domain": "proxy2.example.com",
+    "masters": [
+      "gamma-x2n9d"
+    ],
+    "dns": {
+      "type": "A",
+      "values": [
+        "203.0.113.13"
+      ]
+    },
+    "clients": 61,
+    "folded_into": null,
+    "dns_synced": true
+  },
+  {
+    "domain": "proxy3.example.com",
+    "masters": [],
+    "dns": {
+      "type": "CNAME",
+      "values": [
+        "proxy2.example.com"
+      ]
+    },
+    "clients": null,
+    "folded_into": "proxy2.example.com",
+    "dns_synced": true
+  }
+]

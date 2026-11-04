@@ -1,0 +1,177 @@
+{
+  "range": "7d",
+  "from": "2026-10-28T12:00:00Z",
+  "now": "2026-11-04T12:00:00Z",
+  "step_sec": 21600,
+  "history_ok": true,
+  "buckets": [
+    {
+      "start_ts": "2026-10-28T12:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-10-28T18:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-10-29T00:00:00Z",
+      "bans": 1,
+      "avg_lifetime_sec": 345600,
+      "avg_gap_sec": 43200
+    },
+    {
+      "start_ts": "2026-10-29T06:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-10-29T12:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-10-29T18:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-10-30T00:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-10-30T06:00:00Z",
+      "bans": 1,
+      "avg_lifetime_sec": 172800,
+      "avg_gap_sec": 61200
+    },
+    {
+      "start_ts": "2026-10-30T12:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-10-30T18:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-10-31T00:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-10-31T06:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-10-31T12:00:00Z",
+      "bans": 1,
+      "avg_lifetime_sec": 604800,
+      "avg_gap_sec": 79200
+    },
+    {
+      "start_ts": "2026-10-31T18:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-11-01T00:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-11-01T06:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-11-01T12:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-11-01T18:00:00Z",
+      "bans": 1,
+      "avg_lifetime_sec": 432000,
+      "avg_gap_sec": 97200
+    },
+    {
+      "start_ts": "2026-11-02T00:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-11-02T06:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-11-02T12:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-11-02T18:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-11-03T00:00:00Z",
+      "bans": 1,
+      "avg_lifetime_sec": 259200,
+      "avg_gap_sec": 115200
+    },
+    {
+      "start_ts": "2026-11-03T06:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-11-03T12:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-11-03T18:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-11-04T00:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null
+    },
+    {
+      "start_ts": "2026-11-04T06:00:00Z",
+      "bans": 1,
+      "avg_lifetime_sec": 691200,
+      "avg_gap_sec": 133200
+    }
+  ]
+}
