@@ -3,6 +3,7 @@
 //! Pure state transitions. Time is a parameter, nothing here waits or talks to the network.
 //! The transitions follow section 4 of the spec.
 
+use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,8 @@ use crate::votes::{RoundVerdict, SensorKind, Vote, judge_round};
 const PRUNE_PAUSES_SEC: [u32; 5] = [900, 1800, 3600, 7200, 10_800];
 /// A tombstone is forgotten this long after its last update.
 const TOMBSTONE_TTL_MS: i64 = 7 * 24 * 3600 * 1000;
+/// A `Dead` or `Pruned` record is removed this long after it entered that state.
+const FINAL_RECORD_TTL_MS: i64 = 24 * 3600 * 1000;
 /// Retry hint while a reverify round for the same IP is running.
 const REVERIFY_IN_FLIGHT_RETRY_SEC: u32 = 60;
 
@@ -185,8 +188,12 @@ pub struct IpBlock {
     /// The node that was banned.
     pub node_id: NodeId,
     pub blocked_at: Ts,
-    /// After a failed reverify: no new attempt before this moment.
+    /// No reverify before this moment: set by the ban and by every failed reverify.
     pub next_reverify_at: Option<Ts>,
+    /// The owner of the banned node. The record is gone by the time the ban is lifted. `None`
+    /// for a block made before the owner was kept.
+    #[serde(default)]
+    pub owner: Option<OwnerId>,
 }
 
 /// Escalating pause after a prune, kept per node id and per IP.
@@ -511,7 +518,10 @@ fn quarantine_round(
                     ip: n.ip,
                     node_id: n.id.clone(),
                     blocked_at: now,
-                    next_reverify_at: None,
+                    // The agent enrolls again as soon as its token is refused; a reverify right
+                    // now would only spend the sensor quota on the verdict just reached.
+                    next_reverify_at: Some(add_sec(now, s.reverify_pause_sec)),
+                    owner: Some(n.owner),
                 });
             }
             vec![LifecycleEvent::Banned {
@@ -584,6 +594,39 @@ pub fn unban(n: &mut NodeRecord, blocks: &mut Vec<IpBlock>, now: Ts) -> Vec<Life
         n.reverify = false;
     }
     events
+}
+
+/// Removes the blocks the ban of `node` left, whatever has become of its record, and returns
+/// them. A reverify node on one of those addresses has nothing left to prove; the second list
+/// names the nodes that changed that way.
+pub fn unban_by_node(
+    node: &NodeId,
+    nodes: &mut BTreeMap<NodeId, NodeRecord>,
+    blocks: &mut Vec<IpBlock>,
+) -> (Vec<IpBlock>, Vec<NodeId>) {
+    let (lifted, kept): (Vec<IpBlock>, Vec<IpBlock>) =
+        blocks.drain(..).partition(|b| b.node_id == *node);
+    *blocks = kept;
+    let mut released = Vec::new();
+    for n in nodes.values_mut() {
+        if n.reverify && is_live_state(n.state) && lifted.iter().any(|b| b.ip == n.ip) {
+            n.reverify = false;
+            released.push(n.id.clone());
+        }
+    }
+    (lifted, released)
+}
+
+/// The record has no reason to stay: `Banned` at once (the ban lives in the block and the ban
+/// log), `Dead` and `Pruned` after a day, while the panel still shows why they left.
+pub fn record_expired(n: &NodeRecord, now: Ts) -> bool {
+    match n.state {
+        NodeState::Banned => true,
+        NodeState::Dead | NodeState::Pruned => {
+            now.0.saturating_sub(n.state_since.0) >= FINAL_RECORD_TTL_MS
+        }
+        NodeState::Pending | NodeState::Healthy | NodeState::Quarantine => false,
+    }
 }
 
 /// States of a record that is still in the pool: not final.
@@ -1083,7 +1126,8 @@ mod tests {
                 ip: n.ip,
                 node_id: n.id.clone(),
                 blocked_at: at(5),
-                next_reverify_at: None,
+                next_reverify_at: Some(at(5 + 900)),
+                owner: Some(OwnerId(1)),
             }]
         );
         assert!(
@@ -1095,8 +1139,16 @@ mod tests {
             node_id: id("node-bbbbb"),
             ip: n.ip,
         };
+        // The ban starts the pause: no reverify before it ends, however fast the agent is.
         assert_eq!(
             decide_enroll(&again, &[&n], &blocks, &[], at(20)),
+            EnrollDecision::Reject {
+                retry_after_sec: 885,
+                reason: RejectReason::ReverifyPause,
+            }
+        );
+        assert_eq!(
+            decide_enroll(&again, &[&n], &blocks, &[], at(5 + 900)),
             EnrollDecision::Reverify
         );
     }
@@ -1313,6 +1365,7 @@ mod tests {
             node_id: id("node-aaaaa"),
             blocked_at: T0,
             next_reverify_at: None,
+            owner: None,
         }];
         let from_blocked = EnrollInput {
             node_id: id("node-bbbbb"),
@@ -1339,6 +1392,7 @@ mod tests {
             node_id: id("node-aaaaa"),
             blocked_at: T0,
             next_reverify_at: None,
+            owner: None,
         }];
         let node = NodeRecord::new_reverify(
             id("node-bbbbb"),

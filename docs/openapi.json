@@ -389,7 +389,7 @@
         "operationId": "admin_list_nodes",
         "responses": {
           "200": {
-            "description": "Every node, banned, dead and pruned ones too, with the whole address and the owner",
+            "description": "Every node with a record, with the whole address and the owner. A banned node has none; a dead or pruned one keeps it for 24 hours",
             "content": {
               "application/json": {
                 "schema": {
@@ -649,7 +649,7 @@
         },
         "responses": {
           "200": {
-            "description": "The ban is lifted",
+            "description": "The ban is lifted. A banned node has no record, so the id may also be one the ban log names; the agent enrolls again by itself",
             "content": {
               "application/json": {
                 "schema": {
@@ -669,7 +669,7 @@
             }
           },
           "404": {
-            "description": "No such node",
+            "description": "No such node and no open ban under this id",
             "content": {
               "application/problem+json": {
                 "schema": {

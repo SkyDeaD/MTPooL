@@ -856,6 +856,7 @@ pub async fn report(
                 kind: EventKind::ClockSkew,
                 at: now,
                 node: Some(auth.node_id.clone()),
+                owner: None,
                 domain: None,
                 detail: json!({
                     "checked_at": rfc3339(checked_at),

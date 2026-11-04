@@ -970,9 +970,9 @@ pub async fn recheck_node(
     params(("id" = String, Path, description = "The node id")),
     request_body(content = EmptyRequest, description = "Empty, or `{}`"),
     responses(
-        (status = 200, description = "The ban is lifted", body = Empty),
+        (status = 200, description = "The ban is lifted. A banned node has no record, so the id may also be one the ban log names; the agent enrolls again by itself", body = Empty),
         (status = 401, description = "No valid admin credential", body = Problem, content_type = "application/problem+json"),
-        (status = 404, description = "No such node", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "No such node and no open ban under this id", body = Problem, content_type = "application/problem+json"),
         (status = 409, description = "The node is not banned (`not_banned`)", body = Problem, content_type = "application/problem+json"),
     )
 )]
@@ -983,7 +983,56 @@ pub async fn unban_node(
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Response, Failure> {
     parse_empty(&body_bytes(body)?)?;
-    node_action(app, auth, id, "node.unban", Command::AdminUnban).await
+    let target = unban_target(&app, node_of(&id)?).await?;
+    node_action(
+        app,
+        auth,
+        target.to_string(),
+        "node.unban",
+        Command::AdminUnban,
+    )
+    .await
+}
+
+/// The node to lift the ban by. A block remembers the first node banned on the address; the ban
+/// log also names every reverify node that failed there, which have no record either. Their ids
+/// lead to the same block.
+async fn unban_target(app: &AppState, asked: NodeId) -> Result<NodeId, Failure> {
+    let probe = asked.clone();
+    let known = app
+        .actor
+        .inspect(move |s| {
+            s.nodes.contains_key(&probe) || s.blocks.iter().any(|b| b.node_id == probe)
+        })
+        .await
+        .map_err(|_| actor_stopped())?;
+    if known {
+        return Ok(asked);
+    }
+    flushed(app).await?;
+    let name = asked.as_str().to_owned();
+    let ip: Option<String> = read(app, move |conn| {
+        conn.prepare_cached(
+            "SELECT ip FROM bans WHERE node = ?1 AND lifted_at IS NULL ORDER BY id DESC LIMIT 1",
+        )?
+        .query_row([name], |r| r.get(0))
+        .optional()
+    })
+    .await?;
+    let Some(ip) = ip.and_then(|ip| ip.parse::<std::net::Ipv4Addr>().ok()) else {
+        return Ok(asked);
+    };
+    let holder = app
+        .actor
+        .inspect(move |s| {
+            s.blocks
+                .iter()
+                .find(|b| b.ip == ip)
+                .map(|b| b.node_id.clone())
+        })
+        .await
+        .map_err(|_| actor_stopped())?;
+    Ok(holder.unwrap_or(asked))
 }
 
 // ----- domains and SRMD --------------------------------------------------------------------
@@ -1279,7 +1328,7 @@ struct NodeExtras {
     failed: Vec<String>,
 }
 
-/// Every node, banned, dead and pruned ones too, as the admin sees it: the public document of
+/// Every node with a record (a dead or pruned one for its last 24 hours), as the admin sees it: the public document of
 /// the snapshot plus the address, the owner, the heartbeat, the agent version and the failed
 /// conditions.
 async fn admin_nodes(app: &AppState) -> Result<Vec<AdminNode>, Failure> {
@@ -1342,7 +1391,7 @@ async fn admin_nodes(app: &AppState) -> Result<Vec<AdminNode>, Failure> {
     tag = "admin",
     security(("bearer" = [])),
     responses(
-        (status = 200, description = "Every node, banned, dead and pruned ones too, with the whole address and the owner", body = Vec<AdminNode>),
+        (status = 200, description = "Every node with a record, with the whole address and the owner. A banned node has none; a dead or pruned one keeps it for 24 hours", body = Vec<AdminNode>),
         (status = 401, description = "No valid admin credential", body = Problem, content_type = "application/problem+json"),
     )
 )]

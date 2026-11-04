@@ -16,10 +16,10 @@ use crate::dns::{DnsState, RecordValue, backoff};
 use crate::health::{GpStatus, younger_than};
 use crate::lifecycle::{
     EnrollDecision, EnrollInput, IpBlock, LifecycleEvent, NodeRecord, RoundResult, Tombstone,
-    apply_round, decide_enroll, needs_sensors, next_round_at, record_prune, reset_tombstones,
-    tick_node, unban,
+    apply_round, decide_enroll, needs_sensors, next_round_at, record_expired, record_prune,
+    reset_tombstones, tick_node, unban, unban_by_node,
 };
-use crate::selection::select;
+use crate::selection::{Assignments, select};
 use crate::settings::Settings;
 use crate::srmd::{SrmdAction, SrmdError, rebalance, release, set_clients, take};
 use crate::state::{
@@ -28,7 +28,7 @@ use crate::state::{
     SrmdManualRequest, TerminateReason,
 };
 use crate::traffic::traffic_delta;
-use crate::types::{Generation, NodeId, NodeState, Ts};
+use crate::types::{Generation, NodeId, NodeState, OwnerId, Ts};
 use crate::votes::{AbstainReason, RoundVerdict, SensorKind, SensorVote, Vote, judge_round};
 
 type Out = Vec<Effect>;
@@ -103,6 +103,8 @@ pub fn apply(state: &mut PoolState, command: Command, now: Ts) -> Vec<Effect> {
             &tombstones,
             &state.tombstones,
         );
+        // Last, so that a crash between the writes never leaves a ban without its block.
+        forget_expired(state, now, &mut out);
     }
     if let Some((id, reply)) = answer {
         out.push(Effect::Reply(id, reply));
@@ -128,13 +130,87 @@ fn emit(
         kind,
         at: now,
         node: node.cloned(),
+        owner: None,
         domain: domain.map(str::to_owned),
         detail,
     }));
 }
 
-fn emit_node(out: &mut Out, now: Ts, kind: EventKind, node: &NodeId, detail: Value) {
-    emit(out, now, kind, Some(node), None, detail);
+fn emit_node(out: &mut Out, now: Ts, kind: EventKind, node: &NodeRecord, detail: Value) {
+    emit_owned(out, now, kind, &node.id, Some(node.owner), None, detail);
+}
+
+/// An event with the owner of the node written in, for when the record is about to go.
+fn emit_owned(
+    out: &mut Out,
+    now: Ts,
+    kind: EventKind,
+    node: &NodeId,
+    owner: Option<OwnerId>,
+    domain: Option<&str>,
+    detail: Value,
+) {
+    out.push(Effect::Emit(Event {
+        kind,
+        at: now,
+        node: Some(node.clone()),
+        owner,
+        domain: domain.map(str::to_owned),
+        detail,
+    }));
+}
+
+/// Removes the records that have no reason to stay. See `record_expired`.
+fn forget_expired(state: &mut PoolState, now: Ts, out: &mut Out) {
+    let expired: Vec<NodeId> = state
+        .nodes
+        .values()
+        .filter(|n| record_expired(n, now))
+        .map(|n| n.id.clone())
+        .collect();
+    for id in expired {
+        forget(state, &id, now, out);
+    }
+}
+
+/// The record goes for good. A master gives up its slots here, while its owner is known; the
+/// next tick fills them and plans DNS as for any master that left.
+fn forget(state: &mut PoolState, id: &NodeId, now: Ts, out: &mut Out) {
+    let owner = state.nodes.get(id).map(|n| n.owner);
+    let Assignments(assignments) = &mut state.assignments;
+    for (domain, slots) in assignments.iter_mut() {
+        let before = slots.len();
+        slots.retain(|slot| slot.node != *id);
+        if slots.len() == before {
+            continue;
+        }
+        emit_owned(
+            out,
+            now,
+            EventKind::MasterChanged,
+            id,
+            owner,
+            Some(domain),
+            json!({ "added": null, "removed": id }),
+        );
+        persist(
+            out,
+            if slots.is_empty() {
+                PersistOp::DeleteMasters {
+                    domain: domain.clone(),
+                }
+            } else {
+                PersistOp::SetMasters {
+                    domain: domain.clone(),
+                    slots: slots.clone(),
+                }
+            },
+        );
+    }
+    assignments.retain(|_, slots| !slots.is_empty());
+    state.nodes.remove(id);
+    state.stats.remove(id);
+    persist(out, PersistOp::DeleteNode(id.clone()));
 }
 
 /// A record that is still in the pool: not `Banned`, `Dead` or `Pruned`.
@@ -210,14 +286,14 @@ fn announce(
     for event in events {
         match event {
             LifecycleEvent::Registered => {
-                emit_node(out, now, EventKind::NodeRegistered, &node.id, json!({}));
+                emit_node(out, now, EventKind::NodeRegistered, node, json!({}));
             }
             LifecycleEvent::Quarantined { reason } => {
                 emit_node(
                     out,
                     now,
                     EventKind::NodeQuarantined,
-                    &node.id,
+                    node,
                     json!({ "reason": reason }),
                 );
             }
@@ -225,7 +301,7 @@ fn announce(
                 reset_tombstones(tombstones, node);
                 // The first move from `Pending` into the queue is not a recovery.
                 if before == NodeState::Quarantine {
-                    emit_node(out, now, EventKind::NodeRecovered, &node.id, json!({}));
+                    emit_node(out, now, EventKind::NodeRecovered, node, json!({}));
                 }
             }
             LifecycleEvent::Banned { votes } => {
@@ -243,7 +319,7 @@ fn announce(
                     out,
                     now,
                     EventKind::NodeBanned,
-                    &node.id,
+                    node,
                     json!({ "votes": votes_json(&votes) }),
                 );
             }
@@ -267,7 +343,7 @@ fn announce(
                     out,
                     now,
                     EventKind::NodeReverifyFailed,
-                    &node.id,
+                    node,
                     json!({ "retry_after_sec": retry_after_sec }),
                 );
             }
@@ -276,13 +352,13 @@ fn announce(
                     out,
                     now,
                     EventKind::NodeDead,
-                    &node.id,
+                    node,
                     json!({ "reason": "unreachable" }),
                 );
             }
             LifecycleEvent::Pruned => {
                 record_prune(tombstones, node, now);
-                emit_node(out, now, EventKind::NodePruned, &node.id, json!({}));
+                emit_node(out, now, EventKind::NodePruned, node, json!({}));
             }
             LifecycleEvent::BanLifted => {
                 persist(
@@ -293,7 +369,7 @@ fn announce(
                         admin: false,
                     },
                 );
-                emit_node(out, now, EventKind::BanLifted, &node.id, json!({}));
+                emit_node(out, now, EventKind::BanLifted, node, json!({}));
             }
         }
     }
@@ -374,7 +450,7 @@ fn enroll(state: &mut PoolState, r: EnrollRequest, now: Ts, out: &mut Out) -> An
             out,
             now,
             EventKind::NodeDead,
-            &old.id,
+            old,
             json!({ "replaced_by": r.node_id }),
         );
     }
@@ -397,21 +473,6 @@ fn enroll(state: &mut PoolState, r: EnrollRequest, now: Ts, out: &mut Out) -> An
         record = record.replacing(previous);
     }
 
-    if reverify {
-        // The banned record of this IP is what the new node proves wrong: it goes.
-        let gone: Vec<NodeId> = state
-            .nodes
-            .values()
-            .filter(|n| n.state == NodeState::Banned && n.ip == r.ip && n.id != r.node_id)
-            .map(|n| n.id.clone())
-            .collect();
-        for id in gone {
-            state.nodes.remove(&id);
-            state.stats.remove(&id);
-            persist(out, PersistOp::DeleteNode(id));
-        }
-    }
-
     let generation = record.generation;
     persist(out, PersistOp::UpsertNode(record.clone()));
     state.stats.insert(r.node_id.clone(), NodeStats::default());
@@ -426,7 +487,7 @@ fn enroll(state: &mut PoolState, r: EnrollRequest, now: Ts, out: &mut Out) -> An
         out,
         now,
         EventKind::NodeRegistered,
-        &r.node_id,
+        &record,
         json!({ "reverify": reverify, "replaced": displaced }),
     );
     // A reverify node starts its decisive round with the first measurement of the agent, which
@@ -492,7 +553,7 @@ fn heartbeat(state: &mut PoolState, r: HeartbeatRequest, now: Ts, out: &mut Out)
                 out,
                 now,
                 EventKind::NodeDead,
-                &node.id,
+                node,
                 json!({ "reason": "address_refused" }),
             );
             return (r.reply, Reply::Terminate(TerminateReason::AddressRefused));
@@ -666,7 +727,7 @@ fn round_done(
         out,
         now,
         EventKind::SensorRound,
-        &n.id,
+        n,
         json!({ "verdict": verdict, "votes": votes_json(&result.votes) }),
     );
     announce(out, tombstones, n, before.state, events, now);
@@ -685,35 +746,60 @@ fn retire(state: &mut PoolState, a: NodeAction, now: Ts, out: &mut Out) -> Answe
             out,
             now,
             EventKind::NodeDead,
-            &node.id,
+            node,
             json!({ "retired": true }),
         );
     }
     (a.reply, Reply::Ok)
 }
 
+/// Lifts the ban whether or not the record is still there: a banned node has none, its block
+/// remembers the id.
 fn admin_unban(state: &mut PoolState, a: NodeAction, now: Ts, out: &mut Out) -> Answer {
     let PoolState { nodes, blocks, .. } = state;
-    let Some(node) = nodes.get_mut(&a.node) else {
+    let known = nodes.contains_key(&a.node) || blocks.iter().any(|b| b.node_id == a.node);
+    if !known {
         return (a.reply, Reply::UnknownNode);
-    };
-    if unban(node, blocks, now).is_empty() {
+    }
+    let mut owner = None;
+    let mut lifted = Vec::new();
+    if let Some(node) = nodes.get_mut(&a.node) {
+        owner = Some(node.owner);
+        if !unban(node, blocks, now).is_empty() {
+            persist(out, PersistOp::UpsertNode(node.clone()));
+            lifted.push(node.ip);
+        }
+    }
+    let (by_id, released) = unban_by_node(&a.node, nodes, blocks);
+    for id in released {
+        if let Some(node) = nodes.get(&id) {
+            persist(out, PersistOp::UpsertNode(node.clone()));
+        }
+    }
+    for block in by_id {
+        owner = owner.or(block.owner);
+        lifted.push(block.ip);
+    }
+    if lifted.is_empty() {
         return (a.reply, Reply::Refused(Refusal::NotBanned));
     }
-    persist(out, PersistOp::UpsertNode(node.clone()));
-    persist(
-        out,
-        PersistOp::LiftBan {
-            ip: node.ip,
-            at: now,
-            admin: true,
-        },
-    );
-    emit_node(
+    for ip in lifted {
+        persist(
+            out,
+            PersistOp::LiftBan {
+                ip,
+                at: now,
+                admin: true,
+            },
+        );
+    }
+    emit_owned(
         out,
         now,
         EventKind::BanLifted,
-        &node.id,
+        &a.node,
+        owner,
+        None,
         json!({ "admin": true }),
     );
     (a.reply, Reply::Ok)
@@ -1417,13 +1503,17 @@ mod tests {
                 .any(|op| matches!(op, PersistOp::RecordRound { .. }))
         );
 
-        // Quarantine to Banned.
+        // Quarantine to Banned: the block stays, the record goes.
         p.quarantine("n1");
         let effects = p.round("n1", &blocked());
-        assert_eq!(p.state_of("n1"), NodeState::Banned);
+        assert!(!p.state.nodes.contains_key(&id("n1")));
         assert_eq!(
             kinds(&effects),
-            [EventKind::SensorRound, EventKind::NodeBanned]
+            [
+                EventKind::SensorRound,
+                EventKind::NodeBanned,
+                EventKind::MasterChanged
+            ]
         );
         assert!(
             persists(&effects)
@@ -1431,13 +1521,14 @@ mod tests {
                 .any(|op| matches!(op, PersistOp::UpsertIpBlock(b) if b.ip == ip(1)))
         );
 
-        // Banned to Pending by an admin.
+        // An admin lifts the ban; the agent enrolls again by itself.
         let action = p.node_action("n1");
         let effects = p.run(Command::AdminUnban(action));
-        assert_eq!(p.state_of("n1"), NodeState::Pending);
         assert_eq!(kinds(&effects), [EventKind::BanLifted]);
         assert!(matches!(reply(&effects), Reply::Ok));
         assert!(p.state.blocks.is_empty());
+        p.enroll("n1", ip(1));
+        assert_eq!(p.state_of("n1"), NodeState::Pending);
 
         // Pending to Dead: no heartbeat for the dead timer.
         p.advance(SEC);
@@ -1694,6 +1785,7 @@ mod tests {
             node_id: id("old"),
             blocked_at: p.now,
             next_reverify_at: None,
+            owner: None,
         });
         let effects = p.beat_from("n1", ip(9));
         assert_eq!(p.state_of("n1"), NodeState::Dead);
@@ -1724,23 +1816,23 @@ mod tests {
         let mut p = Pool::new();
         p.make_healthy("n1", ip(1));
         p.quarantine("n1");
-        p.round("n1", &blocked());
-        assert_eq!(p.state_of("n1"), NodeState::Banned);
-
-        let effects = p.enroll("n2", ip(1));
-        assert!(matches!(
-            reply(&effects),
-            Reply::Enrolled { reverify: true, .. }
-        ));
+        let effects = p.round("n1", &blocked());
         assert!(
             !p.state.nodes.contains_key(&id("n1")),
-            "the banned record of the IP is dropped"
+            "the banned record is dropped at once"
         );
         assert!(
             persists(&effects)
                 .iter()
                 .any(|op| matches!(op, PersistOp::DeleteNode(n) if *n == id("n1")))
         );
+
+        p.advance(900 * SEC);
+        let effects = p.enroll("n2", ip(1));
+        assert!(matches!(
+            reply(&effects),
+            Reply::Enrolled { reverify: true, .. }
+        ));
         assert!(
             !effects.iter().any(|e| matches!(e, Effect::RunRound { .. })),
             "the round waits for the measurement of the agent"
@@ -1773,7 +1865,8 @@ mod tests {
         p.make_healthy("n1", ip(1));
         p.quarantine("n1");
         p.round("n1", &blocked());
-        assert_eq!(p.state_of("n1"), NodeState::Banned);
+        assert!(!p.state.nodes.contains_key(&id("n1")));
+        p.advance(900 * SEC);
         p.enroll("n2", ip(1));
         assert!(p.state.nodes[&id("n2")].reverify);
         p
@@ -2324,5 +2417,291 @@ mod tests {
         );
         let effects = p.beat("n1");
         assert!(matches!(effects.last(), Some(Effect::Reply(..))));
+    }
+
+    fn event_of<'a>(effects: &'a [Effect], kind: EventKind) -> &'a Event {
+        effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::Emit(ev) if ev.kind == kind => Some(ev),
+                _ => None,
+            })
+            .expect("the event")
+    }
+
+    fn deletes(effects: &[Effect], name: &str) -> bool {
+        persists(effects)
+            .iter()
+            .any(|op| matches!(op, PersistOp::DeleteNode(n) if *n == id(name)))
+    }
+
+    #[test]
+    fn a_confirmed_round_removes_the_record_and_keeps_the_block() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.quarantine("n1");
+        let effects = p.round("n1", &blocked());
+
+        assert!(!p.state.nodes.contains_key(&id("n1")));
+        assert!(!p.state.stats.contains_key(&id("n1")));
+        assert!(deletes(&effects, "n1"));
+        assert_eq!(
+            kinds(&effects),
+            [
+                EventKind::SensorRound,
+                EventKind::NodeBanned,
+                EventKind::MasterChanged
+            ],
+            "the only master was still holding its domain"
+        );
+        assert_eq!(
+            event_of(&effects, EventKind::NodeBanned).owner,
+            Some(OwnerId(1)),
+            "the webhook fan-out cannot look up a record that is gone"
+        );
+        assert!(
+            persists(&effects)
+                .iter()
+                .any(|op| matches!(op, PersistOp::RecordBan { node, .. } if *node == id("n1")))
+        );
+        assert_eq!(p.state.blocks.len(), 1);
+        assert_eq!(p.state.blocks[0].node_id, id("n1"));
+        assert_eq!(p.state.blocks[0].owner, Some(OwnerId(1)));
+        assert_eq!(
+            p.state.blocks[0].next_reverify_at,
+            Some(Ts(p.now.0 + 900 * SEC)),
+            "no reverify straight after the ban: it would spend the sensor quota"
+        );
+        // The agent that comes back within the pause is told to wait.
+        let effects = p.enroll("n2", ip(1));
+        assert!(matches!(
+            reply(&effects),
+            Reply::EnrollRejected {
+                reason: RejectReason::ReverifyPause,
+                retry_after_sec: 900,
+            }
+        ));
+        p.advance(900 * SEC);
+        let effects = p.enroll("n2", ip(1));
+        assert!(matches!(
+            reply(&effects),
+            Reply::Enrolled { reverify: true, .. }
+        ));
+    }
+
+    #[test]
+    fn a_failed_reverify_removes_the_record_and_keeps_the_block() {
+        let mut p = reverify_pool();
+        p.report("n2", Vote::Blocked);
+        let effects = p.round("n2", &blocked());
+        assert!(!p.state.nodes.contains_key(&id("n2")));
+        assert!(deletes(&effects, "n2"));
+        assert_eq!(p.state.blocks.len(), 1);
+        assert_eq!(p.state.blocks[0].node_id, id("n1"));
+        let effects = p.enroll("n3", ip(1));
+        assert!(matches!(
+            reply(&effects),
+            Reply::EnrollRejected {
+                reason: RejectReason::ReverifyPause,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_banned_master_leaves_its_domain_in_the_same_apply() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.quarantine("n1");
+        // Nobody can replace it: selection keeps it as the master through the quarantine.
+        p.run(Command::Tick);
+        assert_eq!(p.state.assignments.0[DOMAIN][0].node, id("n1"));
+
+        let effects = p.round("n1", &blocked());
+        assert!(!p.state.assignments.0.contains_key(DOMAIN));
+        let event = event_of(&effects, EventKind::MasterChanged);
+        assert_eq!(event.node, Some(id("n1")));
+        assert_eq!(event.owner, Some(OwnerId(1)));
+        assert_eq!(event.detail["removed"], json!(id("n1")));
+        assert!(
+            persists(&effects)
+                .iter()
+                .any(|op| matches!(op, PersistOp::DeleteMasters { domain } if domain == DOMAIN))
+        );
+
+        // The next tick has nothing left to do for it, and DNS never goes empty.
+        let effects = p.run(Command::Tick);
+        assert!(!kinds(&effects).contains(&EventKind::MasterChanged));
+        assert!(pushes(&effects).is_empty());
+    }
+
+    #[test]
+    fn a_banned_master_with_a_replacement_gives_the_domain_to_it_on_the_next_tick() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.make_healthy("n2", ip(2));
+        p.run(Command::Tick);
+        assert_eq!(p.state.assignments.0[DOMAIN][0].node, id("n1"));
+        // Banned before the selection had a tick to move the domain.
+        p.state.nodes.get_mut(&id("n1")).unwrap().state = NodeState::Quarantine;
+        p.beat("n1");
+        p.probe("n1", true);
+        p.round("n1", &blocked());
+        assert!(!p.state.assignments.0.contains_key(DOMAIN));
+
+        p.advance(SEC);
+        p.beat("n2");
+        p.report("n2", Vote::Clear);
+        let effects = p.run(Command::Tick);
+        assert_eq!(p.state.assignments.0[DOMAIN][0].node, id("n2"));
+        assert!(pushes(&effects).iter().any(|e| matches!(
+            e,
+            Effect::PushDns { desired: RecordValue::A(ips), .. } if *ips == [ip(2)]
+        )));
+    }
+
+    #[test]
+    fn dead_and_pruned_records_are_removed_a_day_after_they_ended() {
+        const DAY: i64 = 24 * 3600 * SEC;
+        let mut p = Pool::new();
+        p.make_healthy("dead", ip(1));
+        let action = p.node_action("dead");
+        p.run(Command::Retire(action));
+
+        p.make_healthy("pruned", ip(2));
+        p.quarantine("pruned");
+        p.advance(3601 * SEC);
+        p.beat("pruned");
+        p.run(Command::Tick);
+        assert_eq!(p.state_of("pruned"), NodeState::Pruned);
+        let pruned_at = p.now;
+        assert_eq!(p.state.tombstones.len(), 1);
+
+        let retired_at = p.state.nodes[&id("dead")].state_since;
+        p.now = Ts(retired_at.0 + DAY - 1);
+        let effects = p.run(Command::Tick);
+        assert!(p.state.nodes.contains_key(&id("dead")));
+        assert!(!deletes(&effects, "dead"));
+
+        p.now = Ts(retired_at.0 + DAY);
+        let effects = p.run(Command::Tick);
+        assert!(!p.state.nodes.contains_key(&id("dead")));
+        assert!(!p.state.stats.contains_key(&id("dead")));
+        assert!(deletes(&effects, "dead"));
+        assert!(kinds(&effects).is_empty(), "removal is not an event");
+
+        p.now = Ts(pruned_at.0 + DAY);
+        let effects = p.run(Command::Tick);
+        assert!(deletes(&effects, "pruned"));
+        assert!(!p.state.nodes.contains_key(&id("pruned")));
+        assert_eq!(p.state.tombstones.len(), 1, "the pause outlives the record");
+    }
+
+    #[test]
+    fn a_banned_record_of_an_old_database_is_removed_by_the_first_tick() {
+        let mut p = Pool::new();
+        p.make_healthy("old", ip(1));
+        let node = p.state.nodes.get_mut(&id("old")).unwrap();
+        node.state = NodeState::Banned;
+        node.state_since = p.now;
+        let effects = p.run(Command::Tick);
+        assert!(!p.state.nodes.contains_key(&id("old")));
+        assert!(deletes(&effects, "old"));
+    }
+
+    #[test]
+    fn unban_without_a_record_finds_the_block_by_the_node_id() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.quarantine("n1");
+        p.round("n1", &blocked());
+        assert!(!p.state.nodes.contains_key(&id("n1")));
+
+        let action = p.node_action("n1");
+        let effects = p.run(Command::AdminUnban(action));
+        assert_eq!(*reply(&effects), Reply::Ok);
+        assert!(p.state.blocks.is_empty());
+        assert!(
+            !p.state.nodes.contains_key(&id("n1")),
+            "no record comes back"
+        );
+        let event = event_of(&effects, EventKind::BanLifted);
+        assert_eq!(event.node, Some(id("n1")));
+        assert_eq!(event.detail, json!({ "admin": true }));
+        assert_eq!(
+            event.owner,
+            Some(OwnerId(1)),
+            "the owner's hooks get it although the record is gone"
+        );
+        let ops = persists(&effects);
+        assert!(ops.iter().any(|op| matches!(
+            op,
+            PersistOp::LiftBan { ip: a, admin: true, .. } if *a == ip(1)
+        )));
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, PersistOp::DeleteIpBlock { ip: a } if *a == ip(1)))
+        );
+
+        // The address enrolls as a normal node again.
+        let effects = p.enroll("n2", ip(1));
+        assert!(matches!(
+            reply(&effects),
+            Reply::Enrolled {
+                reverify: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn unban_of_an_unknown_node_is_not_found_and_changes_nothing() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.quarantine("n1");
+        p.round("n1", &blocked());
+        let action = p.node_action("ghost");
+        let effects = p.run(Command::AdminUnban(action));
+        assert_eq!(*reply(&effects), Reply::UnknownNode);
+        assert_eq!(p.state.blocks.len(), 1);
+        assert!(kinds(&effects).is_empty());
+    }
+
+    #[test]
+    fn unban_by_the_banned_id_ends_the_reverify_of_the_node_on_that_ip() {
+        let mut p = reverify_pool();
+        let action = p.node_action("n1");
+        let effects = p.run(Command::AdminUnban(action));
+        assert_eq!(*reply(&effects), Reply::Ok);
+        assert!(p.state.blocks.is_empty());
+        let n2 = &p.state.nodes[&id("n2")];
+        assert!(!n2.reverify, "nothing is left for it to prove");
+        assert!(
+            persists(&effects).iter().any(
+                |op| matches!(op, PersistOp::UpsertNode(n) if n.id == id("n2") && !n.reverify)
+            )
+        );
+    }
+
+    #[test]
+    fn unban_of_a_live_node_lifts_the_block_its_old_ban_left() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.state.blocks.push(IpBlock {
+            ip: ip(9),
+            node_id: id("n1"),
+            blocked_at: p.now,
+            next_reverify_at: None,
+            owner: Some(OwnerId(1)),
+        });
+        let action = p.node_action("n1");
+        let effects = p.run(Command::AdminUnban(action));
+        assert_eq!(*reply(&effects), Reply::Ok);
+        assert!(p.state.blocks.is_empty());
+        assert_eq!(
+            p.state_of("n1"),
+            NodeState::Healthy,
+            "the record is untouched"
+        );
     }
 }

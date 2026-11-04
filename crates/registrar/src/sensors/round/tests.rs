@@ -414,6 +414,7 @@ async fn the_driver_takes_run_round_only() {
         kind: mtpool_core::EventKind::SensorRound,
         at: Ts(0),
         node: None,
+        owner: None,
         domain: None,
         detail: Value::Null,
     });
@@ -436,7 +437,11 @@ async fn the_driver_reports_the_votes_to_the_state_owner() {
         .run(run_round("alpha-00001", generation, None), handle.clone())
         .await;
 
-    assert_eq!(node_state(&handle, "alpha-00001").await, "banned");
+    // The ban removes the record and leaves the block.
+    assert_eq!(node_state(&handle, "alpha-00001").await, "absent");
+    let blocks = handle.inspect(|s| s.blocks.clone()).await.unwrap();
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].ip, NODE_IP);
     // The target came from the live settings, not from the effect.
     let seen = gp.targets.lock().expect("lock");
     assert_eq!(seen.len(), 1);

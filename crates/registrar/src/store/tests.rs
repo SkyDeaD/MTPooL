@@ -60,6 +60,7 @@ fn event(kind: EventKind, at: Ts) -> Event {
         kind,
         at,
         node: Some(id("alpha-a1b2c")),
+        owner: None,
         domain: None,
         detail: json!({ "k": "v" }),
     }
@@ -124,7 +125,7 @@ fn migrations_apply_on_empty_db() {
             r.get(0)
         })
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
     let mode: String = conn
         .query_row("PRAGMA journal_mode", [], |r| r.get(0))
         .unwrap();
@@ -141,7 +142,7 @@ fn migrations_apply_on_empty_db() {
     // Opening again applies nothing twice.
     let store = Store::open(&path).unwrap();
     store.close().unwrap();
-    assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 7);
+    assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 8);
 }
 
 #[test]
@@ -158,6 +159,7 @@ fn a_database_at_version_5_upgrades_cleanly() {
     let conn = fresh(&path);
     conn.execute_batch(
         "DROP TABLE client_samples; DROP TABLE node_samples; \
+         ALTER TABLE ip_blocks DROP COLUMN owner; DROP INDEX tokens_node_id; \
          DELETE FROM schema_migrations WHERE version >= 6;",
     )
     .unwrap();
@@ -168,9 +170,135 @@ fn a_database_at_version_5_upgrades_cleanly() {
     store.close().unwrap();
     assert_eq!(
         count(&path, "SELECT max(version) FROM schema_migrations"),
-        7
+        8
     );
     assert_eq!(count(&path, "SELECT count(*) FROM client_samples"), 0);
+}
+
+#[test]
+fn a_database_at_version_7_upgrades_and_loses_the_tokens_of_nodes_it_no_longer_has() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).unwrap();
+    store.send(PersistOp::UpsertNode(node(
+        "kept-a1b2c",
+        "198.51.100.1",
+        NodeState::Healthy,
+    )));
+    store.flush().unwrap();
+    store.close().unwrap();
+    let conn = fresh(&path);
+    conn.execute_batch(
+        "ALTER TABLE ip_blocks DROP COLUMN owner; DROP INDEX tokens_node_id; \
+         DELETE FROM schema_migrations WHERE version = 8; \
+         INSERT INTO ip_blocks(ip, node_id, blocked_at) VALUES ('198.51.100.9', 'old-a1b2c', 1); \
+         INSERT INTO tokens(kind, hash, prefix, node_id, created_at) \
+           VALUES ('node', x'01', 'p', 'kept-a1b2c', 1), ('node', x'02', 'p', 'gone-a1b2c', 1); \
+         INSERT INTO tokens(kind, hash, prefix, created_at) VALUES ('metrics', x'03', 'p', 1);",
+    )
+    .unwrap();
+    drop(conn);
+
+    let store = Store::open(&path).unwrap();
+    let state = store.load_at(NOW).unwrap();
+    assert_eq!(state.blocks[0].node_id, id("old-a1b2c"));
+    assert_eq!(
+        state.blocks[0].owner, None,
+        "a block from before the column"
+    );
+    store.close().unwrap();
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM tokens WHERE node_id = 'kept-a1b2c'"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM tokens WHERE node_id = 'gone-a1b2c'"
+        ),
+        0
+    );
+    assert_eq!(
+        count(&path, "SELECT count(*) FROM tokens WHERE kind = 'metrics'"),
+        1
+    );
+}
+
+#[test]
+fn deleting_a_node_deletes_its_token_and_keeps_its_history() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).unwrap();
+    store.send(PersistOp::UpsertNode(node(
+        "gone-a1b2c",
+        "198.51.100.1",
+        NodeState::Healthy,
+    )));
+    store.send(PersistOp::UpsertNode(node(
+        "kept-a1b2c",
+        "198.51.100.2",
+        NodeState::Healthy,
+    )));
+    store.send(PersistOp::RecordBan {
+        ip: ip("198.51.100.1"),
+        node: id("gone-a1b2c"),
+        at: NOW,
+        votes: vec![],
+        reverify: false,
+    });
+    store.flush().unwrap();
+    let conn = fresh(&path);
+    conn.execute_batch(
+        "INSERT INTO tokens(kind, hash, prefix, node_id, created_at) \
+           VALUES ('node', x'01', 'p', 'gone-a1b2c', 1), ('node', x'02', 'p', 'kept-a1b2c', 1); \
+         INSERT INTO sensor_rounds(node, generation, at, verdict) \
+           VALUES ('gone-a1b2c', 0, 1, 'confirmed'); \
+         INSERT INTO node_samples(node, bucket, up, total) VALUES ('gone-a1b2c', 1, 1, 1);",
+    )
+    .unwrap();
+    drop(conn);
+
+    store.send(PersistOp::DeleteNode(id("gone-a1b2c")));
+    store.flush().unwrap();
+    store.close().unwrap();
+
+    assert_eq!(
+        count(&path, "SELECT count(*) FROM nodes WHERE id = 'gone-a1b2c'"),
+        0
+    );
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM tokens WHERE node_id = 'gone-a1b2c'"
+        ),
+        0
+    );
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM tokens WHERE node_id = 'kept-a1b2c'"
+        ),
+        1
+    );
+    assert_eq!(
+        count(&path, "SELECT count(*) FROM bans WHERE node = 'gone-a1b2c'"),
+        1
+    );
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM sensor_rounds WHERE node = 'gone-a1b2c'"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM node_samples WHERE node = 'gone-a1b2c'"
+        ),
+        1
+    );
 }
 
 #[test]
@@ -184,8 +312,11 @@ fn a_database_at_version_6_upgrades_cleanly() {
     store.flush().unwrap();
     store.close().unwrap();
     let conn = fresh(&path);
-    conn.execute_batch("DROP TABLE node_samples; DELETE FROM schema_migrations WHERE version = 7;")
-        .unwrap();
+    conn.execute_batch(
+        "DROP TABLE node_samples; ALTER TABLE ip_blocks DROP COLUMN owner; \
+         DROP INDEX tokens_node_id; DELETE FROM schema_migrations WHERE version >= 7;",
+    )
+    .unwrap();
     drop(conn);
 
     let store = Store::open(&path).unwrap();
@@ -193,7 +324,7 @@ fn a_database_at_version_6_upgrades_cleanly() {
     store.close().unwrap();
     assert_eq!(
         count(&path, "SELECT max(version) FROM schema_migrations"),
-        7
+        8
     );
     assert_eq!(count(&path, "SELECT count(*) FROM node_samples"), 0);
 }
@@ -403,7 +534,7 @@ fn unknown_schema_version_refuses_open() {
             err,
             StoreError::UnknownSchemaVersion {
                 found: 999,
-                supported: 7
+                supported: 8
             }
         ),
         "{err:?}"
@@ -580,6 +711,7 @@ fn full_state() -> (PoolState, Vec<PersistOp>) {
         node_id: banned.id.clone(),
         blocked_at: Ts(NOW.0 - 2 * DAY_MS),
         next_reverify_at: Some(Ts(NOW.0 + 1000)),
+        owner: Some(OwnerId(1)),
     }];
     state.tombstones = vec![
         Tombstone {
@@ -655,6 +787,7 @@ fn full_state() -> (PoolState, Vec<PersistOp>) {
             node_id: id("gone-p1q2r"),
             blocked_at: Ts(NOW.0),
             next_reverify_at: None,
+            owner: None,
         }),
         PersistOp::DeleteIpBlock {
             ip: ip("198.51.100.7"),
@@ -1259,6 +1392,6 @@ fn processes_opening_a_new_database_together_all_succeed() {
         for result in results {
             assert_eq!(result, Ok(()));
         }
-        assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 7);
+        assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 8);
     }
 }

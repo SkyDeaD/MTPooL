@@ -186,6 +186,7 @@ mod tests {
             kind,
             at: Ts(0),
             node: None,
+            owner: None,
             domain: Some("proxy.example.com".to_owned()),
             detail: json!({ "n": 1 }),
         }

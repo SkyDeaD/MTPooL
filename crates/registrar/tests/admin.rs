@@ -8,7 +8,7 @@ use std::time::Duration;
 use axum::http::StatusCode;
 use common::http::*;
 use http_body_util::BodyExt;
-use mtpool_core::NodeState;
+use mtpool_core::{IpBlock, NodeState, PersistOp, Ts};
 use mtpool_registrar::auth::tokens::TokenKind;
 use serde_json::{Value, json};
 
@@ -611,11 +611,60 @@ async fn stream_requires_an_admin_token() {
     assert_problem(&anonymous, StatusCode::UNAUTHORIZED, "unauthorized");
 }
 
+/// The ban log names every node that failed on an address; the block only the first of them.
+/// Whichever row the admin starts from, the ban of that address is what gets lifted.
+#[tokio::test]
+async fn unban_works_from_the_id_of_any_open_row_of_the_ban_log() {
+    let mut state = pool(vec![alpha()]);
+    state.blocks.push(IpBlock {
+        ip: beta().ip,
+        node_id: beta().id,
+        blocked_at: Ts(NOW),
+        next_reverify_at: Some(Ts(NOW + 900_000)),
+        owner: Some(mtpool_core::OwnerId(2)),
+    });
+    let env = env(state);
+    let admin = admin_token(&env);
+    env.store.send(PersistOp::RecordBan {
+        ip: beta().ip,
+        node: mtpool_core::NodeId::parse("again-00003").unwrap(),
+        at: Ts(NOW),
+        votes: vec![],
+        reverify: true,
+    });
+    env.store.flush().unwrap();
+
+    let unban = post(&env, "/api/v1/admin/nodes/again-00003/unban", &admin, None).await;
+    assert_eq!(unban.status, StatusCode::OK, "{}", unban.body);
+    let blocks = env.actor.inspect(|s| s.blocks.clone()).await.unwrap();
+    assert!(blocks.is_empty());
+
+    env.store.flush().unwrap();
+    let rows = get(&env, "/api/v1/bans", &admin).await.json();
+    assert!(!rows[0]["lifted_at"].is_null(), "{rows}");
+    let events = get(&env, "/api/v1/admin/events?kind=ban_lifted", &admin)
+        .await
+        .json();
+    assert_eq!(events[0]["node"], "beta-00002", "{events}");
+    assert_eq!(events[0]["detail"], json!({ "admin": true }), "{events}");
+
+    // Lifted: the row names nothing to lift any more.
+    let again = post(&env, "/api/v1/admin/nodes/again-00003/unban", &admin, None).await;
+    assert_problem(&again, StatusCode::NOT_FOUND, "not_found");
+}
+
 #[tokio::test]
 async fn node_actions_domains_and_events() {
-    let mut banned = beta();
-    banned.state = NodeState::Banned;
-    let env = env(pool(vec![alpha(), banned]));
+    // A ban leaves a block and no record.
+    let mut state = pool(vec![alpha()]);
+    state.blocks.push(IpBlock {
+        ip: beta().ip,
+        node_id: beta().id,
+        blocked_at: Ts(NOW),
+        next_reverify_at: None,
+        owner: None,
+    });
+    let env = env(state);
     let admin = admin_token(&env);
 
     // Unknown node, a node that is not banned, a node that is banned.
@@ -639,6 +688,8 @@ async fn node_actions_domains_and_events() {
     assert_problem(&healthy, StatusCode::CONFLICT, "not_recheckable");
     let unban = post(&env, "/api/v1/admin/nodes/beta-00002/unban", &admin, None).await;
     assert_eq!(unban.status, StatusCode::OK, "{}", unban.body);
+    let again = post(&env, "/api/v1/admin/nodes/beta-00002/unban", &admin, None).await;
+    assert_problem(&again, StatusCode::NOT_FOUND, "not_found");
 
     // The events table has the lift.
     env.store.flush().unwrap();
@@ -750,6 +801,7 @@ fn log(env: &Env, kind: mtpool_core::EventKind, at: i64, detail: Value) {
         kind,
         at: mtpool_core::Ts(at),
         node: None,
+        owner: None,
         domain: None,
         detail,
     });

@@ -102,10 +102,12 @@ impl EffectDriver for WebhookFanOut {
             let Some(name) = event.kind.webhook_name() else {
                 return;
             };
-            // The owner of the node decides which owner-scoped hooks get the event. A node the
-            // pool does not know, and an event without a node, belong to nobody.
-            let owner = match &event.node {
-                Some(node) => {
+            // The owner of the node decides which owner-scoped hooks get the event. The event
+            // says who that is when the record may be gone; otherwise the pool is asked. A node
+            // the pool does not know, and an event without a node, belong to nobody.
+            let owner = match (event.owner, &event.node) {
+                (Some(owner), _) => Some(owner.0),
+                (None, Some(node)) => {
                     let node: NodeId = node.clone();
                     match results
                         .inspect(move |s| s.nodes.get(&node).map(|n| n.owner.0))
@@ -115,7 +117,7 @@ impl EffectDriver for WebhookFanOut {
                         Err(_) => return,
                     }
                 }
-                None => None,
+                (None, None) => None,
             };
             let queued =
                 tokio::task::spawn_blocking(move || enqueue(&store, name, owner, &event)).await;

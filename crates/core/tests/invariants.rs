@@ -465,23 +465,33 @@ proptest! {
         })?;
     }
 
+    /// A ban leaves no record behind, so it is judged by what it writes and announces: the ban
+    /// row, the event and the new block all need a round with two `Blocked` votes.
     #[test]
     fn banned_only_with_two_blocked_votes(ops in ops_strategy()) {
         run(&ops, |step| {
-            for (id, after) in &step.after.nodes {
-                let newly_banned = after.state == NodeState::Banned
-                    && step.before.nodes.get(id).is_some_and(|b| b.state != NodeState::Banned);
-                if !newly_banned {
-                    continue;
+            let mut banned: Vec<&NodeId> = Vec::new();
+            for effect in step.effects {
+                match effect {
+                    Effect::Persist(mtpool_core::PersistOp::RecordBan { node, reverify: false, .. }) => {
+                        banned.push(node);
+                    }
+                    Effect::Emit(ev) if ev.kind == EventKind::NodeBanned => {
+                        banned.extend(ev.node.as_ref());
+                    }
+                    _ => {}
                 }
-                let before = &step.before.nodes[id];
-                if before.reverify {
-                    // A reverify node that did not prove its IP clean fails closed.
-                    continue;
-                }
+            }
+            let new_blocks = step
+                .after
+                .blocks
+                .iter()
+                .filter(|b| !step.before.blocks.iter().any(|o| o.ip == b.ip));
+            banned.extend(new_blocks.map(|b| &b.node_id));
+            for id in banned {
                 let Command::RoundDone { node, votes, .. } = step.command else {
                     return Err(TestCaseError::fail(format!(
-                        "{id} became Banned by {:?}", step.command
+                        "{id} was banned by {:?}", step.command
                     )));
                 };
                 prop_assert_eq!(node, id);
@@ -493,6 +503,44 @@ proptest! {
                     .filter(|(_, v)| v.vote == Vote::Blocked)
                     .count();
                 prop_assert!(blocked >= 2, "{id} banned with {blocked} Blocked votes: {votes:?}");
+            }
+            Ok(())
+        })?;
+    }
+
+    /// A live record leaves only through a ban. A record in a final state goes a day later.
+    #[test]
+    fn a_record_goes_only_after_a_ban_or_a_day_in_a_final_state(ops in ops_strategy()) {
+        run(&ops, |step| {
+            for (id, before) in &step.before.nodes {
+                if step.after.nodes.contains_key(id) {
+                    continue;
+                }
+                let deleted = step.effects.iter().any(
+                    |e| matches!(e, Effect::Persist(mtpool_core::PersistOp::DeleteNode(n)) if n == id),
+                );
+                prop_assert!(deleted, "{id} left the state without a DeleteNode");
+                prop_assert!(!step.after.stats.contains_key(id), "{id} left its stats behind");
+                let live = matches!(
+                    before.state,
+                    NodeState::Pending | NodeState::Healthy | NodeState::Quarantine
+                );
+                if live {
+                    prop_assert!(
+                        announced(step.effects, id, EventKind::NodeBanned)
+                            || announced(step.effects, id, EventKind::NodeReverifyFailed),
+                        "{id} left from {:?} by {:?} without a ban",
+                        before.state,
+                        step.command
+                    );
+                } else {
+                    prop_assert!(
+                        matches!(step.command, Command::Tick),
+                        "{id} left from {:?} by {:?}",
+                        before.state,
+                        step.command
+                    );
+                }
             }
             Ok(())
         })?;
@@ -594,18 +642,13 @@ proptest! {
                 if silent {
                     continue;
                 }
-                // A reverify node that fails its round is `Banned` too, and says so with its own
-                // event: the webhook of a ban must not repeat with every registration.
-                let reverify_failed = before.reverify
-                    && after.state == NodeState::Banned
-                    && announced(step.effects, id, EventKind::NodeReverifyFailed);
-                if reverify_failed {
-                    continue;
-                }
                 let expected = match (before.state, after.state) {
                     (_, NodeState::Quarantine) => EventKind::NodeQuarantined,
                     (_, NodeState::Healthy) => EventKind::NodeRecovered,
-                    (_, NodeState::Banned) => EventKind::NodeBanned,
+                    // A ban removes the record in the same `apply`.
+                    (_, NodeState::Banned) => {
+                        return Err(TestCaseError::fail(format!("{id} stayed Banned")));
+                    }
                     (_, NodeState::Dead) => EventKind::NodeDead,
                     (_, NodeState::Pruned) => EventKind::NodePruned,
                     (_, NodeState::Pending) => EventKind::BanLifted,
@@ -643,7 +686,12 @@ fn property_driver_reaches_interesting_states() {
                 seen[0].set(seen[0].get() || has(NodeState::Healthy));
                 seen[1].set(seen[1].get() || s.assignments.0.values().any(|v| !v.is_empty()));
                 seen[2].set(seen[2].get() || has(NodeState::Quarantine));
-                seen[3].set(seen[3].get() || has(NodeState::Banned));
+                seen[3].set(
+                    seen[3].get()
+                        || step.effects.iter().any(
+                            |e| matches!(e, Effect::Emit(ev) if ev.kind == EventKind::NodeBanned),
+                        ),
+                );
                 seen[4].set(seen[4].get() || has(NodeState::Dead));
                 seen[5].set(
                     seen[5].get()

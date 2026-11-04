@@ -190,6 +190,7 @@ pub enum Durability {
 #[derive(Debug, Clone, PartialEq)]
 pub enum PersistOp {
     UpsertNode(NodeRecord),
+    /// The record, its stats and its node token go. Samples, rounds, bans and events stay.
     DeleteNode(NodeId),
     NodeHealth {
         node: NodeId,
@@ -314,6 +315,9 @@ pub struct Event {
     pub kind: EventKind,
     pub at: Ts,
     pub node: Option<NodeId>,
+    /// The owner of `node`, when the event was made with its record in hand. The record may be
+    /// gone by the time a worker handles the event: a ban removes it in the same `apply`.
+    pub owner: Option<OwnerId>,
     pub domain: Option<String>,
     pub detail: Value,
 }

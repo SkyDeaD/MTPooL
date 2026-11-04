@@ -1202,6 +1202,7 @@ fn event(env: &Env, kind: EventKind, at: i64, node: Option<&str>, detail: Value)
         kind,
         at: Ts(at),
         node: node.map(node_id),
+        owner: None,
         domain: Some("proxy.example.com".to_owned()),
         detail,
     });

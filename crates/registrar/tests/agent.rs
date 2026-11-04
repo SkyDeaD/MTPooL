@@ -14,8 +14,8 @@ use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use common::*;
 use mtpool_core::{
-    GpStatus, NodeRecord, NodeState, OwnerId, PoolState, ProxyUser, SensorVote, Settings,
-    Tombstone, Ts, Vote,
+    Command, GpStatus, NodeRecord, NodeState, OwnerId, PoolState, ProxyUser, SensorKind,
+    SensorVote, Settings, Tombstone, Ts, Vote,
 };
 use mtpool_protocol::problem::Problem;
 use mtpool_protocol::rfc3339;
@@ -33,6 +33,7 @@ const SECRET: &str = "00112233445566778899aabbccddeeff";
 const LIMIT: usize = 256 * 1024;
 /// The address `healthy_node` gives its nodes.
 const ALPHA_IP: &str = "45.33.1.5";
+const PEER_ADMIN: &str = "198.51.100.7";
 
 /// A verifier whose answer the test sets. With a gate it waits for `release` first.
 struct FakeVerifier {
@@ -408,6 +409,91 @@ async fn enroll_limit_counts_only_live_nodes_of_the_owner() {
     assert_eq!(ok.status, StatusCode::OK, "{}", ok.body);
     let full = enroll(&env, &enroll_token, "203.0.113.22", "late").await;
     assert_problem(&full, StatusCode::FORBIDDEN, "owner_limit");
+}
+
+/// The way from a confirmed ban to the node coming back, as the agent and the admin see it.
+#[tokio::test]
+async fn a_ban_takes_the_record_and_the_token_and_the_unban_works_without_them() {
+    let mut node = alpha();
+    node.state = NodeState::Quarantine;
+    node.owner = OwnerId(1);
+    let generation = node.generation;
+    let env = env(pool(vec![node]));
+    let me = owner(&env, "me", 2);
+    assert_eq!(me, OwnerId(1));
+    let enroll_with = enroll_token(&env, me);
+    let node_tok = node_token(&env, "alpha-00001");
+    let admin = token(&env, TokenKind::Admin, None, None);
+
+    let blocked = SensorVote {
+        vote: Vote::Blocked,
+        evidence: json!(null),
+    };
+    env.actor
+        .send(Command::RoundDone {
+            node: node_id("alpha-00001"),
+            generation,
+            votes: vec![
+                (SensorKind::Globalping, blocked.clone()),
+                (SensorKind::Cheburcheck, blocked),
+            ],
+        })
+        .await
+        .unwrap();
+    wait_until_gone(&env, "alpha-00001").await;
+    env.store.flush().unwrap();
+
+    assert_eq!(
+        count(&env, "SELECT count(*) FROM tokens WHERE kind = 'node'"),
+        0
+    );
+    assert_eq!(count(&env, "SELECT count(*) FROM bans"), 1);
+    let beat = post(&env, "/api/v1/agent/heartbeat", ALPHA_IP, &node_tok, None).await;
+    assert_problem(&beat, StatusCode::UNAUTHORIZED, "unauthorized");
+
+    // The pause of the first ban: the agent enrolling at once does not reach the sensors.
+    let early = enroll(&env, &enroll_with, ALPHA_IP, "alpha").await;
+    assert_eq!(
+        early.status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "{}",
+        early.body
+    );
+    assert_eq!(node_count(&env).await, 0);
+
+    let lifted = post(
+        &env,
+        "/api/v1/admin/nodes/alpha-00001/unban",
+        PEER_ADMIN,
+        &admin,
+        None,
+    )
+    .await;
+    assert_eq!(lifted.status, StatusCode::OK, "{}", lifted.body);
+    let blocks = env.actor.inspect(|s| s.blocks.len()).await.unwrap();
+    assert_eq!(blocks, 0);
+
+    let back = enroll(&env, &enroll_with, ALPHA_IP, "alpha").await;
+    assert_eq!(back.status, StatusCode::OK, "{}", back.body);
+    let again = post(
+        &env,
+        "/api/v1/admin/nodes/alpha-00001/unban",
+        PEER_ADMIN,
+        &admin,
+        None,
+    )
+    .await;
+    assert_problem(&again, StatusCode::NOT_FOUND, "not_found");
+}
+
+async fn wait_until_gone(env: &Env, name: &str) {
+    for _ in 0..200 {
+        if node_of(env, name).await.is_none() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{name} still has a record");
 }
 
 #[tokio::test]
