@@ -1,9 +1,10 @@
 //! The Globalping loop. From time to time the node asks Globalping to open its proxy port from
 //! Russian eyeball networks and hands the id of the measurement to the report. The agent does
 //! not read the result: the registrar fetches the measurement by its id and judges it itself.
-//! No token is sent, the anonymous limit is enough.
+//! No token is sent, the anonymous limit is enough. That limit is counted by address, and for
+//! IPv6 by the whole /64, which neighbouring nodes share, so the API is reached over IPv4 only.
 
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -85,6 +86,7 @@ impl GpLoop {
             .timeout(REQUEST_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
+            .local_address(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
             .build()?;
         Ok(GpLoop {
             inner: Arc::new(Inner {
