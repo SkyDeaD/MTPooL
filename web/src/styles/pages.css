@@ -88,6 +88,10 @@ a.card.m:hover{border-color:var(--acc);background:var(--acc-t2)}
 .sr0{fill:var(--c0);background:var(--c0)!important}.sr1{fill:var(--c1);background:var(--c1)!important}.sr2{fill:var(--c2);background:var(--c2)!important}.sr3{fill:var(--c3);background:var(--c3)!important}.sr4{fill:var(--c4);background:var(--c4)!important}
 .ccs .mk{stroke:var(--fg3);stroke-width:1;stroke-dasharray:2 3;opacity:.7}
 .ccs .mk.bad{stroke:var(--bad);opacity:1}.ccs .mk.warn{stroke:var(--warn);opacity:1}
+.mlg{display:flex;flex-wrap:wrap;gap:4px 14px;color:var(--fg2)}
+.mlg span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.mlg i{display:inline-block;width:0;height:12px;border-left:1px dashed var(--fg3)}
+.mlg i.warn{border-color:var(--warn)}.mlg i.bad{border-color:var(--bad)}
 .ccs .cross{stroke:var(--fg2);stroke-width:1}
 .ccs .cdot{fill:var(--acc);stroke:var(--surf);stroke-width:2}
 .ccs .head{fill:var(--acc);stroke:var(--surf);stroke-width:2}

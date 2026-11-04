@@ -1,9 +1,9 @@
 <script lang="ts">
   import { t } from '../lib/i18n';
-  import { clock, whyText } from '../lib/model';
+  import { whyText } from '../lib/model';
 
   // What put a node in quarantine and what happens next, on the page of the node.
-  let { reasons, nextRound }: { reasons: readonly string[]; nextRound: number | null } = $props();
+  let { reasons }: { reasons: readonly string[] } = $props();
   const why = $derived(whyText(reasons));
 </script>
 
@@ -15,9 +15,6 @@
     {:else}
       <p class="qwhy">{t('quarantine.unknown')}</p>
     {/if}
-    <p class="muted sm">
-      {t('quarantine.next')}
-      {#if nextRound !== null && nextRound > 0}{t('quarantine.nextRound', { time: clock(nextRound) })}{/if}
-    </p>
+    <p class="muted sm">{t('quarantine.next')}</p>
   </div>
 </section>

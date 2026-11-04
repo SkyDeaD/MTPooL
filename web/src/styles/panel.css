@@ -148,7 +148,9 @@ pre.code { margin: 0; padding: 12px 14px; background: var(--surf2); border: 1px 
 .dlg h2 { margin: 0; padding: 16px 16px 4px; font-size: 16px; }
 .dlg .body { padding: 8px 16px 16px; display: grid; gap: 12px; }
 .dlg .ff { justify-content: flex-end; }
-.sel-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; }
+.sel-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 34px; padding: 6px 10px; font: inherit; font-size: 13.5px; color: var(--fg); background: var(--surf); border: 1px solid var(--line2); border-radius: var(--r2); cursor: pointer; }
+.sel-trigger:hover { background: var(--surf2); }
+.th .sel-trigger { width: auto; min-width: 170px; }
 .sel-list { z-index: 60; padding: 4px; background: var(--surf); border: 1px solid var(--line2); border-radius: var(--r2); min-width: var(--bits-select-anchor-width, 160px); }
 .sel-list [role='option'] { padding: 8px 10px; border-radius: var(--r3); cursor: pointer; font-size: 13.5px; }
 .sel-list [role='option'][data-highlighted] { background: var(--surf2); }

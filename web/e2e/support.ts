@@ -5,7 +5,7 @@ import { expect, type Page } from '@playwright/test';
 import { Agent, type SimNode } from './stand/agent.ts';
 
 export const THEMES = ['light', 'dark'] as const;
-export const WIDTHS = [360, 768, 1440] as const;
+export const WIDTHS = [360, 375, 768, 1440] as const;
 export type Theme = (typeof THEMES)[number];
 
 export interface Roster {
@@ -103,6 +103,27 @@ export async function expectNoSidewaysScroll(page: Page): Promise<void> {
   });
   expect(over.scroll, `the page is wider (${over.scroll}) than the window (${over.client})`).toBeLessThanOrEqual(over.client);
   expect(over.body).toBeLessThanOrEqual(over.client);
+}
+
+/** No two pieces of text of the chart header sit on top of each other. */
+export async function expectNoOverlap(page: Page, selector: string): Promise<void> {
+  const clashes = await page.evaluate((sel) => {
+    const out: string[] = [];
+    for (const box of document.querySelectorAll(sel)) {
+      const kids = [...box.children].map((el) => ({ text: el.textContent ?? '', r: el.getBoundingClientRect() }));
+      for (let i = 0; i < kids.length; i++) {
+        for (let j = i + 1; j < kids.length; j++) {
+          const a = kids[i].r;
+          const b = kids[j].r;
+          if (a.width && b.width && a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1) {
+            out.push(`"${kids[i].text}" and "${kids[j].text}"`);
+          }
+        }
+      }
+    }
+    return out;
+  }, selector);
+  expect(clashes, `overlapping text in ${selector}`).toEqual([]);
 }
 
 export async function expectNoAxeViolations(page: Page, label: string): Promise<void> {

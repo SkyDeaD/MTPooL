@@ -1,21 +1,83 @@
 [
   {
-    "id": 9,
+    "id": 14,
     "at": "2026-11-04T11:55:00Z",
     "kind": "sensor_round",
     "node": "theta-m1d7z",
     "detail": {
-      "verdict": "undecided"
+      "verdict": "undecided",
+      "votes": [
+        {
+          "sensor": "globalping",
+          "vote": "blocked"
+        },
+        {
+          "sensor": "cheburcheck",
+          "vote": {
+            "abstain": "unavailable"
+          }
+        },
+        {
+          "sensor": "redflag",
+          "vote": {
+            "abstain": "not_configured"
+          }
+        }
+      ]
     }
   },
   {
-    "id": 8,
+    "id": 13,
+    "at": "2026-11-04T11:40:00Z",
+    "kind": "node_quarantined",
+    "node": "theta-m1d7z",
+    "detail": {
+      "reason": [
+        "metrics",
+        "globalping"
+      ]
+    }
+  },
+  {
+    "id": 12,
     "at": "2026-11-04T10:30:00Z",
     "kind": "master_changed",
     "node": "alpha-k3m2q",
     "domain": "proxy1.example.com",
     "detail": {
-      "from": "beta-r8t4w"
+      "added": "alpha-k3m2q",
+      "removed": "beta-r8t4w"
+    }
+  },
+  {
+    "id": 11,
+    "at": "2026-11-04T09:30:00Z",
+    "kind": "node_ip_changed",
+    "node": "zeta-w9b3y",
+    "detail": {
+      "from": "203.0.113.91",
+      "to": "203.0.113.15"
+    }
+  },
+  {
+    "id": 10,
+    "at": "2026-11-04T09:10:00Z",
+    "kind": "node_registered",
+    "node": "eta-c5f8l",
+    "detail": {
+      "reverify": false,
+      "replaced": "mu-a1b2c",
+      "ip": "203.0.113.16"
+    }
+  },
+  {
+    "id": 9,
+    "at": "2026-11-04T09:10:00Z",
+    "kind": "node_dead",
+    "node": "mu-a1b2c",
+    "detail": {
+      "replaced_by": "eta-c5f8l",
+      "reason": "silent"
     }
   },
   {
@@ -24,7 +86,16 @@
     "kind": "node_banned",
     "node": "iota-p6q1c",
     "detail": {
-      "votes": 2
+      "votes": [
+        {
+          "sensor": "globalping",
+          "vote": "blocked"
+        },
+        {
+          "sensor": "cheburcheck",
+          "vote": "blocked"
+        }
+      ]
     }
   },
   {
@@ -33,7 +104,11 @@
     "kind": "dns_applied",
     "domain": "proxy1.example.com",
     "detail": {
-      "records": 2
+      "records": 2,
+      "addresses": [
+        "203.0.113.11",
+        "203.0.113.12"
+      ]
     }
   },
   {
@@ -41,6 +116,8 @@
     "at": "2026-11-03T22:00:00Z",
     "kind": "node_dead",
     "node": "lambda-z0s5f",
-    "detail": {}
+    "detail": {
+      "reason": "unreachable"
+    }
   }
 ]

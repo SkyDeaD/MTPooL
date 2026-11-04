@@ -69,9 +69,9 @@
     const blocked = n.last_round?.votes.filter((v) => v.vote === 'blocked').length ?? 0;
     const left = secondsUntil(n.next_round_at, clock.ms);
     const next = left !== null && left > 0 ? t('panel.overview.nextRound', { span: formatSpan(left) }) : '';
-    const failed = n.failed.length ? whyText(n.failed) : '';
-    const why = blocked === 1 ? t('panel.overview.oneVote') : failed && `${failed[0].toUpperCase()}${failed.slice(1)}.`;
-    return [why, next].filter(Boolean).join(' ');
+    const failed = whyText(n.quarantine_reasons?.length ? n.quarantine_reasons : n.failed);
+    const why = failed && `${failed[0].toUpperCase()}${failed.slice(1)}.`;
+    return [why, blocked === 1 ? t('panel.overview.oneVote') : '', next].filter(Boolean).join(' ');
   }
   const stale = $derived(data.nodes.stale || data.status.stale || domains.stale);
 </script>

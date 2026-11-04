@@ -221,7 +221,8 @@
     if (nowTotal === null) return '';
     const from = pts.find((p) => p.at >= lastAt - SPAN_MS[range]) ?? pts[0];
     const d = nowTotal - from.total;
-    return `${d > 0 ? '+' : d < 0 ? '−' : ''}${formatNumber(Math.abs(d))} ${t(`clients.of.${range}`)}`;
+    if (d === 0) return `${t('clients.same')} ${t(`clients.of.${range}`)}`;
+    return `${d > 0 ? '+' : '−'}${formatNumber(Math.abs(d))} ${t(`clients.of.${range}`)}`;
   });
 
   // Where the pointer is, the nearest point.
@@ -375,7 +376,11 @@
       </div>
     {/if}
     <div class="cft">
-      <span class="faint xs">{t('clients.footer')}</span>
+      <div class="mlg xs">
+        <span><i></i>{t('clients.mark.master_change')}</span>
+        <span><i class="warn"></i>{t('clients.mark.fold')}</span>
+        <span><i class="bad"></i>{t('clients.mark.ban')}</span>
+      </div>
       <details class="cct">
         <summary class="xs"><Icon name="chev" cls="chev" />{t('clients.table')}</summary>
         {#if tableRows.length > 0}

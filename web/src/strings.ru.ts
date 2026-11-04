@@ -76,7 +76,6 @@ export const messages = {
   'quarantine.title': 'Почему нода в карантине',
   'quarantine.unknown': 'Причина не записана: нода попала в карантин до обновления пула.',
   'quarantine.next': 'Нода вернётся в работу, когда причина исчезнет и проверки подтвердят, что адрес доступен.',
-  'quarantine.nextRound': 'Следующая проверка через {time}.',
 
   // Node cells
   'node.state.healthy': 'Работает',
@@ -127,7 +126,7 @@ export const messages = {
   'clients.mark.master_change': 'Смена мастера',
   'clients.mark.fold': 'Домен свёрнут',
   'clients.mark.ban': 'Нода забанена',
-  'clients.footer': 'Линии: смены мастера, сворачивание, блокировки',
+  'clients.same': 'без изменений',
   'clients.table': 'Показать таблицей',
   'clients.col.when': 'Время',
   'clients.col.clients': 'Клиентов',

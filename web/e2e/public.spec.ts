@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { expectNoAxeViolations, expectNoSidewaysScroll, settled, stand, THEMES, useTheme, watchExternal, WIDTHS } from './support.ts';
+import { expectNoAxeViolations, expectNoOverlap, expectNoSidewaysScroll, settled, stand, THEMES, useTheme, watchExternal, WIDTHS } from './support.ts';
 
 // The public pages, from a real registrar: every page in both themes at three widths. Each one
 // must fit the window, ask no other host for anything, and pass axe at WCAG AA.
@@ -23,6 +23,7 @@ for (const page of PAGES) {
         await settled(tab);
         await expect(tab.locator('html')).toHaveAttribute('data-theme', theme);
         await expectNoSidewaysScroll(tab);
+        await expectNoOverlap(tab, '.chv');
         await expectNoAxeViolations(tab, `${page.name} ${theme} ${width}`);
         expect(external, 'requests to other hosts').toEqual([]);
       });

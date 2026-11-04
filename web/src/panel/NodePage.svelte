@@ -108,7 +108,7 @@
         </section>
       </div>
 
-      {#if n.state === 'quarantine'}<QuarantineNote reasons={n.quarantine_reasons ?? []} nextRound={round} />{/if}
+      {#if n.state === 'quarantine'}<QuarantineNote reasons={n.quarantine_reasons?.length ? n.quarantine_reasons : n.failed} />{/if}
 
       {#if n.last_round}
         <section class="t">
