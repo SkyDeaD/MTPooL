@@ -105,7 +105,7 @@ pub async fn list_nodes(State(app): State<AppState>, headers: HeaderMap) -> Resp
     params(("id" = String, Path, description = "Node id", example = "alpha-a1b2c")),
     responses(
         (status = 200, description = "The node with its latest sensor round", body = PublicNode),
-        (status = 404, description = "No such node", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "No such node. A banned node has no record, see /api/v1/bans", body = Problem, content_type = "application/problem+json"),
         (status = 429, description = "Too many requests", body = Problem, content_type = "application/problem+json",
             headers(("Retry-After" = u64, description = "Seconds until the limit window ends"))),
     )
@@ -139,7 +139,7 @@ const HISTORY_BUCKETS: i64 = 96;
     params(("id" = String, Path, description = "Node id", example = "alpha-a1b2c")),
     responses(
         (status = 200, description = "The last 96 buckets of 15 minutes that have samples, oldest first", body = NodeHistory),
-        (status = 404, description = "No such node", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "No such node. A banned node has no record, see /api/v1/bans", body = Problem, content_type = "application/problem+json"),
         (status = 429, description = "Too many requests", body = Problem, content_type = "application/problem+json",
             headers(("Retry-After" = u64, description = "Seconds until the limit window ends"))),
     )

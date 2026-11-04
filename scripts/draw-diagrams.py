@@ -169,7 +169,7 @@ def lifecycle(theme):
     c.arrow([(760, 104), (565, 104)])
     c.label(662, 132, "снова в норме")
     # A node leaves quarantine down to one of three outcomes.
-    c.box(30, 300, 170, 90, "Banned", "IP заблокирован", tone="bad")
+    c.box(30, 300, 170, 90, "Banned", "запись удалена", tone="bad")
     c.box(395, 300, 170, 90, "Dead", "не отвечает")
     c.box(760, 300, 170, 90, "Pruned", "нет решения")
     c.arrow([(845, 130), (845, 300)])
@@ -179,7 +179,7 @@ def lifecycle(theme):
     c.label(494, 240, ["не жива", "10 минут"], anchor="start")
     c.label(831, 240, ["нет решения", "60 минут"], anchor="end")
     c.arrow([(70, 300), (70, 130)])
-    c.label(84, 162, ["reverify", "или разбан"], anchor="start")
+    c.label(84, 162, ["регистрация после", "reverify или разбана"], anchor="start")
     return c.svg()
 
 

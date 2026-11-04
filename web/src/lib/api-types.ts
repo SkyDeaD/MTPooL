@@ -4405,7 +4405,7 @@ export interface operations {
                     "application/json": components["schemas"]["PublicNode"];
                 };
             };
-            /** @description No such node */
+            /** @description No such node. A banned node has no record, see /api/v1/bans */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -4451,7 +4451,7 @@ export interface operations {
                     "application/json": components["schemas"]["NodeHistory"];
                 };
             };
-            /** @description No such node */
+            /** @description No such node. A banned node has no record, see /api/v1/bans */
             404: {
                 headers: {
                     [name: string]: unknown;

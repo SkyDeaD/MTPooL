@@ -3423,7 +3423,7 @@
             }
           },
           "404": {
-            "description": "No such node",
+            "description": "No such node. A banned node has no record, see /api/v1/bans",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3485,7 +3485,7 @@
             }
           },
           "404": {
-            "description": "No such node",
+            "description": "No such node. A banned node has no record, see /api/v1/bans",
             "content": {
               "application/problem+json": {
                 "schema": {
