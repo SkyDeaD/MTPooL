@@ -16,21 +16,136 @@ concurrency:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  stand:
+  # The images take most of the time of a stand that has to build them, and the jobs below would
+  # each build them from nothing. They are built once and handed over with the key they embed.
+  images:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: e2e
+      - name: Every scenario has a job
+        run: |
+          cargo test -p mtpool-e2e --locked --tests --no-run
+          if ! diff \
+            <(cargo test -p mtpool-e2e --locked --tests -- --ignored --list --format terse | sed -n 's/: test$//p' | sort) \
+            <(yq '.jobs.stand.strategy.matrix.include[].tests' .github/workflows/e2e.yml | tr ' ' '\n' | sort); then
+            echo "::error::The scenarios on the left are not in the matrix of e2e.yml, those on the right do not exist"
+            exit 1
+          fi
+      - name: Build the images
+        run: |
+          cargo run -p mtpool-e2e --locked --example test-key
+          docker compose -f e2e/compose.yml --profile fresh build
+      - name: Pack the images and the key
+        run: |
+          mkdir -p e2e-images
+          docker save mtpool-e2e-registrar:local mtpool-e2e-node:local mtpool-e2e-fresh:local \
+            | zstd -T0 > e2e-images/images.tar.zst
+          cp e2e/keys/minisign.pub e2e/keys/minisign.key e2e-images/
+          ls -l e2e-images
+      # The secret half goes along because the scenarios sign releases with it. It is made for this
+      # run, and only the images of this run trust it.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-images
+          path: e2e-images
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+          overwrite: true
+
+  stand:
+    name: stand ${{ matrix.shard }}
+    needs: images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      # One stand of three systemd nodes is all a runner takes, and the scenarios are sensitive to
+      # time: each job runs them one by one. The jobs are balanced by the time the scenarios took
+      # on a green run; the job `images` fails if a scenario is in none of them.
+      matrix:
+        include:
+          - shard: "1"
+            tests: >-
+              all_sensors_down_no_ban_then_pruned
+              token_file_option_works
+          - shard: "2"
+            tests: >-
+              release_rolls_through_canary_and_batches_and_stops_on_failure
+              preset_telemt_installs_engine
+          - shard: "3"
+            tests: >-
+              registrar_updates_and_rolls_back_when_readyz_fails_60s
+              preset_mtproxyl_installs_engine
+              bad_signature_release_rejected
+          - shard: "4"
+            tests: >-
+              restart_under_load_no_false_deaths
+              one_vote_no_ban_two_votes_ban
+              token_not_visible_in_ps
+              install_rejects_bad_signature
+          - shard: "5"
+            tests: >-
+              agent_idles_under_20_mb_and_the_binary_is_under_15_mb
+              reverify_clean_lifts_dirty_keeps
+              registrar_installer_on_fresh_ubuntu
+          - shard: "6"
+            tests: >-
+              cloudflare_down_selection_continues_dns_recovers
+              backup_then_restore_equal_state
+              node_enrolls_becomes_master_and_dns_points_to_it
+              units_pass_systemd_analyze_verify
+          - shard: "7"
+            tests: >-
+              stopped_engine_dead_not_banned
+              gp_403_with_tls_healthy
+              cheburcheck_fast_flag_alone_no_vote
+          - shard: "8"
+            tests: >-
+              network_loss_via_netem_recovers
+              traffic_counters_reach_dashboard
+              db_write_error_visible_in_readyz
+              install_rejects_port_mismatch
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: e2e
+          save-if: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: e2e-images
+          path: e2e-images
+      - name: Load the images and the key
+        run: |
+          zstd -dc e2e-images/images.tar.zst | docker load
+          mkdir -p e2e/keys
+          mv e2e-images/minisign.pub e2e-images/minisign.key e2e/keys/
+          rm -r e2e-images
       - name: Run the scenarios
         # Each scenario brings its own stand up and takes it down; a failed one prints the logs
-        # of its services. The test key and the images are made by the first stand.
+        # of its services.
+        env:
+          MTPOOL_E2E_PREBUILT: "1"
+          TESTS: ${{ matrix.tests }}
         run: |
-          cargo test -p mtpool-e2e --locked --test smoke --test scenarios --test operations --test rollout --test footprint -- --ignored --nocapture --test-threads=1
+          # shellcheck disable=SC2086 # the names are separated by spaces
+          cargo test -p mtpool-e2e --locked --tests --no-fail-fast -- --ignored --nocapture --test-threads=1 --exact $TESTS
       - name: Collect the logs of the stand
         if: failure()
         run: |
@@ -41,9 +156,10 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
-          name: e2e-logs
+          name: e2e-logs-${{ matrix.shard }}
           path: e2e-logs
           if-no-files-found: ignore
+          overwrite: true
       - name: Take the stand down
         if: always()
         run: |

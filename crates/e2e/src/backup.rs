@@ -77,7 +77,7 @@ impl Stand {
                 "fresh",
                 "up",
                 "-d",
-                "--build",
+                crate::build_flag(),
                 "--wait",
                 "--no-deps",
                 "registrar-fresh",
