@@ -146,24 +146,7 @@ jobs:
           test -f "$MTPOOL_MINISIGN_PUB_FILE" || { echo "::error::$MTPOOL_MINISIGN_PUB_FILE is missing; the binaries could not verify an update."; exit 1; }
           test -f web/dist/index.html || { echo "::error::web/dist/index.html is missing; the registrar would ship without its UI."; exit 1; }
       - name: Stamp the version
-        # The binaries report CARGO_PKG_VERSION and the updater compares it with the manifest, so
-        # the workspace version must be the released one. Cargo.lock is changed to match, which
-        # keeps --locked working.
-        run: |
-          set -euo pipefail
-          sed -i -e "1,/^version = \"[^\"]*\"/ s/^version = \"[^\"]*\"/version = \"$VERSION\"/" Cargo.toml
-          awk -v v="$VERSION" '
-            /^name = "mtpool-/ { mine = 1; print; next }
-            /^name = / { mine = 0 }
-            mine && /^version = / { print "version = \"" v "\""; mine = 0; next }
-            { print }
-          ' Cargo.lock > Cargo.lock.new
-          mv Cargo.lock.new Cargo.lock
-          grep -m1 '^version = ' Cargo.toml
-          if grep -A1 '^name = "mtpool-' Cargo.lock | grep '^version = ' | grep -v "\"$VERSION\""; then
-            echo "::error::Cargo.lock still has a workspace crate at another version."
-            exit 1
-          fi
+        run: bash scripts/stamp-version.sh "$VERSION"
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.15.2
@@ -223,6 +206,8 @@ jobs:
       - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: cargo-cyclonedx@0.5.9
+      - name: Stamp the version
+        run: bash scripts/stamp-version.sh "$VERSION"
       - name: One bill of materials for both binaries
         run: |
           set -euo pipefail
