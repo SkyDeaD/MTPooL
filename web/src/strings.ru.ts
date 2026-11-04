@@ -45,6 +45,7 @@ export const messages = {
   'vote.clear': 'Доступна',
   'vote.abstain': 'Воздержался',
   'vote.reason.not_configured': 'сенсор не настроен',
+  'vote.reason.key_rejected': 'ключ не принят',
   'vote.reason.unavailable': 'сервис недоступен',
   'vote.reason.rate_limited': 'исчерпан лимит запросов',
   'vote.reason.timeout': 'сервис не ответил вовремя',

@@ -73,4 +73,5 @@
 
 - Панель, раздел статуса (`GET /api/v1/admin/status`): состояние внешних сервисов, DNS и счётчики за сутки и неделю.
 - Страница ноды: голоса последнего раунда с причинами `Abstain`.
-- Причина `not_configured` у голоса `abstain` означает, что ключ сенсора не задан. Другие причины: `unavailable`, `rate_limited`, `timeout`, `unknown_answer`, `no_data`.
+- Замера Globalping нет: строка `no Globalping measurement` с причиной в журнале агента и регистратора.
+- Причина `not_configured` у голоса `abstain` означает, что ключ сенсора не задан. Причина `key_rejected` означает, что сервис не принял ключ (RedFlag ответил 401 или 403). Другие причины: `unavailable`, `rate_limited`, `timeout`, `unknown_answer`, `no_data`.

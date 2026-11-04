@@ -16,6 +16,8 @@ pub enum SensorKind {
 #[serde(rename_all = "snake_case")]
 pub enum AbstainReason {
     NotConfigured,
+    /// The service does not accept the key of the pool.
+    KeyRejected,
     Unavailable,
     RateLimited,
     Timeout,
@@ -146,6 +148,7 @@ mod tests {
     fn every_abstain_reason_is_neutral() {
         for reason in [
             AbstainReason::NotConfigured,
+            AbstainReason::KeyRejected,
             AbstainReason::Unavailable,
             AbstainReason::RateLimited,
             AbstainReason::Timeout,

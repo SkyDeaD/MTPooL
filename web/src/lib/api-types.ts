@@ -1218,8 +1218,8 @@ export interface components {
         };
         LastVote: {
             /**
-             * @description Why the sensor abstained: `not_configured`, `unavailable`, `rate_limited`, `timeout`,
-             *     `unknown_answer` or `no_data`. Only for `abstain`.
+             * @description Why the sensor abstained: `not_configured`, `key_rejected`, `unavailable`, `rate_limited`,
+             *     `timeout`, `unknown_answer` or `no_data`. Only for `abstain`.
              */
             reason?: string | null;
             /** @example globalping */

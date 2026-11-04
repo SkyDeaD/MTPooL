@@ -114,10 +114,11 @@ async fn the_recorded_down_answer_abstains_and_keeps_the_documented_fields() {
 }
 
 #[tokio::test]
-async fn the_recorded_unauthorized_answer_abstains_as_unavailable() {
+async fn the_recorded_unauthorized_answer_says_the_key_was_rejected() {
     let server = serve(401, UNAUTHORIZED).await;
     let vote = sensor_for(&server).vote(&target()).await;
-    assert_eq!(vote.vote, Vote::Abstain(AbstainReason::Unavailable));
+    assert_eq!(vote.vote, Vote::Abstain(AbstainReason::KeyRejected));
+    assert_eq!(vote.evidence["reason"], "key_rejected");
     assert_eq!(vote.evidence["http_status"], 401);
     // The words of the answer are not copied into the evidence.
     assert!(!vote.evidence.to_string().contains("X-API-Key"));
@@ -216,8 +217,8 @@ async fn nothing_but_the_ip_port_and_secret_is_sent() {
 #[tokio::test]
 async fn codes_401_403_429_502_503_abstain() {
     let cases = [
-        (401, AbstainReason::Unavailable),
-        (403, AbstainReason::Unavailable),
+        (401, AbstainReason::KeyRejected),
+        (403, AbstainReason::KeyRejected),
         (429, AbstainReason::RateLimited),
         (502, AbstainReason::Unavailable),
         (503, AbstainReason::Unavailable),
