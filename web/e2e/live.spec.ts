@@ -59,3 +59,25 @@ test('live: the numbers of a node reach its public page within one tick', async 
     await stand.admin(`/nodes/${node.id}/retire`, { method: 'POST', body: {} });
   }
 });
+
+// A refused stream ends for good in the browser: only the page itself can ask again.
+test('live: a page refused the stream keeps working and asks again later', async ({ page }) => {
+  let asked = 0;
+  await page.route('**/api/v1/stream', (route) => {
+    asked += 1;
+    return asked === 1
+      ? route.fulfill({
+          status: 429,
+          contentType: 'application/problem+json',
+          headers: { 'retry-after': '60' },
+          body: '{"type":"about:blank","title":"Too many requests","status":429,"code":"rate_limited","detail":"later"}',
+        })
+      : route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'retry: 600000\n\n' });
+  });
+  await page.clock.install();
+  await page.goto('/');
+  await expect(page.getByText(/Нод в работе/).first()).toBeVisible();
+  await expect.poll(() => asked).toBe(1);
+  await page.clock.runFor(61_000);
+  await expect.poll(() => asked, { timeout: 5000 }).toBeGreaterThanOrEqual(2);
+});

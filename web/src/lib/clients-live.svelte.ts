@@ -29,11 +29,25 @@ export function useClientsLive(onchanged?: () => void, source?: typeof EventSour
     let reopening: ReturnType<typeof setTimeout> | undefined;
     let reading: ReturnType<typeof setTimeout> | undefined;
     let lastRead: number | null = null;
+    // A change came and the tab was hidden before the page read it.
+    let owed = false;
+
+    const scheduleRead = () => {
+      if (!onchanged || reading !== undefined) return;
+      reading = setTimeout(() => {
+        reading = undefined;
+        lastRead = Date.now();
+        onchanged();
+      }, readDelay(Date.now(), lastRead, Math.random()));
+    };
 
     const close = () => {
       clearTimeout(reopening);
-      clearTimeout(reading);
-      reading = undefined;
+      if (reading !== undefined) {
+        clearTimeout(reading);
+        reading = undefined;
+        owed = true;
+      }
       stream?.close();
       stream = null;
       connected = false;
@@ -62,14 +76,11 @@ export function useClientsLive(onchanged?: () => void, source?: typeof EventSour
         at = Date.now();
         connected = true;
       });
-      next.addEventListener('changed', () => {
-        if (!onchanged || reading !== undefined) return;
-        reading = setTimeout(() => {
-          reading = undefined;
-          lastRead = Date.now();
-          onchanged();
-        }, readDelay(Date.now(), lastRead, Math.random()));
-      });
+      next.addEventListener('changed', scheduleRead);
+      if (owed) {
+        owed = false;
+        scheduleRead();
+      }
     };
     const onVisibility = () => (document.hidden ? close() : open());
 
