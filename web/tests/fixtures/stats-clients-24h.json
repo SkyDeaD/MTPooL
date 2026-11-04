@@ -1,0 +1,400 @@
+{
+  "range": "24h",
+  "step_sec": 1800,
+  "points": [
+    {
+      "at": "2026-11-03T12:00:00Z",
+      "total": 217,
+      "domains": {
+        "proxy1.example.com": 150,
+        "proxy2.example.com": 67
+      }
+    },
+    {
+      "at": "2026-11-03T12:30:00Z",
+      "total": 224,
+      "domains": {
+        "proxy1.example.com": 157,
+        "proxy2.example.com": 67
+      }
+    },
+    {
+      "at": "2026-11-03T13:00:00Z",
+      "total": 229,
+      "domains": {
+        "proxy1.example.com": 163,
+        "proxy2.example.com": 66
+      }
+    },
+    {
+      "at": "2026-11-03T13:30:00Z",
+      "total": 233,
+      "domains": {
+        "proxy1.example.com": 168,
+        "proxy2.example.com": 65
+      }
+    },
+    {
+      "at": "2026-11-03T14:00:00Z",
+      "total": 235,
+      "domains": {
+        "proxy1.example.com": 170,
+        "proxy2.example.com": 64
+      }
+    },
+    {
+      "at": "2026-11-03T14:30:00Z",
+      "total": 234,
+      "domains": {
+        "proxy1.example.com": 171,
+        "proxy2.example.com": 63
+      }
+    },
+    {
+      "at": "2026-11-03T15:00:00Z",
+      "total": 231,
+      "domains": {
+        "proxy1.example.com": 170,
+        "proxy2.example.com": 61
+      }
+    },
+    {
+      "at": "2026-11-03T15:30:00Z",
+      "total": 226,
+      "domains": {
+        "proxy1.example.com": 166,
+        "proxy2.example.com": 60
+      }
+    },
+    {
+      "at": "2026-11-03T16:00:00Z",
+      "total": 220,
+      "domains": {
+        "proxy1.example.com": 161,
+        "proxy2.example.com": 59
+      }
+    },
+    {
+      "at": "2026-11-03T16:30:00Z",
+      "total": 212,
+      "domains": {
+        "proxy1.example.com": 155,
+        "proxy2.example.com": 57
+      }
+    },
+    {
+      "at": "2026-11-03T17:00:00Z",
+      "total": 205,
+      "domains": {
+        "proxy1.example.com": 149,
+        "proxy2.example.com": 56
+      }
+    },
+    {
+      "at": "2026-11-03T17:30:00Z",
+      "total": 198,
+      "domains": {
+        "proxy1.example.com": 143,
+        "proxy2.example.com": 55
+      }
+    },
+    {
+      "at": "2026-11-03T18:00:00Z",
+      "total": 193,
+      "domains": {
+        "proxy1.example.com": 138,
+        "proxy2.example.com": 55
+      }
+    },
+    {
+      "at": "2026-11-03T18:30:00Z",
+      "total": 190,
+      "domains": {
+        "proxy1.example.com": 135,
+        "proxy2.example.com": 55
+      }
+    },
+    {
+      "at": "2026-11-03T19:00:00Z",
+      "total": 189,
+      "domains": {
+        "proxy1.example.com": 134,
+        "proxy2.example.com": 55
+      }
+    },
+    {
+      "at": "2026-11-03T19:30:00Z",
+      "total": 191,
+      "domains": {
+        "proxy1.example.com": 135,
+        "proxy2.example.com": 56
+      }
+    },
+    {
+      "at": "2026-11-03T20:00:00Z",
+      "total": 195,
+      "domains": {
+        "proxy1.example.com": 138,
+        "proxy2.example.com": 57
+      }
+    },
+    {
+      "at": "2026-11-03T20:30:00Z",
+      "total": 201,
+      "domains": {
+        "proxy1.example.com": 143,
+        "proxy2.example.com": 58
+      }
+    },
+    {
+      "at": "2026-11-03T21:00:00Z",
+      "total": 209,
+      "domains": {
+        "proxy1.example.com": 149,
+        "proxy2.example.com": 60
+      }
+    },
+    {
+      "at": "2026-11-03T21:30:00Z",
+      "total": 217,
+      "domains": {
+        "proxy1.example.com": 156,
+        "proxy2.example.com": 61
+      }
+    },
+    {
+      "at": "2026-11-03T22:00:00Z",
+      "total": 225,
+      "domains": {
+        "proxy1.example.com": 162,
+        "proxy2.example.com": 63
+      }
+    },
+    {
+      "at": "2026-11-03T22:30:00Z",
+      "total": 232,
+      "domains": {
+        "proxy1.example.com": 168,
+        "proxy2.example.com": 64
+      }
+    },
+    {
+      "at": "2026-11-03T23:00:00Z",
+      "total": 238,
+      "domains": {
+        "proxy1.example.com": 173,
+        "proxy2.example.com": 65
+      }
+    },
+    {
+      "at": "2026-11-03T23:30:00Z",
+      "total": 242,
+      "domains": {
+        "proxy1.example.com": 175,
+        "proxy2.example.com": 66
+      }
+    },
+    {
+      "at": "2026-11-04T00:00:00Z",
+      "total": 243,
+      "domains": {
+        "proxy1.example.com": 176,
+        "proxy2.example.com": 67
+      }
+    },
+    {
+      "at": "2026-11-04T00:30:00Z",
+      "total": 241,
+      "domains": {
+        "proxy1.example.com": 174,
+        "proxy2.example.com": 67
+      }
+    },
+    {
+      "at": "2026-11-04T01:00:00Z",
+      "total": 237,
+      "domains": {
+        "proxy1.example.com": 170,
+        "proxy2.example.com": 67
+      }
+    },
+    {
+      "at": "2026-11-04T01:30:00Z",
+      "total": 231,
+      "domains": {
+        "proxy1.example.com": 165,
+        "proxy2.example.com": 66
+      }
+    },
+    {
+      "at": "2026-11-04T02:00:00Z",
+      "total": 224,
+      "domains": {
+        "proxy1.example.com": 159,
+        "proxy2.example.com": 66
+      }
+    },
+    {
+      "at": "2026-11-04T02:30:00Z",
+      "total": 217,
+      "domains": {
+        "proxy1.example.com": 152,
+        "proxy2.example.com": 64
+      }
+    },
+    {
+      "at": "2026-11-04T03:00:00Z",
+      "total": 210,
+      "domains": {
+        "proxy1.example.com": 147,
+        "proxy2.example.com": 63
+      }
+    },
+    {
+      "at": "2026-11-04T03:30:00Z",
+      "total": 204,
+      "domains": {
+        "proxy1.example.com": 142,
+        "proxy2.example.com": 62
+      }
+    },
+    {
+      "at": "2026-11-04T04:00:00Z",
+      "total": 199,
+      "domains": {
+        "proxy1.example.com": 139,
+        "proxy2.example.com": 60
+      }
+    },
+    {
+      "at": "2026-11-04T04:30:00Z",
+      "total": 197,
+      "domains": {
+        "proxy1.example.com": 138,
+        "proxy2.example.com": 59
+      }
+    },
+    {
+      "at": "2026-11-04T05:00:00Z",
+      "total": 197,
+      "domains": {
+        "proxy1.example.com": 140,
+        "proxy2.example.com": 57
+      }
+    },
+    {
+      "at": "2026-11-04T05:30:00Z",
+      "total": 199,
+      "domains": {
+        "proxy1.example.com": 143,
+        "proxy2.example.com": 56
+      }
+    },
+    {
+      "at": "2026-11-04T06:00:00Z",
+      "total": 204,
+      "domains": {
+        "proxy1.example.com": 148,
+        "proxy2.example.com": 56
+      }
+    },
+    {
+      "at": "2026-11-04T06:30:00Z",
+      "total": 210,
+      "domains": {
+        "proxy1.example.com": 155,
+        "proxy2.example.com": 55
+      }
+    },
+    {
+      "at": "2026-11-04T07:00:00Z",
+      "total": 217,
+      "domains": {
+        "proxy1.example.com": 162,
+        "proxy2.example.com": 55
+      }
+    },
+    {
+      "at": "2026-11-04T07:30:00Z",
+      "total": 223,
+      "domains": {
+        "proxy1.example.com": 168,
+        "proxy2.example.com": 55
+      }
+    },
+    {
+      "at": "2026-11-04T08:00:00Z",
+      "total": 230,
+      "domains": {
+        "proxy1.example.com": 174,
+        "proxy2.example.com": 56
+      }
+    },
+    {
+      "at": "2026-11-04T08:30:00Z",
+      "total": 235,
+      "domains": {
+        "proxy1.example.com": 178,
+        "proxy2.example.com": 57
+      }
+    },
+    {
+      "at": "2026-11-04T09:00:00Z",
+      "total": 238,
+      "domains": {
+        "proxy1.example.com": 180,
+        "proxy2.example.com": 58
+      }
+    },
+    {
+      "at": "2026-11-04T09:30:00Z",
+      "total": 240,
+      "domains": {
+        "proxy1.example.com": 180,
+        "proxy2.example.com": 60
+      }
+    },
+    {
+      "at": "2026-11-04T10:00:00Z",
+      "total": 239,
+      "domains": {
+        "proxy1.example.com": 178,
+        "proxy2.example.com": 61
+      }
+    },
+    {
+      "at": "2026-11-04T10:30:00Z",
+      "total": 237,
+      "domains": {
+        "proxy1.example.com": 174,
+        "proxy2.example.com": 63
+      }
+    },
+    {
+      "at": "2026-11-04T11:00:00Z",
+      "total": 233,
+      "domains": {
+        "proxy1.example.com": 169,
+        "proxy2.example.com": 64
+      }
+    },
+    {
+      "at": "2026-11-04T11:30:00Z",
+      "total": 228,
+      "domains": {
+        "proxy1.example.com": 163,
+        "proxy2.example.com": 65
+      }
+    }
+  ],
+  "marks": [
+    {
+      "at": "2026-11-04T00:00:00Z",
+      "kind": "master_change"
+    },
+    {
+      "at": "2026-11-04T06:00:00Z",
+      "kind": "ban"
+    }
+  ]
+}

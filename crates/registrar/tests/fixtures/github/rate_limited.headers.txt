@@ -1,0 +1,7 @@
+HTTP/2 403 
+content-type: application/json; charset=utf-8
+x-ratelimit-limit: 60
+x-ratelimit-remaining: 0
+x-ratelimit-used: 60
+x-ratelimit-resource: core
+x-ratelimit-reset: 1793758723

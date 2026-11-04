@@ -1,0 +1,106 @@
+# The end-to-end stand: the registrar, stand-ins for the services outside the pool, and three
+# systemd nodes with a real telemt. The test harness (crates/e2e) starts it under its own project
+# name. The flags on private addresses and plain http are for this stand only.
+
+x-nodes: &node
+  image: mtpool-e2e-node:local
+  build:
+    context: ..
+    dockerfile: e2e/images/node/Dockerfile
+  privileged: true
+  cgroup: host
+  # /tmp is executable, as on a real Ubuntu: the MTProxyL installer runs the engine it downloaded
+  # from there to check it.
+  tmpfs:
+    - /run
+    - /run/lock
+    - /tmp:exec
+  volumes:
+    - /sys/fs/cgroup:/sys/fs/cgroup:rw
+  stop_signal: SIGRTMIN+3
+  depends_on:
+    registrar:
+      condition: service_healthy
+    fakes:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "systemctl", "is-active", "--quiet", "telemt"]
+    interval: 2s
+    timeout: 3s
+    retries: 30
+
+services:
+  fakes:
+    image: mtpool-e2e-registrar:local
+    build:
+      context: ..
+      dockerfile: e2e/images/registrar/Dockerfile
+    command: ["mtpool-fakes"]
+    environment:
+      MTPOOL_FAKES_LISTEN: 0.0.0.0:9000
+    ports:
+      - "9000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/__state"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  registrar:
+    image: mtpool-e2e-registrar:local
+    build:
+      context: ..
+      dockerfile: e2e/images/registrar/Dockerfile
+    environment:
+      MTPOOL_LISTEN: 0.0.0.0:8080
+      MTPOOL_RELEASES_DIR: /srv/releases
+      MTPOOL_DB_PATH: /var/lib/mtpool/registrar.db
+      MTPOOL_LOG: info
+      MTPOOL_ALLOW_PRIVATE_IPS: "true"
+      MTPOOL_GLOBALPING_URL: http://fakes:9000/globalping/
+      MTPOOL_CHEBURCHECK_URL: http://fakes:9000/cheburcheck/
+      MTPOOL_REDFLAG_URL: http://fakes:9000/redflag/
+      MTPOOL_CLOUDFLARE_URL: http://fakes:9000/cloudflare/
+    # The database is on a volume, so that a restore can run in a second container while the
+    # registrar is stopped. compose.small-db.yml turns the volume into a 2 MB tmpfs.
+    volumes:
+      - registrar-data:/var/lib/mtpool
+    ports:
+      - "8080"
+    depends_on:
+      fakes:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  node1:
+    <<: *node
+  node2:
+    <<: *node
+  node3:
+    <<: *node
+
+  # A bare Ubuntu 24.04 with systemd for the registrar installer. Not started with the rest:
+  # a scenario asks for it by name.
+  registrar-fresh:
+    <<: *node
+    image: mtpool-e2e-fresh:local
+    build:
+      context: ..
+      dockerfile: e2e/images/registrar/Dockerfile
+      target: fresh
+    profiles: ["fresh"]
+    depends_on:
+      registrar:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "systemctl", "is-active", "--quiet", "default.target"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  registrar-data:

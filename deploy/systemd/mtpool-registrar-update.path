@@ -1,0 +1,11 @@
+[Unit]
+Description=MTPooL registrar: a new release was published
+
+[Path]
+# The registrar service publishes a verified release into this directory and writes the manifest
+# last, so this file changing means the whole release is there.
+PathChanged=/var/lib/mtpool/releases/manifest.json
+Unit=mtpool-registrar-update.service
+
+[Install]
+WantedBy=multi-user.target

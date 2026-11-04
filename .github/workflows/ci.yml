@@ -15,9 +15,57 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+
+  web:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: The API types match docs/openapi.json
+        run: npm run gen:api && git diff --exit-code src/lib/api-types.ts
+      - run: npm test
+      - run: npm run build
+      - run: npm run check:budget
+
+  browser:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      # The browser checks build and start a real registrar.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      # The checks start a real registrar (built here) that serves web/dist, and the stand-ins of
+      # the outside services.
+      - name: Browser checks
+        run: npx playwright test
+      - name: Speed on a slow phone
+        run: npm run perf
 
   deny:
     runs-on: ubuntu-24.04
@@ -30,6 +78,16 @@ jobs:
           tool: cargo-deny
       - run: cargo deny --locked check
 
+  shellcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # shellcheck is part of the runner image.
+      - run: shellcheck -s sh deploy/*.sh
+      - run: shellcheck -s bash scripts/*.sh
+
   gitleaks:
     runs-on: ubuntu-24.04
     steps:
@@ -38,3 +96,36 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 detect --source /repo --no-banner --redact
+
+  openapi:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install oasdiff
+        run: |
+          set -euo pipefail
+          file=oasdiff_1.35.0_linux_amd64.tar.gz
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$file" "https://github.com/oasdiff/oasdiff/releases/download/v1.35.0/$file"
+          echo "a8023002fcb2eaa7f5758148a9303cb63d33b939886df312268bc0fc7b939140  $RUNNER_TEMP/$file" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$file" -C "$RUNNER_TEMP" oasdiff
+          sudo install -m 0755 "$RUNNER_TEMP/oasdiff" /usr/local/bin/oasdiff
+      - name: No breaking change against the latest release
+        run: |
+          set -euo pipefail
+          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName // empty')
+          if [ -z "$tag" ]; then
+            echo "No release yet: nothing to compare with."
+            exit 0
+          fi
+          if ! gh api "repos/$GITHUB_REPOSITORY/contents/docs/openapi.json?ref=$tag" -H 'Accept: application/vnd.github.raw' > "$RUNNER_TEMP/base-openapi.json" 2>/dev/null; then
+            echo "$tag has no docs/openapi.json: nothing to compare with."
+            exit 0
+          fi
+          echo "Comparing docs/openapi.json with the one in $tag"
+          oasdiff breaking --fail-on ERR "$RUNNER_TEMP/base-openapi.json" docs/openapi.json

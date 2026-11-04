@@ -1,0 +1,197 @@
+[
+  {
+    "availability_bp": 9987,
+    "checks": {
+      "tcp": true,
+      "metrics": true,
+      "globalping": "ok"
+    },
+    "clients": 142,
+    "domains": [
+      "proxy1.example.com"
+    ],
+    "engine": "telemt",
+    "is_master": true,
+    "last_round": {
+      "at": "2026-11-04T11:50:00Z",
+      "verdict": "clean",
+      "votes": [
+        {
+          "sensor": "globalping",
+          "vote": "clear"
+        },
+        {
+          "sensor": "cheburcheck",
+          "vote": "clear"
+        },
+        {
+          "sensor": "redflag",
+          "vote": "abstain",
+          "reason": "not_configured"
+        }
+      ]
+    },
+    "next_round_at": null,
+    "port": 443,
+    "queue_position": null,
+    "registered_at": "2026-09-25T12:00:00Z",
+    "master_since": "2026-11-04T10:30:00Z",
+    "rotates_at": "2026-11-04T12:12:34Z",
+    "state": "healthy",
+    "state_since": "2026-10-30T12:00:00Z",
+    "id": "alpha-k3m2q",
+    "ip": "203.x.x.11"
+  },
+  {
+    "availability_bp": 9941,
+    "checks": {
+      "tcp": true,
+      "metrics": true,
+      "globalping": "ok"
+    },
+    "clients": 96,
+    "domains": [
+      "proxy1.example.com"
+    ],
+    "engine": "mt_proxy_l",
+    "is_master": true,
+    "last_round": null,
+    "next_round_at": null,
+    "port": 443,
+    "queue_position": null,
+    "registered_at": "2026-09-25T12:00:00Z",
+    "master_since": "2026-11-04T10:50:00Z",
+    "rotates_at": "2026-11-04T12:36:50Z",
+    "state": "healthy",
+    "state_since": "2026-10-30T12:00:00Z",
+    "id": "beta-r8t4w",
+    "ip": "203.x.x.12"
+  },
+  {
+    "availability_bp": 9902,
+    "checks": {
+      "tcp": true,
+      "metrics": true,
+      "globalping": "ok"
+    },
+    "clients": 61,
+    "domains": [
+      "proxy2.example.com"
+    ],
+    "engine": "meko",
+    "is_master": true,
+    "last_round": null,
+    "next_round_at": null,
+    "port": 443,
+    "queue_position": null,
+    "registered_at": "2026-09-25T12:00:00Z",
+    "master_since": "2026-11-04T10:40:00Z",
+    "rotates_at": "2026-11-04T12:22:00Z",
+    "state": "healthy",
+    "state_since": "2026-10-30T12:00:00Z",
+    "id": "gamma-x2n9d",
+    "ip": "203.x.x.13"
+  },
+  {
+    "availability_bp": 9970,
+    "checks": {
+      "tcp": true,
+      "metrics": true,
+      "globalping": "ok"
+    },
+    "clients": 18,
+    "domains": [],
+    "engine": "telemt",
+    "is_master": false,
+    "last_round": null,
+    "next_round_at": null,
+    "port": 443,
+    "queue_position": 1,
+    "registered_at": "2026-09-25T12:00:00Z",
+    "rotates_at": null,
+    "state": "healthy",
+    "state_since": "2026-10-30T12:00:00Z",
+    "id": "epsilon-h4j6s",
+    "ip": "203.x.x.14"
+  },
+  {
+    "availability_bp": null,
+    "checks": {
+      "tcp": true,
+      "metrics": true,
+      "globalping": "ok"
+    },
+    "clients": 7,
+    "domains": [],
+    "engine": "mt_proxy_l",
+    "is_master": false,
+    "last_round": null,
+    "next_round_at": null,
+    "port": 443,
+    "queue_position": 2,
+    "registered_at": "2026-09-25T12:00:00Z",
+    "rotates_at": null,
+    "state": "healthy",
+    "state_since": "2026-10-30T12:00:00Z",
+    "id": "zeta-w9b3y",
+    "ip": "203.x.x.15"
+  },
+  {
+    "availability_bp": 9815,
+    "checks": {
+      "tcp": true,
+      "metrics": true,
+      "globalping": "ok"
+    },
+    "clients": 3,
+    "domains": [],
+    "engine": "meko",
+    "is_master": false,
+    "last_round": null,
+    "next_round_at": null,
+    "port": 443,
+    "queue_position": 3,
+    "registered_at": "2026-09-25T12:00:00Z",
+    "rotates_at": null,
+    "state": "healthy",
+    "state_since": "2026-10-30T12:00:00Z",
+    "id": "eta-c5f8l",
+    "ip": "203.x.x.16"
+  },
+  {
+    "availability_bp": 9120,
+    "checks": {
+      "tcp": true,
+      "metrics": false,
+      "globalping": "failed"
+    },
+    "clients": null,
+    "domains": [],
+    "engine": "telemt",
+    "is_master": false,
+    "last_round": {
+      "at": "2026-11-04T11:50:00Z",
+      "verdict": "undecided",
+      "votes": [
+        {
+          "sensor": "globalping",
+          "vote": "blocked"
+        },
+        {
+          "sensor": "cheburcheck",
+          "vote": "abstain",
+          "reason": "unavailable"
+        }
+      ]
+    },
+    "next_round_at": "2026-11-04T12:08:00Z",
+    "port": 443,
+    "queue_position": null,
+    "registered_at": "2026-09-25T12:00:00Z",
+    "rotates_at": null,
+    "state": "quarantine",
+    "state_since": "2026-11-04T10:30:00Z",
+    "id": "theta-m1d7z",
+    "ip": "203.x.x.17"
+  }
+]

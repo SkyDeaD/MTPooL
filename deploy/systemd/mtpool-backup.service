@@ -1,0 +1,21 @@
+[Unit]
+Description=MTPooL registrar backup
+
+[Service]
+Type=oneshot
+User=mtpool
+Group=mtpool
+EnvironmentFile=-/etc/mtpool/registrar.env
+# One copy a day with its .sha256; the last seven days are kept. "%%" is a "%" for systemd.
+ExecStart=/bin/sh -c '/usr/local/bin/mtpool-registrar backup --to /var/backups/mtpool/registrar-$(date +%%F).db && find /var/backups/mtpool -name "registrar-*" -mtime +7 -delete'
+
+# Reading a database in WAL mode writes its shared-memory file, so the state directory is
+# writable; the copies go to /var/backups/mtpool.
+StateDirectory=mtpool
+ReadWritePaths=/var/backups/mtpool
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX

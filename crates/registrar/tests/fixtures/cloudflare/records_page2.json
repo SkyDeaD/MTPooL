@@ -1,0 +1,40 @@
+{
+  "_source": "recorded shape, Cloudflare API v4, 2026-11-04; names, addresses and ids replaced by placeholders",
+  "result": [
+    {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3",
+      "name": "p1.example.com",
+      "type": "A",
+      "content": "192.0.2.3",
+      "proxiable": true,
+      "proxied": false,
+      "ttl": 60,
+      "settings": {},
+      "meta": {},
+      "comment": null,
+      "tags": [],
+      "created_on": "2026-01-01T00:00:00.000000Z",
+      "modified_on": "2026-01-01T00:00:00.000000Z",
+      "comment_modified_on": "2026-01-01T00:00:00.000000Z"
+    }
+    ,
+    {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa4",
+      "name": "p1.example.com",
+      "type": "TXT",
+      "content": "\"v=example\"",
+      "proxiable": true,
+      "proxied": false,
+      "ttl": 60,
+      "settings": {},
+      "meta": {},
+      "comment": "other tool",
+      "tags": [],
+      "created_on": "2026-01-01T00:00:00.000000Z",
+      "modified_on": "2026-01-01T00:00:00.000000Z",
+      "comment_modified_on": "2026-01-01T00:00:00.000000Z"
+    }
+  ],
+  "result_info": {"page": 2, "per_page": 2, "count": 2, "total_count": 4, "total_pages": 2},
+  "success": true, "errors": [], "messages": []
+}

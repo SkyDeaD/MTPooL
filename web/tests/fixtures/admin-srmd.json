@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "needed": 2,
+  "active": [
+    "proxy1.example.com",
+    "proxy2.example.com"
+  ],
+  "folded": [
+    "proxy3.example.com"
+  ],
+  "created": [],
+  "cnames": {
+    "proxy3.example.com": "proxy2.example.com"
+  },
+  "clients": {
+    "proxy1.example.com": 238,
+    "proxy2.example.com": 61
+  }
+}

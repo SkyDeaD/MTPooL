@@ -1,0 +1,7 @@
+{
+  "_source": "derived from the documented error envelope, not a recording: the real service was never driven to a 429",
+  "success": false,
+  "errors": [{"code": 971, "message": "Please wait and consider throttling your request speed"}],
+  "messages": [],
+  "result": null
+}

@@ -1,0 +1,126 @@
+/* Design tokens. Dark is the default; the light values apply when the system asks for light,
+   unless the page sets data-theme="dark", and always when it sets data-theme="light".
+   One blue accent; the state colors are for exceptions only. */
+
+:root {
+  /* Surfaces: page, tile, raised and pressed levels */
+  --bg: #0c0e13;
+  --surf: #14171e;
+  --surf2: #1a1e27;
+  --surf3: #222733;
+  --line: rgba(255, 255, 255, 0.08);
+  --line2: rgba(255, 255, 255, 0.15);
+
+  /* Text */
+  --fg: #eceef3;
+  --fg2: #aab1bf;
+  --fg3: #868e9d;
+
+  /* Accent */
+  --acc: #5aa5ff;
+  --acc-fg: #07131f;
+  --acc-t: rgba(90, 165, 255, 0.13);
+  --acc-t2: rgba(90, 165, 255, 0.2);
+
+  /* State */
+  --ok: #43d294;
+  --ok-t: rgba(67, 210, 148, 0.12);
+  --warn: #f2b84b;
+  --warn-t: rgba(242, 184, 75, 0.12);
+  --bad: #ff808a;
+  --bad-t: rgba(255, 128, 138, 0.12);
+
+  --scrim: rgba(4, 6, 10, 0.62);
+
+  /* Chart series: c0 is the grey "other" row, c1..c4 are the colored ones */
+  --c0: #4b5262;
+  --c1: #3987e5;
+  --c2: #d95926;
+  --c3: #199e70;
+  --c4: #c98500;
+
+  /* Type */
+  --sans: 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --fs-body: 14px;
+  --fs-small: 13px;
+  --fs-xs: 12px;
+  --fs-th: 12.5px;
+  --fs-title: 22px;
+  --fs-kpi: 28px;
+
+  /* Shape and spacing */
+  --r: 10px;
+  --r2: 7px;
+  --r3: 5px;
+  --gap: 12px;
+  --gutter: 16px;
+  --w-public: 1240px;
+  --w-panel: 1360px;
+
+  /* Motion */
+  --ease: cubic-bezier(0.3, 0.7, 0.2, 1);
+  --t-fast: 0.12s;
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --bg: #f2f4f7;
+    --surf: #fff;
+    --surf2: #f6f7f9;
+    --surf3: #eceef2;
+    --line: rgba(15, 23, 42, 0.1);
+    --line2: rgba(15, 23, 42, 0.2);
+    --fg: #12161f;
+    --fg2: #475062;
+    --fg3: #616a7b;
+    --acc: #0b63e5;
+    --acc-fg: #fff;
+    --acc-t: rgba(11, 99, 229, 0.09);
+    --acc-t2: rgba(11, 99, 229, 0.15);
+    --ok: #09774f;
+    --ok-t: rgba(10, 125, 85, 0.09);
+    --warn: #8a5600;
+    --warn-t: rgba(176, 114, 0, 0.11);
+    --bad: #c52f3d;
+    --bad-t: rgba(197, 47, 61, 0.08);
+    --scrim: rgba(18, 22, 31, 0.38);
+    --c0: #aeb5c2;
+    --c1: #2a78d6;
+    --c2: #eb6834;
+    --c3: #1baf7a;
+    --c4: #eda100;
+    color-scheme: light;
+  }
+}
+
+:root[data-theme='light'] {
+  --bg: #f2f4f7;
+  --surf: #fff;
+  --surf2: #f6f7f9;
+  --surf3: #eceef2;
+  --line: rgba(15, 23, 42, 0.1);
+  --line2: rgba(15, 23, 42, 0.2);
+  --fg: #12161f;
+  --fg2: #475062;
+  --fg3: #616a7b;
+  --acc: #0b63e5;
+  --acc-fg: #fff;
+  --acc-t: rgba(11, 99, 229, 0.09);
+  --acc-t2: rgba(11, 99, 229, 0.15);
+  --ok: #09774f;
+  --ok-t: rgba(10, 125, 85, 0.09);
+  --warn: #8a5600;
+  --warn-t: rgba(176, 114, 0, 0.11);
+  --bad: #c52f3d;
+  --bad-t: rgba(197, 47, 61, 0.08);
+  --scrim: rgba(18, 22, 31, 0.38);
+  --c0: #aeb5c2;
+  --c1: #2a78d6;
+  --c2: #eb6834;
+  --c3: #1baf7a;
+  --c4: #eda100;
+  color-scheme: light;
+}

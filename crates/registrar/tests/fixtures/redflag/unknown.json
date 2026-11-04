@@ -1,0 +1,28 @@
+{
+  "_source": "documented shape, not a recording",
+  "checked_at": "2026-11-03T12:00:00+00:00",
+  "local": {
+    "data": false,
+    "duration_ms": 1000,
+    "handshake": false,
+    "label": "RU — Москва (за ТСПУ)",
+    "latency_ms": 60,
+    "ping_ms": null,
+    "ssh": false,
+    "tcp": true
+  },
+  "port": 443,
+  "remote": {
+    "data": false,
+    "duration_ms": 1000,
+    "handshake": false,
+    "label": "NL — Amsterdam",
+    "latency_ms": 35,
+    "ping_ms": null,
+    "ssh": false,
+    "tcp": true
+  },
+  "secret_type": "faketls",
+  "server": "192.0.2.1",
+  "status": "UNKNOWN"
+}

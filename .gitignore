@@ -16,3 +16,10 @@ web/dist/
 # Databases
 *.db
 *.db-*
+e2e/keys/
+web/.ssr/
+
+# Browser checks
+web/test-results/
+web/playwright-report/
+web/screenshots/

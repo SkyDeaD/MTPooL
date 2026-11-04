@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="96" height="96" role="img" aria-label="MTPooL">
+  <rect width="24" height="24" rx="6" fill="#0b63e5"/>
+  <g fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round"><path d="M12 12 6.8 7.3M12 12l5.2-4.7M12 12v6"/></g>
+  <g fill="#fff"><circle cx="12" cy="12" r="2.4"/><circle cx="6.5" cy="7" r="1.7"/><circle cx="17.5" cy="7" r="1.7"/><circle cx="12" cy="18.2" r="1.7"/></g>
+</svg>

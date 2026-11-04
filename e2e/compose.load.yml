@@ -1,0 +1,26 @@
+# The load run (e2e/load.sh): the registrar limited to two CPUs and a generator that shares its
+# network and pid namespaces. Use together with compose.yml.
+#
+# Sharing the network namespace lets the generator give every simulated node its own source
+# address (127.x.y.z, through X-Forwarded-For, which the registrar trusts from a loopback peer)
+# and answer the registrar's TCP probes on all of them. Sharing the pid namespace lets it read
+# the registrar's memory and CPU from /proc.
+services:
+  registrar:
+    cpus: 2
+
+  loadgen:
+    image: mtpool-e2e-loadgen:local
+    build:
+      context: ..
+      dockerfile: e2e/images/registrar/Dockerfile
+      target: loadgen
+    network_mode: "service:registrar"
+    pid: "service:registrar"
+    profiles: ["load"]
+    depends_on:
+      registrar:
+        condition: service_healthy
+    environment:
+      # Without a value: taken from the environment of `docker compose`.
+      - MTPOOL_ADMIN_TOKEN

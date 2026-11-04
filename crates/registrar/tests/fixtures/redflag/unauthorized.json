@@ -1,0 +1,4 @@
+{
+  "_source": "recorded 2026-11-04, call without X-API-Key (HTTP 401)",
+  "error": "нужен X-API-Key"
+}

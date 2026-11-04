@@ -1,6 +1,15 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/protocol", "crates/registrar", "crates/agent"]
+members = [
+    "crates/core",
+    "crates/protocol",
+    "crates/selfupdate",
+    "crates/registrar",
+    "crates/agent",
+    "crates/fakes",
+    "crates/e2e",
+    "crates/loadgen",
+]
 
 [workspace.package]
 version = "0.0.0"
@@ -13,23 +22,50 @@ publish = false
 [workspace.dependencies]
 mtpool-core = { path = "crates/core" }
 mtpool-protocol = { path = "crates/protocol" }
+mtpool-selfupdate = { path = "crates/selfupdate" }
 arc-swap = "1.9.3"
+async-trait = "0.1.92"
+aes = "0.9.4"
 axum = "0.8.9"
+clap = "4.6.7"
+ctr = "0.10.1"
+data-encoding = "2.11.1"
 fast_qr = "0.14.0"
+futures-core = "0.3.34"
+http-body-util = "0.1.5"
 hyper = "1.12.0"
+listenfd = "1.0.2"
 mimalloc = "0.1.52"
 minisign = "0.10.0"
 minisign-verify = "0.3.0"
 proptest = "1.12.0"
+rand = "0.10.3"
 reqwest = { version = "0.13.5", default-features = false }
+rqrr = { version = "0.11.0", default-features = false }
 rusqlite = "0.41.1"
-rust-embed = "8.13.0"
+rust-embed = { version = "8.13.0", features = ["interpolate-folder-path", "debug-embed"] }
+rustix = { version = "1.1.6", default-features = false }
 rustls = { version = "0.23.46", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+hmac = "0.13.0"
+sha2 = "0.11.1"
+subtle = "2.6.1"
+tempfile = "3.27.0"
+thiserror = "2.0.21"
+time = "0.3.55"
 tokio = "1.54.1"
 toml_edit = "0.25.17"
+tower = "0.5.3"
 tower-http = "0.7.1"
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
 utoipa = "6.0.0"
 utoipa-axum = "0.3.0"
 wiremock = "0.6.5"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

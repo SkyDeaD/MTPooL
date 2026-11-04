@@ -1,0 +1,32 @@
+{
+  "counts": {
+    "bans_7d": 3,
+    "master_changes_24h": 4
+  },
+  "dns": {
+    "applied_24h": 12,
+    "failed_24h": 0,
+    "last_applied_at": "2026-11-04T11:40:00Z",
+    "token_set": true,
+    "unsynced_domains": 0
+  },
+  "sensors": [
+    {
+      "name": "globalping",
+      "configured": true,
+      "last_answer_at": "2026-11-04T11:55:00Z",
+      "last_vote": "blocked"
+    },
+    {
+      "name": "cheburcheck",
+      "configured": true,
+      "last_answer_at": "2026-11-04T11:55:00Z",
+      "last_vote": "clear"
+    },
+    {
+      "name": "red_flag",
+      "configured": false,
+      "last_reason": "not_configured"
+    }
+  ]
+}

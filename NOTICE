@@ -1,3 +1,6 @@
 MTPooL is written from scratch. Its behaviour and ideas are inspired by sharedd
 (https://github.com/ugDeDe/sharedd, MIT License, Copyright (c) 2026 ugDeDe).
 No sharedd code is copied into this repository. Thanks to its author.
+
+web/ build output includes RapiDoc (https://github.com/rapi-doc/RapiDoc, MIT License,
+Copyright (c) 2018 Mrinmoy Majumdar), loaded only when a visitor asks to try a request.

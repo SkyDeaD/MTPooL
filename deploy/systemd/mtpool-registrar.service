@@ -1,0 +1,40 @@
+[Unit]
+Description=MTPooL registrar
+Requires=mtpool-registrar.socket
+After=mtpool-registrar.socket network-online.target
+Wants=network-online.target
+# A build that keeps crashing after an update is put back; without an update on probation the
+# rollback unit does nothing.
+OnFailure=mtpool-registrar-rollback.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+User=mtpool
+Group=mtpool
+EnvironmentFile=-/etc/mtpool/registrar.env
+ExecStart=/usr/local/bin/mtpool-registrar serve
+Restart=on-failure
+RestartSec=2
+
+# /var/lib/mtpool (the database and the releases) is the only place it writes. The directory is
+# 0755 because the update helper, which has no capabilities, must reach the published releases
+# through it; the database and its backups are 0600 files, so nobody else can read them.
+StateDirectory=mtpool
+StateDirectoryMode=0755
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

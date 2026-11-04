@@ -1,0 +1,15 @@
+{
+  "rateLimit": {
+    "measurements": {
+      "create": {
+        "type": "user",
+        "limit": 500,
+        "remaining": 500,
+        "reset": 0
+      }
+    }
+  },
+  "credits": {
+    "remaining": 0
+  }
+}

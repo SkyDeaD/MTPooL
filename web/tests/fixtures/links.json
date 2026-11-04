@@ -1,0 +1,23 @@
+[
+  {
+    "id": "l1",
+    "domain": "proxy1.example.com",
+    "user": "tg-user-1",
+    "link": "tg://proxy?server=proxy1.example.com&port=443&secret=eeEXAMPLE",
+    "qr_url": "/api/v1/links/l1/qr.svg"
+  },
+  {
+    "id": "l2",
+    "domain": "proxy2.example.com",
+    "user": "tg-user-1",
+    "link": "tg://proxy?server=proxy2.example.com&port=443&secret=eeEXAMPLE",
+    "qr_url": "/api/v1/links/l2/qr.svg"
+  },
+  {
+    "id": "l3",
+    "domain": "proxy3.example.com",
+    "user": "tg-user-1",
+    "link": "tg://proxy?server=proxy3.example.com&port=443&secret=eeEXAMPLE",
+    "qr_url": "/api/v1/links/l3/qr.svg"
+  }
+]

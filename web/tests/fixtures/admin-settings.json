@@ -1,0 +1,65 @@
+{
+  "heartbeat_interval_sec": 15,
+  "globalping_interval_sec": 300,
+  "metrics_interval_sec": 60,
+  "sync_interval_sec": 60,
+  "heartbeat_ttl_sec": 60,
+  "report_max_age_sec": 900,
+  "tcp_probe_interval_sec": 5,
+  "tcp_probe_timeout_sec": 3,
+  "latch_fail_threshold": 3,
+  "latch_ok_threshold": 2,
+  "dead_after_sec": 600,
+  "quarantine_max_sec": 3600,
+  "round_interval_sec": 300,
+  "round_interval_slow_sec": 900,
+  "rounds_before_slow": 3,
+  "clean_rounds_to_exit": 2,
+  "reverify_pause_sec": 900,
+  "masters_per_domain": 1,
+  "rotation_ttl_sec": 1800,
+  "dns_ttl": 60,
+  "dns_proxied": false,
+  "tls_domain": "tls.example.com",
+  "proxy_port": 443,
+  "domains": [
+    "proxy1.example.com",
+    "proxy2.example.com",
+    "proxy3.example.com"
+  ],
+  "proxy_users": [
+    {
+      "name": "main",
+      "secret_hex": "00000000000000000000000000000001"
+    }
+  ],
+  "srmd": {
+    "enabled": true,
+    "max_nodes_per_domain": 5,
+    "max_domains": 50,
+    "diverge_ticks": 20,
+    "base_domain": "example.com"
+  },
+  "globalping": {
+    "probe_limit": 20,
+    "min_probes": 10,
+    "success_threshold": 0.5,
+    "vote_report_max_age_sec": 600,
+    "window_past_sec": 600,
+    "window_future_sec": 60,
+    "min_limit_remaining": 20,
+    "allow_credits": false
+  },
+  "rollout": {
+    "observe_sec": 600,
+    "batch_interval_sec": 300,
+    "batch_percent": 10,
+    "return_sec": 120,
+    "offer_wait_sec": 300
+  },
+  "secrets": {
+    "globalping_token": true,
+    "redflag_api_key": false,
+    "cloudflare_api_token": true
+  }
+}

@@ -1,0 +1,40 @@
+name: Load
+
+on:
+  workflow_dispatch:
+    inputs:
+      nodes:
+        description: Simulated nodes
+        default: "1000"
+      duration:
+        description: Seconds of the measured steady state
+        default: "300"
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run the load generator against the registrar limited to two CPUs
+        # The inputs go through the environment, not into the script text.
+        env:
+          NODES: ${{ inputs.nodes }}
+          DURATION: ${{ inputs.duration }}
+        run: |
+          e2e/load.sh --nodes "$NODES" --duration "$DURATION"
+      - name: Show the report
+        if: always()
+        run: |
+          cat tmp/load/report.json || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: load-report
+          path: tmp/load/report.json
+          if-no-files-found: warn

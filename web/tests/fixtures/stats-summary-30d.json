@@ -1,0 +1,42 @@
+{
+  "range": "30d",
+  "from": "2026-10-05T12:00:00Z",
+  "now": "2026-11-04T12:00:00Z",
+  "step_sec": 108000,
+  "history_ok": true,
+  "kpi": {
+    "bans": 90,
+    "avg_lifetime_sec": 518400,
+    "avg_gap_sec": 172800,
+    "traffic_ingress_bytes": 25423773696,
+    "traffic_egress_bytes": 211864780800,
+    "traffic_total_bytes": 237288554496
+  },
+  "by_reason": {
+    "cheburcheck+globalping": 2,
+    "globalping+redflag": 1
+  },
+  "recent": [
+    {
+      "ts": "2026-11-04T09:00:00Z",
+      "node_id": "old-p7q2a",
+      "ip_masked": "203.x.x.91",
+      "lifetime_sec": 792000,
+      "gap_sec": 72000
+    },
+    {
+      "ts": "2026-11-03T13:00:00Z",
+      "node_id": "old-c1v8n",
+      "ip_masked": "203.x.x.92",
+      "lifetime_sec": 259200,
+      "gap_sec": 172800
+    },
+    {
+      "ts": "2026-11-01T12:00:00Z",
+      "node_id": "theta-m1d7z",
+      "ip_masked": "203.x.x.93",
+      "lifetime_sec": 5400,
+      "gap_sec": null
+    }
+  ]
+}

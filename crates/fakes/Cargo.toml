@@ -1,0 +1,19 @@
+[package]
+name = "mtpool-fakes"
+description = "Stand-ins for the external services, for the end-to-end stand"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+mtpool-protocol.workspace = true
+axum.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal"] }
+
+[dev-dependencies]
+http-body-util.workspace = true
+tower = { workspace = true, features = ["util"] }

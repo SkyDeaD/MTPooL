@@ -1,0 +1,232 @@
+//! The client numbers of the pool at one moment, for the history chart.
+
+use std::collections::BTreeMap;
+
+use crate::state::PoolState;
+use crate::types::{NodeId, NodeState, Ts};
+
+/// The domain key of the pool total in a stored sample row.
+pub const TOTAL_DOMAIN: &str = "";
+
+/// How many clients the pool had at `at`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientSample {
+    pub at: Ts,
+    /// Clients of the nodes in Pending, Healthy and Quarantine.
+    pub total: u64,
+    /// Clients of each domain that is not folded, as `apply` keeps them in `srmd`. A domain
+    /// without a known number has no entry.
+    pub domains: BTreeMap<String, u64>,
+}
+
+impl ClientSample {
+    /// The rows to store: the total under `TOTAL_DOMAIN` first, then one per domain.
+    pub fn rows(&self) -> Vec<(String, u64)> {
+        let mut rows = vec![(TOTAL_DOMAIN.to_owned(), self.total)];
+        rows.extend(self.domains.iter().map(|(d, n)| (d.clone(), *n)));
+        rows
+    }
+}
+
+/// Reads the numbers off `state` at `now`. A node whose reports carry no client count keeps
+/// the last known value in `NodeStats::clients`, and so does a domain in `SrmdState`.
+pub fn client_sample(state: &PoolState, now: Ts) -> ClientSample {
+    let total = state
+        .nodes
+        .values()
+        .filter(|n| {
+            matches!(
+                n.state,
+                NodeState::Pending | NodeState::Healthy | NodeState::Quarantine
+            )
+        })
+        .filter_map(|n| state.stats.get(&n.id)?.clients)
+        .fold(0, u64::saturating_add);
+    // A folded domain is a CNAME onto another one: its clients are counted there.
+    let domains = state
+        .settings
+        .domains
+        .iter()
+        .filter(|d| !state.srmd.cnames.contains_key(d.as_str()))
+        .filter_map(|d| Some((d.clone(), *state.srmd.domain_clients.get(d)?)))
+        .collect();
+    ClientSample {
+        at: now,
+        total,
+        domains,
+    }
+}
+
+/// One node as one tick saw it, for the availability history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeSample {
+    pub node: NodeId,
+    /// Healthy counts as up; Quarantine and Dead as down.
+    pub up: bool,
+    pub clients: Option<u64>,
+}
+
+/// The nodes that count for availability at this moment. Pending, Banned and Pruned nodes
+/// are left out: they were never in service, or were taken out on purpose.
+pub fn node_samples(state: &PoolState) -> Vec<NodeSample> {
+    state
+        .nodes
+        .values()
+        .filter_map(|n| {
+            let up = match n.state {
+                NodeState::Healthy => true,
+                NodeState::Quarantine | NodeState::Dead => false,
+                _ => return None,
+            };
+            Some(NodeSample {
+                node: n.id.clone(),
+                up,
+                clients: state.stats.get(&n.id).and_then(|s| s.clients),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use super::*;
+    use crate::apply::apply;
+    use crate::lifecycle::NodeRecord;
+    use crate::settings::Settings;
+    use crate::state::{Command, EnrollRequest, NodeStats, ReplyId, ReportRequest};
+    use crate::types::{EngineKind, NodeId, OwnerId};
+    use crate::votes::Vote;
+
+    const NOW: Ts = Ts(1_800_000_000_000);
+
+    fn add(state: &mut PoolState, name: &str, node_state: NodeState, clients: Option<u64>) {
+        let id = NodeId::parse(&format!("{name}-a1b2c")).unwrap();
+        let mut node = NodeRecord::new(
+            id.clone(),
+            OwnerId(1),
+            Ipv4Addr::new(95, 216, 0, 1),
+            443,
+            EngineKind::Telemt,
+            Ts(0),
+            &Settings::default(),
+        );
+        node.state = node_state;
+        state.nodes.insert(id.clone(), node);
+        state.stats.insert(
+            id,
+            NodeStats {
+                clients,
+                ..NodeStats::default()
+            },
+        );
+    }
+
+    #[test]
+    fn total_counts_pending_healthy_quarantine_not_banned_or_dead() {
+        let mut state = PoolState::default();
+        add(&mut state, "pend", NodeState::Pending, Some(1));
+        add(&mut state, "good", NodeState::Healthy, Some(10));
+        add(&mut state, "quar", NodeState::Quarantine, Some(100));
+        add(&mut state, "banned", NodeState::Banned, Some(1000));
+        add(&mut state, "dead", NodeState::Dead, Some(10_000));
+        add(&mut state, "pruned", NodeState::Pruned, Some(100_000));
+        assert_eq!(client_sample(&state, NOW).total, 111);
+    }
+
+    #[test]
+    fn node_without_a_metric_uses_the_last_known_value() {
+        let mut state = PoolState::new(Settings::default());
+        let node = NodeId::parse("seen-a1b2c").unwrap();
+        let enroll = Command::Enroll(EnrollRequest {
+            reply: ReplyId(1),
+            node_id: node.clone(),
+            owner: OwnerId(1),
+            ip: Ipv4Addr::new(95, 216, 0, 1),
+            port: 443,
+            engine: EngineKind::Telemt,
+        });
+        apply(&mut state, enroll, NOW);
+        let generation = state.nodes[&node].generation;
+        for (reply, clients) in [(2, Some(4)), (3, None)] {
+            let report = Command::Report(ReportRequest {
+                reply: ReplyId(reply),
+                node: node.clone(),
+                generation,
+                metrics_ok: true,
+                globalping: Vote::Clear,
+                traffic: None,
+                clients,
+            });
+            apply(&mut state, report, NOW);
+        }
+        assert_eq!(client_sample(&state, NOW).total, 4);
+
+        // A node that never reported a number adds nothing.
+        add(&mut state, "silent", NodeState::Healthy, None);
+        assert_eq!(client_sample(&state, NOW).total, 4);
+    }
+
+    #[test]
+    fn one_row_per_domain_and_one_total() {
+        let mut state = PoolState::default();
+        state.settings.domains = vec!["a.example.com".into(), "b.example.com".into()];
+        state.srmd.domain_clients.insert("a.example.com".into(), 4);
+        state.srmd.domain_clients.insert("b.example.com".into(), 6);
+        state
+            .srmd
+            .domain_clients
+            .insert("gone.example.com".into(), 99);
+        add(&mut state, "good", NodeState::Healthy, Some(10));
+        let sample = client_sample(&state, NOW);
+        assert_eq!(sample.at, NOW);
+        assert_eq!(
+            sample.rows(),
+            [
+                (String::new(), 10),
+                ("a.example.com".to_owned(), 4),
+                ("b.example.com".to_owned(), 6),
+            ]
+        );
+    }
+
+    #[test]
+    fn node_samples_count_healthy_up_quarantine_and_dead_down_and_skip_the_rest() {
+        let mut state = PoolState::default();
+        add(&mut state, "pend", NodeState::Pending, Some(1));
+        add(&mut state, "good", NodeState::Healthy, Some(10));
+        add(&mut state, "quar", NodeState::Quarantine, None);
+        add(&mut state, "banned", NodeState::Banned, Some(1000));
+        add(&mut state, "dead", NodeState::Dead, Some(7));
+        add(&mut state, "pruned", NodeState::Pruned, Some(100_000));
+        let mut samples = node_samples(&state);
+        samples.sort_by(|a, b| a.node.cmp(&b.node));
+        let view: Vec<_> = samples
+            .iter()
+            .map(|s| (s.node.as_str().split('-').next().unwrap(), s.up, s.clients))
+            .collect();
+        assert_eq!(
+            view,
+            [
+                ("dead", false, Some(7)),
+                ("good", true, Some(10)),
+                ("quar", false, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_folded_domain_has_no_row() {
+        let mut state = PoolState::default();
+        state.settings.domains = vec!["a.example.com".into(), "b.example.com".into()];
+        state.srmd.domain_clients.insert("a.example.com".into(), 9);
+        state.srmd.domain_clients.insert("b.example.com".into(), 5);
+        state
+            .srmd
+            .cnames
+            .insert("b.example.com".into(), "a.example.com".into());
+        let sample = client_sample(&state, NOW);
+        assert_eq!(sample.domains.keys().collect::<Vec<_>>(), ["a.example.com"]);
+    }
+}

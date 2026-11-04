@@ -1,0 +1,35 @@
+[Unit]
+Description=MTPooL registrar: install the published release
+# A build that does not come up is put back (the rollback unit does nothing when no update is on
+# probation, so this is harmless after a refusal).
+OnFailure=mtpool-registrar-rollback.service
+After=mtpool-registrar.service
+
+[Service]
+# Runs as root and only for this job: it is the one part that may write /usr/local/bin and restart
+# the registrar. The registrar service itself (user mtpool, read-only system) never can. It trusts
+# nothing the unprivileged side did: the signature and the checksums are checked again from the files.
+Type=oneshot
+EnvironmentFile=-/etc/mtpool/registrar.env
+ExecStart=/usr/local/bin/mtpool-registrar update apply
+# 60 s of watching /readyz, plus the restart.
+TimeoutStartSec=300
+
+StateDirectory=mtpool-update
+StateDirectoryMode=0755
+ReadWritePaths=/usr/local/bin
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# Unix sockets for systemd, the registrar's own address for /readyz; nothing else on the network.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+CapabilityBoundingSet=

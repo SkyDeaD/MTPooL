@@ -1,0 +1,197 @@
+/* Fonts, reset and type. Geist has tabular figures (tnum); Geist Mono is monospaced already. */
+
+@font-face {
+  font-family: 'Geist';
+  src: url('../fonts/Geist.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('../fonts/GeistMono.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 400 var(--fs-body) / 1.45 var(--sans);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--acc);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+code,
+.mono {
+  font-family: var(--mono);
+  font-size: 0.93em;
+  letter-spacing: -0.01em;
+}
+
+/* Icons are inline SVG with this class */
+.i {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.i.lg {
+  width: 20px;
+  height: 20px;
+}
+
+/* Text helpers */
+.muted {
+  color: var(--fg2);
+}
+
+.faint {
+  color: var(--fg3);
+}
+
+.sm {
+  font-size: var(--fs-small);
+}
+
+.xs {
+  font-size: var(--fs-xs);
+}
+
+.b {
+  font-weight: 600;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Layout helpers */
+.gut {
+  padding-left: max(var(--gutter), env(safe-area-inset-left, 0px));
+  padding-right: max(var(--gutter), env(safe-area-inset-right, 0px));
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.row.w {
+  flex-wrap: wrap;
+}
+
+.sp {
+  margin-left: auto;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.stack {
+  grid-template-columns: minmax(0, 1fr);
+  display: grid;
+  gap: var(--gap);
+  min-width: 0;
+}
+
+.cols {
+  display: grid;
+  gap: var(--gap);
+  min-width: 0;
+}
+
+.c2 {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.c84 {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+}
+
+.c75 {
+  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+}
+
+@media (max-width: 860px) {
+  .c2,
+  .c84,
+  .c75 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The only motion that explains the pool is allowed to move; with this setting nothing does. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

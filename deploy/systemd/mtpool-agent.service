@@ -1,0 +1,29 @@
+[Unit]
+Description=MTPooL node agent
+After=network-online.target
+Wants=network-online.target
+# A build that keeps failing to start is put back (the rollback unit does nothing when no update
+# is on probation).
+OnFailure=mtpool-agent-rollback.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+EnvironmentFile=-/etc/mtpool/agent.env
+ExecStart=/usr/local/bin/mtpool-agent run
+Restart=always
+RestartSec=5
+
+# The agent runs as root: it edits the engine's configuration, restarts its unit and manages
+# an ipset and an iptables chain. What it may touch is narrowed to that.
+ProtectHome=yes
+PrivateTmp=yes
+ProtectSystem=full
+# A path with "-" may be missing: only the directories of the engine that is installed exist.
+ReadWritePaths=/var/lib/mtpool -/etc/telemt -/etc/mtproxyl -/opt/mtproxyl -/opt/mtpr-simple /usr/local/bin
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
+
+[Install]
+WantedBy=multi-user.target

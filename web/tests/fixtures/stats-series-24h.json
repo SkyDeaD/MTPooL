@@ -1,0 +1,225 @@
+{
+  "range": "24h",
+  "from": "2026-11-03T12:00:00Z",
+  "now": "2026-11-04T12:00:00Z",
+  "step_sec": 3600,
+  "history_ok": true,
+  "buckets": [
+    {
+      "start_ts": "2026-11-03T12:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 22649242,
+      "traffic_egress_bytes": 188743680,
+      "traffic_total_bytes": 211392922
+    },
+    {
+      "start_ts": "2026-11-03T13:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 27304919,
+      "traffic_egress_bytes": 227540992,
+      "traffic_total_bytes": 254845911
+    },
+    {
+      "start_ts": "2026-11-03T14:00:00Z",
+      "bans": 1,
+      "avg_lifetime_sec": 345600,
+      "avg_gap_sec": 43200,
+      "traffic_ingress_bytes": 31960596,
+      "traffic_egress_bytes": 266338304,
+      "traffic_total_bytes": 298298900
+    },
+    {
+      "start_ts": "2026-11-03T15:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 25291653,
+      "traffic_egress_bytes": 210763776,
+      "traffic_total_bytes": 236055429
+    },
+    {
+      "start_ts": "2026-11-03T16:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 29947331,
+      "traffic_egress_bytes": 249561088,
+      "traffic_total_bytes": 279508419
+    },
+    {
+      "start_ts": "2026-11-03T17:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 23278387,
+      "traffic_egress_bytes": 193986560,
+      "traffic_total_bytes": 217264947
+    },
+    {
+      "start_ts": "2026-11-03T18:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 27934065,
+      "traffic_egress_bytes": 232783872,
+      "traffic_total_bytes": 260717937
+    },
+    {
+      "start_ts": "2026-11-03T19:00:00Z",
+      "bans": 1,
+      "avg_lifetime_sec": 172800,
+      "avg_gap_sec": 61200,
+      "traffic_ingress_bytes": 32589742,
+      "traffic_egress_bytes": 271581184,
+      "traffic_total_bytes": 304170926
+    },
+    {
+      "start_ts": "2026-11-03T20:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 25920799,
+      "traffic_egress_bytes": 216006656,
+      "traffic_total_bytes": 241927455
+    },
+    {
+      "start_ts": "2026-11-03T21:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 30576476,
+      "traffic_egress_bytes": 254803968,
+      "traffic_total_bytes": 285380444
+    },
+    {
+      "start_ts": "2026-11-03T22:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 23907533,
+      "traffic_egress_bytes": 199229440,
+      "traffic_total_bytes": 223136973
+    },
+    {
+      "start_ts": "2026-11-03T23:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 28563210,
+      "traffic_egress_bytes": 238026752,
+      "traffic_total_bytes": 266589962
+    },
+    {
+      "start_ts": "2026-11-04T00:00:00Z",
+      "bans": 1,
+      "avg_lifetime_sec": 604800,
+      "avg_gap_sec": 79200,
+      "traffic_ingress_bytes": 33218888,
+      "traffic_egress_bytes": 276824064,
+      "traffic_total_bytes": 310042952
+    },
+    {
+      "start_ts": "2026-11-04T01:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 26549944,
+      "traffic_egress_bytes": 221249536,
+      "traffic_total_bytes": 247799480
+    },
+    {
+      "start_ts": "2026-11-04T02:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 31205622,
+      "traffic_egress_bytes": 260046848,
+      "traffic_total_bytes": 291252470
+    },
+    {
+      "start_ts": "2026-11-04T03:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 24536678,
+      "traffic_egress_bytes": 204472320,
+      "traffic_total_bytes": 229008998
+    },
+    {
+      "start_ts": "2026-11-04T04:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 29192356,
+      "traffic_egress_bytes": 243269632,
+      "traffic_total_bytes": 272461988
+    },
+    {
+      "start_ts": "2026-11-04T05:00:00Z",
+      "bans": 1,
+      "avg_lifetime_sec": 432000,
+      "avg_gap_sec": 97200,
+      "traffic_ingress_bytes": 33848033,
+      "traffic_egress_bytes": 282066944,
+      "traffic_total_bytes": 315914977
+    },
+    {
+      "start_ts": "2026-11-04T06:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 27179090,
+      "traffic_egress_bytes": 226492416,
+      "traffic_total_bytes": 253671506
+    },
+    {
+      "start_ts": "2026-11-04T07:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 31834767,
+      "traffic_egress_bytes": 265289728,
+      "traffic_total_bytes": 297124495
+    },
+    {
+      "start_ts": "2026-11-04T08:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 25165824,
+      "traffic_egress_bytes": 209715200,
+      "traffic_total_bytes": 234881024
+    },
+    {
+      "start_ts": "2026-11-04T09:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 29821501,
+      "traffic_egress_bytes": 248512512,
+      "traffic_total_bytes": 278334013
+    },
+    {
+      "start_ts": "2026-11-04T10:00:00Z",
+      "bans": 1,
+      "avg_lifetime_sec": 259200,
+      "avg_gap_sec": 115200,
+      "traffic_ingress_bytes": 23152558,
+      "traffic_egress_bytes": 192937984,
+      "traffic_total_bytes": 216090542
+    },
+    {
+      "start_ts": "2026-11-04T11:00:00Z",
+      "bans": 0,
+      "avg_lifetime_sec": null,
+      "avg_gap_sec": null,
+      "traffic_ingress_bytes": 27808236,
+      "traffic_egress_bytes": 231735296,
+      "traffic_total_bytes": 259543532
+    }
+  ]
+}

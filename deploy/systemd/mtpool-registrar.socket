@@ -1,0 +1,11 @@
+[Unit]
+Description=MTPooL registrar socket
+
+[Socket]
+# The registrar answers behind Caddy on this address. A restart of the service does not close
+# the socket: connections wait in its queue.
+ListenStream=127.0.0.1:8080
+NoDelay=true
+
+[Install]
+WantedBy=sockets.target

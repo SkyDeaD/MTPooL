@@ -1,0 +1,10 @@
+# Added to compose.yml by a scenario that fills the registrar's database: the volume becomes a
+# tmpfs of 2 MB. Such a database goes away with the container, so the registrar of that stand is
+# never restarted.
+volumes:
+  registrar-data:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=2m

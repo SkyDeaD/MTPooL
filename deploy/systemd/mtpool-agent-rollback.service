@@ -1,0 +1,29 @@
+[Unit]
+Description=MTPooL agent: put the previous build back
+# Does nothing unless an update is on probation and a previous build is kept beside the current one.
+ConditionPathExists=/var/lib/mtpool/update/probation
+ConditionFileIsExecutable=/usr/local/bin/mtpool-agent.prev
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/mtpool/agent.env
+# The previous build does the switch back: the current one is the one that failed.
+ExecStart=/usr/local/bin/mtpool-agent.prev update rollback
+TimeoutStartSec=120
+
+# The probation marker and the report that waits for the registrar live in the agent's state
+# directory; the binaries in /usr/local/bin.
+ReadWritePaths=/var/lib/mtpool /usr/local/bin
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER

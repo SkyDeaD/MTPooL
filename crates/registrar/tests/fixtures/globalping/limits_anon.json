@@ -1,0 +1,12 @@
+{
+  "rateLimit": {
+    "measurements": {
+      "create": {
+        "type": "ip",
+        "limit": 250,
+        "remaining": 250,
+        "reset": 0
+      }
+    }
+  }
+}

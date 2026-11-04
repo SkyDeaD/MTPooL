@@ -1,0 +1,12 @@
+# The images build from the Cargo workspace, the deploy files and the stand's test key: no
+# dotfiles, documents or web tree, and never the secret half of the test key.
+.*
+*.md
+docs
+tmp
+target
+web
+e2e/compose.yml
+e2e/keys/*.key
+rust-toolchain.toml
+**/node_modules

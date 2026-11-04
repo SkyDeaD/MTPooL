@@ -1,0 +1,22 @@
+{
+  "_source": "recorded from the real API on 2026-11-04; id, name and timestamps replaced by placeholders",
+  "result": {
+    "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1",
+    "name": "p1.example.com",
+    "type": "A",
+    "content": "192.0.2.1",
+    "proxiable": true,
+    "proxied": false,
+    "ttl": 60,
+    "settings": {},
+    "meta": {},
+    "comment": "MTPooL",
+    "tags": [],
+    "created_on": "2026-01-01T00:00:00.000000Z",
+    "modified_on": "2026-01-01T00:00:00.000000Z",
+    "comment_modified_on": "2026-01-01T00:00:00.000000Z"
+  },
+  "success": true,
+  "errors": [],
+  "messages": []
+}
