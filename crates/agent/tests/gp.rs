@@ -236,6 +236,22 @@ async fn gp_5xx_and_garbage_are_unavailable() {
 }
 
 #[tokio::test]
+async fn gp_api_is_reached_over_ipv4_only() {
+    // Without a token Globalping counts tests by address, and for IPv6 one counter covers a whole
+    // /64: two nodes of one host network would eat one quota. A node is always reachable over IPv4.
+    let listener = std::net::TcpListener::bind("[::1]:0").expect("IPv6 loopback");
+    let server = MockServer::builder().listener(listener).start().await;
+    mount_create(&server, 202, r#"{"id":"m1"}"#).await;
+    let ports = FakePorts::new(true);
+    let gp = gp(&server, &ports);
+
+    gp.tick(Instant::now()).await;
+
+    assert!(requests(&server).await.is_empty());
+    assert_eq!(gp.take_result(), Some(no_data("unavailable")));
+}
+
+#[tokio::test]
 async fn gp_unreachable_api_is_unavailable() {
     // Port 1 refuses. A dropped mock server would not do: its port goes back to a pool and the
     // next test's server answers on it.
