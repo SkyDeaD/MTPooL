@@ -23,10 +23,12 @@ afterEach(() => {
   document.querySelectorAll('script').forEach((s) => s.remove());
 });
 
-/** Operations without `security`, the ones anyone can call. */
+/** Operations without `security`, the ones anyone can call. The panel's login takes no token
+ * either, yet it belongs to the panel and is not for the public page. */
 function publicOperations(): string[] {
   const out: string[] = [];
   for (const [path, item] of Object.entries<Record<string, { security?: unknown }>>(openapi.paths)) {
+    if (path.startsWith('/api/v1/admin')) continue;
     for (const [method, op] of Object.entries(item)) {
       if (!op.security) out.push(`${method.toUpperCase()} ${path}`);
     }
