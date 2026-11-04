@@ -4,24 +4,7 @@
 
 ## Состояния
 
-```mermaid
-stateDiagram-v2
-  accTitle: Состояния ноды
-  accDescr: Переходы ноды между Pending, Healthy, Quarantine, Banned, Dead и Pruned.
-  direction LR
-  [*] --> Pending: регистрация
-  Pending --> Healthy: все условия верны
-  Pending --> Quarantine: условие нарушено
-  Healthy --> Quarantine: условие нарушено
-  Healthy --> Pending: сменился IP
-  Quarantine --> Healthy: условия снова верны или 2 чистых раунда
-  Quarantine --> Banned: не меньше 2 голосов Blocked
-  Quarantine --> Dead: не жива 10 минут
-  Quarantine --> Pruned: нет решения 60 минут
-  Banned --> Pending: чистый reverify или ручной разбан
-```
-
-На схеме показаны основные пути. В `Dead` нода попадает и из `Pending`, если не жива 10 минут, а смена IP возвращает в `Pending` и из `Quarantine`.
+<picture><source media="(prefers-color-scheme: dark)" srcset="images/diagram-lifecycle-dark.svg"><img alt="Основной путь ноды. Из Pending, когда условия верны, нода идёт в Healthy. При нарушении условия она уходит в Quarantine и возвращается, когда всё снова в норме. Из Quarantine нода попадает в Banned, Dead или Pruned. Из Banned возвращается в Pending после чистого reverify или разбана." src="images/diagram-lifecycle-light.svg"></picture>
 
 | Состояние | Что значит |
 |---|---|
@@ -31,6 +14,23 @@ stateDiagram-v2
 | `Banned` | подтверждена блокировка IP |
 | `Dead` | нода не отвечает; её IP не блокируется |
 | `Pruned` | решения не было долго; IP не блокируется |
+
+На схеме только основной путь. Все переходы:
+
+| Откуда | Куда | Когда |
+|---|---|---|
+| регистрация | `Pending` | нода зарегистрировалась |
+| `Pending` | `Healthy` | все условия верны |
+| `Pending` | `Quarantine` | условие нарушено |
+| `Pending` | `Dead` | не жива 10 минут |
+| `Healthy` | `Quarantine` | условие нарушено |
+| `Healthy` | `Pending` | сменился IP |
+| `Quarantine` | `Healthy` | условия снова верны или прошло 2 чистых раунда |
+| `Quarantine` | `Pending` | сменился IP |
+| `Quarantine` | `Banned` | не меньше 2 голосов `Blocked` |
+| `Quarantine` | `Dead` | не жива 10 минут |
+| `Quarantine` | `Pruned` | нет решения 60 минут |
+| `Banned` | `Pending` | чистый reverify или ручной разбан |
 
 ## Healthy
 

@@ -81,4 +81,10 @@ cd web && npm ci && npm test && npm run build && npm run check:budget
 lychee README.md README.en.md docs/
 ```
 
+Схемы лежат в `docs/images/diagram-*.svg`, светлая и тёмная версии рисуются одним скриптом. Поправьте его и запустите:
+
+```bash
+python3 scripts/draw-diagrams.py
+```
+
 Команды и настройки в документах сверяйте с кодом: значения по умолчанию — `crates/core/src/settings.rs`, маршруты — `docs/openapi.json`, параметры установщиков — `deploy/`.

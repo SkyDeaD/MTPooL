@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 590" width="960" height="590" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif">
+<title>How the pool is built</title>
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0.8 L9 5 L0 9.2 Z" fill="#868e9d"/></marker></defs>
+<rect x="0.75" y="0.75" width="958.5" height="588.5" rx="12" fill="#14171e" stroke="#2c313c" stroke-width="1.5"/>
+<path d="M260 58 L700 58" fill="none" stroke="#868e9d" stroke-width="2" marker-end="url(#head)"/>
+<path d="M145 118 L145 250" fill="none" stroke="#868e9d" stroke-width="2" marker-end="url(#head)"/>
+<path d="M260 282 L380 282" fill="none" stroke="#868e9d" stroke-width="2" marker-end="url(#head)"/>
+<path d="M380 328 L260 328" fill="none" stroke="#868e9d" stroke-width="2" marker-end="url(#head)"/>
+<path d="M580 305 L700 305" fill="none" stroke="#868e9d" stroke-width="2" marker-end="url(#head)"/>
+<path d="M480 250 L480 106 Q480 96 490 96 L700 96" fill="none" stroke="#868e9d" stroke-width="2" marker-end="url(#head)"/>
+<path d="M220 470 L220 425 Q220 415 230 415 L425 415 Q435 415 435 405 L435 360" fill="none" stroke="#868e9d" stroke-width="2" marker-end="url(#head)"/>
+<path d="M480 470 L480 360" fill="none" stroke="#868e9d" stroke-width="2" marker-end="url(#head)"/>
+<path d="M740 470 L740 425 Q740 415 730 415 L535 415 Q525 415 525 405 L525 360" fill="none" stroke="#868e9d" stroke-width="2" marker-end="url(#head)" marker-start="url(#head)"/>
+<rect x="30" y="28" width="230" height="90" rx="10" fill="#1a1e27" stroke="#868e9d" stroke-width="2"/>
+<rect x="700" y="28" width="230" height="90" rx="10" fill="#1a1e27" stroke="#868e9d" stroke-width="2"/>
+<rect x="30" y="250" width="230" height="110" rx="10" fill="#1a1e27" stroke="#868e9d" stroke-width="2"/>
+<rect x="380" y="250" width="200" height="110" rx="10" fill="#1a2940" stroke="#5aa5ff" stroke-width="2"/>
+<rect x="700" y="250" width="230" height="110" rx="10" fill="#1a1e27" stroke="#868e9d" stroke-width="2"/>
+<rect x="100" y="470" width="240" height="90" rx="10" fill="#1a1e27" stroke="#868e9d" stroke-width="2"/>
+<rect x="360" y="470" width="240" height="90" rx="10" fill="#1a1e27" stroke="#868e9d" stroke-width="2"/>
+<rect x="620" y="470" width="240" height="90" rx="10" fill="#1a1e27" stroke="#868e9d" stroke-width="2"/>
+<text x="145.0" y="81.0" font-size="24" font-weight="600" fill="#eceef3" text-anchor="middle">Telegram client</text>
+<text x="815.0" y="81.0" font-size="24" font-weight="600" fill="#eceef3" text-anchor="middle">Cloudflare DNS</text>
+<text x="480" y="46" font-size="18" font-weight="400" fill="#aab1bf" text-anchor="middle">1. finds the master's address</text>
+<text x="160" y="190" font-size="18" font-weight="400" fill="#aab1bf" text-anchor="start">2. MTProto to the master</text>
+<text x="145.0" y="300.0" font-size="24" font-weight="600" fill="#eceef3" text-anchor="middle">Nodes</text>
+<text x="145.0" y="328.0" font-size="17" font-weight="400" fill="#aab1bf" text-anchor="middle">masters and queue</text>
+<text x="480.0" y="300.0" font-size="24" font-weight="600" fill="#eceef3" text-anchor="middle">Registrar</text>
+<text x="480.0" y="328.0" font-size="17" font-weight="400" fill="#aab1bf" text-anchor="middle">mtpool-registrar</text>
+<text x="815.0" y="300.0" font-size="24" font-weight="600" fill="#eceef3" text-anchor="middle">Sensors</text>
+<text x="815.0" y="328.0" font-size="17" font-weight="400" fill="#aab1bf" text-anchor="middle">ban on 2 Blocked votes</text>
+<text x="320" y="270" font-size="18" font-weight="400" fill="#aab1bf" text-anchor="middle">reports</text>
+<text x="320" y="316" font-size="18" font-weight="400" fill="#aab1bf" text-anchor="middle">settings</text>
+<text x="640" y="293" font-size="18" font-weight="400" fill="#aab1bf" text-anchor="middle">IP check</text>
+<text x="590" y="86" font-size="18" font-weight="400" fill="#aab1bf" text-anchor="middle">A and CNAME records</text>
+<text x="220.0" y="510.0" font-size="24" font-weight="600" fill="#eceef3" text-anchor="middle">Visitor</text>
+<text x="220.0" y="538.0" font-size="17" font-weight="400" fill="#aab1bf" text-anchor="middle">public pages</text>
+<text x="480.0" y="510.0" font-size="24" font-weight="600" fill="#eceef3" text-anchor="middle">Operator</text>
+<text x="480.0" y="538.0" font-size="17" font-weight="400" fill="#aab1bf" text-anchor="middle">panel</text>
+<text x="740.0" y="510.0" font-size="24" font-weight="600" fill="#eceef3" text-anchor="middle">Bot</text>
+<text x="740.0" y="538.0" font-size="17" font-weight="400" fill="#aab1bf" text-anchor="middle">API and webhooks</text>
+</svg>

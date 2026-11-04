@@ -41,15 +41,7 @@ curl -s -X PATCH https://pool.example.com/api/v1/admin/settings \
 
 Как это идёт:
 
-```mermaid
-flowchart TD
-  accTitle: Как обновляется регистратор
-  accDescr: Регистратор находит релиз и проверяет подпись, служба обновления ставит его и наблюдает за /readyz, при сбое запускается откат.
-  github["GitHub Releases"] -- "опрос раз в 5 мин" --> registrar["Регистратор проверяет подпись и кладёт релиз в /var/lib/mtpool/releases"]
-  registrar -- "manifest.json изменился" --> path["mtpool-registrar-update.path"]
-  path --> update["mtpool-registrar-update.service (root): подпись, суммы, смена бинарника, перезапуск, 60 с наблюдения за /readyz"]
-  update -- "не поднялся" --> rollback["mtpool-registrar-rollback.service"]
-```
+<picture><source media="(prefers-color-scheme: dark)" srcset="images/diagram-update-dark.svg"><img alt="Регистратор находит релиз и проверяет подпись, служба обновления ставит его и наблюдает за /readyz, при сбое запускается откат." src="images/diagram-update-light.svg"></picture>
 
 Включено или выключено обновление, определяет строка `MTPOOL_RELEASE_REPO` в `/etc/mtpool/registrar.env`. Установщик пишет её при первой установке (по умолчанию `SkyDeaD/MTPooL`, можно задать `--release-repo`). **Удалите эту строку и перезапустите регистратор, и самообновление выключится.** Релизы подписаны ключом `minisign`; открытый ключ вшит в бинарник, и подпись проверяется при загрузке и перед установкой.
 

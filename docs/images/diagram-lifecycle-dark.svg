@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 420" width="960" height="420" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif">
+<title>Основной путь ноды</title>
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0.8 L9 5 L0 9.2 Z" fill="#868e9d"/></marker></defs>
+<rect x="0.75" y="0.75" width="958.5" height="418.5" rx="12" fill="#14171e" stroke="#2c313c" stroke-width="1.5"/>
+<path d="M200 85 L395 85" fill="none" stroke="#868e9d" stroke-width="2" marker-end="url(#head)"/>
+<path d="M565 68 L760 68" fill="none" stroke="#868e9d" stroke-width="2" marker-end="url(#head)"/>
+<path d="M760 104 L565 104" fill="none" stroke="#868e9d" stroke-width="2" marker-end="url(#head)"/>
+<path d="M845 130 L845 300" fill="none" stroke="#868e9d" stroke-width="2" marker-end="url(#head)"/>
+<path d="M845 205 L490 205 Q480 205 480 215 L480 300" fill="none" stroke="#868e9d" stroke-width="2" marker-end="url(#head)"/>
+<path d="M845 205 L160 205 Q150 205 150 215 L150 300" fill="none" stroke="#868e9d" stroke-width="2" marker-end="url(#head)"/>
+<path d="M70 300 L70 130" fill="none" stroke="#868e9d" stroke-width="2" marker-end="url(#head)"/>
+<rect x="30" y="40" width="170" height="90" rx="10" fill="#1a1e27" stroke="#868e9d" stroke-width="2"/>
+<rect x="395" y="40" width="170" height="90" rx="10" fill="#17302a" stroke="#43d294" stroke-width="2"/>
+<rect x="760" y="40" width="170" height="90" rx="10" fill="#2f2a1d" stroke="#f2b84b" stroke-width="2"/>
+<rect x="30" y="300" width="170" height="90" rx="10" fill="#35222a" stroke="#ff808a" stroke-width="2"/>
+<rect x="395" y="300" width="170" height="90" rx="10" fill="#1a1e27" stroke="#868e9d" stroke-width="2"/>
+<rect x="760" y="300" width="170" height="90" rx="10" fill="#1a1e27" stroke="#868e9d" stroke-width="2"/>
+<text x="115.0" y="80.0" font-size="24" font-weight="600" fill="#eceef3" text-anchor="middle">Pending</text>
+<text x="115.0" y="108.0" font-size="17" font-weight="400" fill="#aab1bf" text-anchor="middle">ждёт отчёта</text>
+<text x="480.0" y="80.0" font-size="24" font-weight="600" fill="#eceef3" text-anchor="middle">Healthy</text>
+<text x="480.0" y="108.0" font-size="17" font-weight="400" fill="#aab1bf" text-anchor="middle">в работе</text>
+<text x="845.0" y="80.0" font-size="24" font-weight="600" fill="#eceef3" text-anchor="middle">Quarantine</text>
+<text x="845.0" y="108.0" font-size="17" font-weight="400" fill="#aab1bf" text-anchor="middle">идёт проверка</text>
+<text x="297" y="73" font-size="18" font-weight="400" fill="#aab1bf" text-anchor="middle">условия верны</text>
+<text x="662" y="56" font-size="18" font-weight="400" fill="#aab1bf" text-anchor="middle">условие нарушено</text>
+<text x="662" y="132" font-size="18" font-weight="400" fill="#aab1bf" text-anchor="middle">снова в норме</text>
+<text x="115.0" y="340.0" font-size="24" font-weight="600" fill="#eceef3" text-anchor="middle">Banned</text>
+<text x="115.0" y="368.0" font-size="17" font-weight="400" fill="#aab1bf" text-anchor="middle">IP заблокирован</text>
+<text x="480.0" y="340.0" font-size="24" font-weight="600" fill="#eceef3" text-anchor="middle">Dead</text>
+<text x="480.0" y="368.0" font-size="17" font-weight="400" fill="#aab1bf" text-anchor="middle">не отвечает</text>
+<text x="845.0" y="340.0" font-size="24" font-weight="600" fill="#eceef3" text-anchor="middle">Pruned</text>
+<text x="845.0" y="368.0" font-size="17" font-weight="400" fill="#aab1bf" text-anchor="middle">нет решения</text>
+<text x="164" y="240" font-size="18" font-weight="400" fill="#aab1bf" text-anchor="start">не меньше 2</text>
+<text x="164" y="264" font-size="18" font-weight="400" fill="#aab1bf" text-anchor="start">голосов Blocked</text>
+<text x="494" y="240" font-size="18" font-weight="400" fill="#aab1bf" text-anchor="start">не жива</text>
+<text x="494" y="264" font-size="18" font-weight="400" fill="#aab1bf" text-anchor="start">10 минут</text>
+<text x="831" y="240" font-size="18" font-weight="400" fill="#aab1bf" text-anchor="end">нет решения</text>
+<text x="831" y="264" font-size="18" font-weight="400" fill="#aab1bf" text-anchor="end">60 минут</text>
+<text x="84" y="162" font-size="18" font-weight="400" fill="#aab1bf" text-anchor="start">reverify</text>
+<text x="84" y="186" font-size="18" font-weight="400" fill="#aab1bf" text-anchor="start">или разбан</text>
+</svg>

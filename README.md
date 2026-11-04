@@ -72,43 +72,11 @@ MTPooL отделяет ссылку от сервера. Клиенты под�
 
 ## Как это работает
 
-```mermaid
-flowchart LR
-  accTitle: Как устроен пул
-  accDescr: Ноды шлют регистратору отчёты и получают настройки. Регистратор спрашивает сенсоры и ведёт DNS в Cloudflare. Клиент Telegram узнаёт адрес из DNS и подключается к мастеру.
-  client["Клиент Telegram"]
-  visitor["Посетитель"]
-  operator["Оператор"]
-  bot["Бот"]
-
-  subgraph pool["Ноды: движок и mtpool-agent"]
-    master["Мастер"]
-    queued["Нода в очереди"]
-  end
-
-  registrar["Регистратор<br>mtpool-registrar"]
-  cloudflare["Cloudflare DNS"]
-
-  subgraph sensors["Сенсоры: бан от двух голосов Blocked"]
-    globalping["Globalping"]
-    cheburcheck["Cheburcheck"]
-    redflag["RedFlag"]
-  end
-
-  visitor -- "публичные страницы" --> registrar
-  operator -- "панель /panel/" --> registrar
-  bot <-- "API и webhooks" --> registrar
-  pool -- "heartbeat, отчёты" --> registrar
-  registrar -- "настройки" --> pool
-  registrar -- "A / CNAME" --> cloudflare
-  registrar -- "проверка IP" --> sensors
-  client -- "имя домена" --> cloudflare
-  client -- "MTProto" --> master
-```
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/diagram-pool-dark.svg"><img alt="Ноды шлют регистратору отчёты и получают настройки. Регистратор спрашивает сенсоры и ведёт DNS в Cloudflare. Клиент Telegram узнаёт адрес из DNS и подключается к мастеру." src="docs/images/diagram-pool-light.svg"></picture>
 
 - **Нода** — сервер с MTProto-движком и агентом `mtpool-agent`. Агент сообщает о здоровье и применяет настройки пула.
 - **Регистратор** — один сервис `mtpool-registrar`: HTTP API, база SQLite, сенсоры, DNS, webhooks, публичные страницы и панель.
-- **Сенсоры** — внешние сервисы, которые проверяют, блокируют ли IP из России. Голосуют `Blocked`, `Clear` или `Abstain`. Сбой сенсора и незнакомый ответ дают `Abstain`, то есть не голос.
+- **Сенсоры** — внешние сервисы Globalping, Cheburcheck и RedFlag. Они проверяют, блокируют ли IP из России. Голосуют `Blocked`, `Clear` или `Abstain`. Сбой сенсора и незнакомый ответ дают `Abstain`, то есть не голос.
 
 Подробнее: [жизненный цикл ноды и логика бана](docs/lifecycle.md), [сенсоры и их лимиты](docs/sensors.md).
 

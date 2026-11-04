@@ -72,43 +72,11 @@ The project fits if you run several servers with telemt, MTProxyL or MEKO, alone
 
 ## How it works
 
-```mermaid
-flowchart LR
-  accTitle: How the pool is built
-  accDescr: Nodes send reports to the registrar and get settings back. The registrar asks the sensors and keeps the DNS in Cloudflare. A Telegram client finds the address through DNS and connects to a master.
-  client["Telegram client"]
-  visitor["Visitor"]
-  operator["Operator"]
-  bot["Bot"]
-
-  subgraph pool["Nodes: engine and mtpool-agent"]
-    master["Master"]
-    queued["Queued node"]
-  end
-
-  registrar["Registrar<br>mtpool-registrar"]
-  cloudflare["Cloudflare DNS"]
-
-  subgraph sensors["Sensors: a ban takes two Blocked votes"]
-    globalping["Globalping"]
-    cheburcheck["Cheburcheck"]
-    redflag["RedFlag"]
-  end
-
-  visitor -- "public pages" --> registrar
-  operator -- "panel /panel/" --> registrar
-  bot <-- "API and webhooks" --> registrar
-  pool -- "heartbeat, reports" --> registrar
-  registrar -- "settings" --> pool
-  registrar -- "A / CNAME" --> cloudflare
-  registrar -- "IP check" --> sensors
-  client -- "domain name" --> cloudflare
-  client -- "MTProto" --> master
-```
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/diagram-pool-en-dark.svg"><img alt="Nodes send reports to the registrar and get settings back. The registrar asks the sensors and keeps the DNS in Cloudflare. A Telegram client finds the address through DNS and connects to a master." src="docs/images/diagram-pool-en-light.svg"></picture>
 
 - **Node:** a server with an MTProto engine and the `mtpool-agent` agent. The agent reports health and applies pool settings.
 - **Registrar:** one service, `mtpool-registrar`: HTTP API, SQLite database, sensors, DNS, webhooks, public pages and panel.
-- **Sensors:** outside services that check whether an IP is blocked from Russia. They vote `Blocked`, `Clear` or `Abstain`. A sensor fault or an unfamiliar answer gives `Abstain`, which is not a vote.
+- **Sensors:** the outside services Globalping, Cheburcheck and RedFlag. They check whether an IP is blocked from Russia. They vote `Blocked`, `Clear` or `Abstain`. A sensor fault or an unfamiliar answer gives `Abstain`, which is not a vote.
 
 More, in Russian: [node lifecycle and ban logic](docs/lifecycle.md), [sensors and their limits](docs/sensors.md).
 
