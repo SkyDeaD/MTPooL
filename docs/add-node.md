@@ -27,11 +27,10 @@ curl -s -X POST https://pool.example.com/api/v1/admin/tokens \
 
 ## Установка
 
-1. Сохраните токен в файл с доступом только для root, чтобы он не попал в историю команд и список процессов.
+1. Сохраните токен в файл с доступом только для root, чтобы он не попал в историю команд и список процессов. Команда ждёт ввода: вставьте токен, нажмите Enter, затем Ctrl-D.
 
    ```bash
-   install -m 0600 /dev/null /root/mtpool.token
-   printf '%s' '<токен>' > /root/mtpool.token
+   sudo sh -c 'umask 077; cat > /root/mtpool.token'
    ```
 
 2. Запустите установщик. Регистратор раздаёт его по адресу `/install.sh`, уже с адресом пула и открытым ключом.
@@ -40,7 +39,7 @@ curl -s -X POST https://pool.example.com/api/v1/admin/tokens \
    curl -fsSL https://pool.example.com/install.sh | sudo sh -s -- --name node1 --token-file /root/mtpool.token
    ```
 
-   Вместо файла можно передать токен переменной окружения: `MTPOOL_TOKEN=<токен>`, как в примере из README. Аргументом токен передать нельзя: аргументы видны в `ps`.
+   Вместо файла можно передать токен переменной окружения, как в примере из README: `sudo env MTPOOL_TOKEN=<токен> sh -s -- --name node1`. Тогда значение останется в истории команд. Аргументом токен передать нельзя: аргументы видны в `ps`.
 
 3. Если движка нет, добавьте `--preset telemt` или `--preset mtproxyl` (MTProxyL приносит свой telemt). Установщик скачивает движок фиксированной версии и сверяет контрольную сумму.
 
@@ -110,4 +109,4 @@ systemctl status mtpool-agent
 
 - Владелец: `POST /api/v1/me/nodes/{id}/retire` токеном бота или кнопкой в панели.
 - Администратор: `POST /api/v1/admin/nodes/{id}/retire`.
-- Нода сама вызывает `/agent/retire`, если прокси на ней 10 минут подряд неисправен.
+- Нода сама вызывает `/api/v1/agent/retire`, если прокси на ней 10 минут подряд неисправен.

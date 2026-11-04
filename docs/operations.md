@@ -98,13 +98,13 @@ sudo systemctl start mtpool-registrar-rollback.service
 
 ```bash
 systemctl list-timers mtpool-backup.timer
-ls -l /var/backups/mtpool/
+sudo ls -l /var/backups/mtpool/
 ```
 
 Вручную:
 
 ```bash
-mtpool-registrar backup --to /var/backups/mtpool/manual.db
+sudo runuser -u mtpool -- mtpool-registrar backup --to /var/backups/mtpool/manual.db
 ```
 
 Рядом с файлом создаётся `manual.db.sha256`. Восстановление требует эту сумму, а регистратор должен быть остановлен:
@@ -151,7 +151,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/readyz
 |---|---|
 | Нода не становится `Healthy` | порт движка равен `proxy_port`? TCP-доступность порта снаружи, свежесть heartbeat, голос Globalping на странице ноды |
 | Нода в карантине без бана | все голоса `Abstain`? Ключи сенсоров: [sensors.md](sensors.md) |
-| Домен не обновляется | `GET /admin/status`, раздел DNS; токен Cloudflare; принудительно `POST /api/v1/admin/dns/push` |
+| Домен не обновляется | `GET /api/v1/admin/status`, раздел DNS; токен Cloudflare; принудительно `POST /api/v1/admin/dns/push` |
 | Ноды выпадают из пула после смены `tcp_probe_interval_sec` | значение меньше 2 секунд убивает ноды MTProxyL: у них ограничение nft примерно в одно новое соединение в секунду с одного источника |
 | Забаненную ноду не найти в таблице | так и задумано: бан хранится в истории банов и журнале, см. [lifecycle.md](lifecycle.md#бан) |
 | Бот не получает события | журнал доставок подписки, см. [bots.md](bots.md) |

@@ -33,14 +33,14 @@ MTPooL — пул MTProto-прокси. Серверы регистрируют�
 1. Склонируйте репозиторий и установите регистратор из каталога `deploy/` (параметры — в [install-registrar.md](docs/install-registrar.md)). Скрипт выдаст админ-токен один раз.
 
    ```bash
-   sudo sh deploy/install-registrar.sh --domain pool.example.com --pubkey <ключ>
+   sudo sh deploy/install-registrar.sh --domain pool.example.com
    ```
 
 2. Откройте `https://pool.example.com/panel/`, войдите админ-токеном, задайте домены пула и ключи сервисов.
 3. Выпустите токен регистрации для владельца и подключите ноду:
 
    ```bash
-   curl -fsSL https://pool.example.com/install.sh | MTPOOL_TOKEN=<токен> sh -s -- --name node1
+   curl -fsSL https://pool.example.com/install.sh | sudo env MTPOOL_TOKEN=<токен> sh -s -- --name node1
    ```
 
 Пошагово: [установка регистратора](docs/install-registrar.md), [подключение ноды](docs/add-node.md).

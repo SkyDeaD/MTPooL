@@ -68,7 +68,7 @@ cd web && npm ci && npm test && npm run build && npm run check:budget
 - **Бан только при двух и более голосах `Blocked`.** Неисправность сенсора или незнакомый ответ всегда дают `Abstain`. Быстрый флаг `blocked` у cheburcheck не голос.
 - **Внешние форматы** проверяются записанными настоящими ответами в `tests/fixtures`, а не предположениями.
 - **API.** Изменили `crates/protocol` — обновите `docs/openapi.json`. Ломающие изменения только через новую версию пути.
-- **Интерфейс.** Все тексты на русском в `web/src/strings.ru.ts`. Никаких внешних CDN. Бюджет публичной страницы — 50 КБ JS в сжатом виде (`npm run check:budget`). Цвета и размеры — в `web/src/styles/tokens.css`.
+- **Интерфейс.** Все тексты на русском: общие и публичные в `web/src/strings.ru.ts`, панель в `web/src/strings.panel.ru.ts`. Никаких внешних CDN. Бюджет публичной страницы — 50 КБ JS в сжатом виде (`npm run check:budget`). Цвета и размеры — в `web/src/styles/tokens.css`.
 - **Тесты вперёд.** Сначала падающий тест, затем код.
 - **Коммиты** в стиле Conventional Commits: `feat(dns): ...`, `fix(web): ...`, `docs: ...`.
 

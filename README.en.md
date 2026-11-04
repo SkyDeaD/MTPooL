@@ -4,7 +4,7 @@
 
 MTPooL is a pool of MTProto proxies. Servers join the pool with a token. The pool watches their health, picks masters, keeps DNS in Cloudflare, and bans an IP only after independent sensors confirm the block.
 
-Thanks to the author of the original idea are in [NOTICE](NOTICE). The documentation in `docs/` is in Russian; this page is the English summary.
+Credit for the original idea is in [NOTICE](NOTICE). The documentation in `docs/` is in Russian; this page is the English summary.
 
 ## How it works
 
@@ -31,14 +31,14 @@ You need an Ubuntu 24.04 server for the registrar, a name such as `pool.example.
 1. Clone the repository and install the registrar from `deploy/` (parameters: [install-registrar.md](docs/install-registrar.md)). The script prints the admin token once.
 
    ```bash
-   sudo sh deploy/install-registrar.sh --domain pool.example.com --pubkey <key>
+   sudo sh deploy/install-registrar.sh --domain pool.example.com
    ```
 
 2. Open `https://pool.example.com/panel/`, sign in with the admin token, set the pool domains and the service keys.
 3. Issue an enroll token for an owner and connect a node:
 
    ```bash
-   curl -fsSL https://pool.example.com/install.sh | MTPOOL_TOKEN=<token> sh -s -- --name node1
+   curl -fsSL https://pool.example.com/install.sh | sudo env MTPOOL_TOKEN=<token> sh -s -- --name node1
    ```
 
 ## Documentation (Russian)

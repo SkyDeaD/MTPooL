@@ -165,12 +165,12 @@ printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex
 | `GET /statistics/api/list` | `GET /api/v1/nodes` |
 | `GET /statistics/api/node?id=` | `GET /api/v1/nodes/{id}` |
 | `GET /proxylinks` | `GET /api/v1/links` |
-| `GET /dashboard/api` | `GET /api/v1/stats/summary`, `/stats/series` |
+| `GET /dashboard/api` | `GET /api/v1/stats/summary`, `GET /api/v1/stats/series` |
 | `healthy`, `in_quarantine`, `globalping_ok` | `state`: `pending`, `healthy`, `quarantine`, `banned`, `dead`, `pruned` |
 | `ip` с маской, поиск по октетам | `GET /api/v1/me/nodes` с полным IP по токену бота |
 | опрос раз в 45 секунд | webhook `node.banned` и `node.recovered` |
 | 2 из 3 на стороне бота | готовый вердикт и голоса в `last_round` |
-| `POST /register`, `install_node_web.sh` | `POST /agent/enroll`, `install.sh` |
+| `POST /register`, `install_node_web.sh` | `POST /api/v1/agent/enroll`, `install.sh` |
 | юнит `sharedd-node-agent` | юнит `mtpool-agent` |
 
 Порядок переноса:
@@ -178,7 +178,7 @@ printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex
 1. Попросите администратора создать владельца и выпустить токен бота (`kind: "bot"`) и токен регистрации для нод.
 2. Замените запросы по таблице. Поле `healthy` и ему подобные замените проверкой `state == "healthy"`.
 3. Уберите собственное голосование «2 из 3»: пул присылает вердикт.
-4. Вместо опроса раз в 45 секунд создайте подписку на `node.banned` и `node.recovered`. Опрос `GET /me/nodes` оставьте как редкую сверку.
+4. Вместо опроса раз в 45 секунд создайте подписку на `node.banned` и `node.recovered`. Опрос `GET /api/v1/me/nodes` оставьте как редкую сверку.
 5. Ноды переустановите установщиком `install.sh` (см. [add-node.md](add-node.md)): старый агент и его юнит не совместимы с новым пулом. Старый юнит `sharedd-node-agent` на ноде остановите и отключите перед установкой `mtpool-agent`.
 
-Поиск нод по октетам IP теперь делается по полным адресам в `GET /me/nodes`: публичный API адреса скрывает. Подбор ротации нод (proxy-rotator) в MTPooL не входит.
+Поиск нод по октетам IP теперь делается по полным адресам в `GET /api/v1/me/nodes`: публичный API адреса скрывает. Подбор ротации нод (proxy-rotator) в MTPooL не входит.
