@@ -2,7 +2,7 @@
   import { useNow } from '../lib/clock.svelte';
   import { formatWhen } from '../lib/dates';
   import { t, tp } from './i18n';
-  import { clock, ENGINE_NAMES, formatAvailability, historySlots, secondsUntil, shortDomain } from '../lib/model';
+  import { clock, ENGINE_NAMES, formatAvailability, historySlots, secondsUntil, shortDomain, whyText } from '../lib/model';
   import type { NodeHistory } from '../lib/types';
   import Sparkline from '../shared/Sparkline.svelte';
   import StateCell from '../shared/StateCell.svelte';
@@ -11,17 +11,17 @@
   import HistStrip from '../shared/HistStrip.svelte';
   import Icon from './ui/Icon.svelte';
   import MasterTag from '../shared/MasterTag.svelte';
+  import QuarantineNote from '../shared/QuarantineNote.svelte';
   import { act } from './act';
   import { usePanel } from './context.svelte';
   import { usePolled } from './live.svelte';
-  import { failedText } from './nodes';
   import RetireDialog from './RetireDialog.svelte';
   import { hrefOf } from './route.svelte';
   import type { AdminNodeDetail, EventEntry } from './types';
   import VoteCell from './VoteCell.svelte';
 
   // One node for the admin: the state, who owns it, and every round of checks with each sensor's
-  // vote and what it measured. A banned node is opened from the ban history and can be unbanned here.
+  // vote and what it measured. A banned node has no page: it leaves the pool with the ban, and is unbanned from the ban history.
   let { id }: { id: string } = $props();
 
   const panel = usePanel();
@@ -42,8 +42,6 @@
 
   const recheck = () =>
     act(panel, () => panel.client.post('/api/v1/admin/nodes/{id}/recheck', { params: { id } }), t('panel.nodes.rechecked', { id }));
-  const unban = () =>
-    act(panel, () => panel.client.post('/api/v1/admin/nodes/{id}/unban', { params: { id } }), t('panel.node.unbanned', { id }));
 </script>
 
 <div class="view stack">
@@ -65,9 +63,7 @@
         <span class="sub"><span class="mono">{n.full_ip}:{n.port}</span>, {t('node.engine', { name: ENGINE_NAMES[n.engine] ?? n.engine })}, <a href={`/node/?id=${encodeURIComponent(id)}`}>{t('panel.node.public')}</a></span>
         <span class="sp"></span>
         <div class="row-actions">
-          {#if n.state === 'banned'}
-            <button class="btn pri" type="button" onclick={unban}>{t('panel.node.unban')}</button>
-          {:else if n.state !== 'pruned'}
+          {#if n.state !== 'pruned'}
             <button class="btn" type="button" onclick={recheck}>{t('panel.node.recheck')}</button>
           {/if}
           {#if n.state !== 'pruned'}
@@ -83,7 +79,7 @@
         <section class="t kpi">
           <span class="l">{t('node.kpi.availability')}</span>
           <span class="v">{formatAvailability(n.availability_bp)}</span>
-          <span class="s">{t('node.kpi.availabilityNote')}</span>
+          <span class="s">{t(days < 30 ? 'node.kpi.availabilityYoung' : 'node.kpi.availabilityNote')}</span>
         </section>
         <section class="t kpi">
           <span class="l">{t('node.kpi.clients')}</span>
@@ -101,16 +97,18 @@
             <span class="v">{n.queue_position ? t('node.kpi.queuePlace', { n: n.queue_position }) : t('node.kpi.queue')}</span>
             <span class="s">{t('node.kpi.queueText')}</span>
           {:else}
-            <span class="v">{t('node.kpi.none')}</span>
-            <span class="s">{t('node.role.outside')}</span>
+            <span class="v">{t('node.role.outside')}</span>
+            {#if round !== null}<span class="s">{t('node.role.nextRound', { time: clock(round) })}</span>{/if}
           {/if}
         </section>
         <section class="t kpi">
           <span class="l">{t('node.kpi.inPool')}</span>
           <span class="v">{days || '<1'} <small>{tp('unit.day', days || 2)}</small></span>
-          <span class="s">{t('node.kpi.since', { date: formatWhen(Date.parse(n.state_since)) })}</span>
+          <span class="s">{t('node.kpi.since', { date: formatWhen(Date.parse(n.registered_at)) })}</span>
         </section>
       </div>
+
+      {#if n.state === 'quarantine'}<QuarantineNote reasons={n.quarantine_reasons ?? []} nextRound={round} />{/if}
 
       {#if n.last_round}
         <section class="t">
@@ -132,7 +130,8 @@
           <div><dt>{t('panel.node.owner')}</dt><dd>{n.owner_name ?? '—'}</dd></div>
           <div><dt>{t('panel.node.agent')}</dt><dd>{n.agent_version ?? '—'}</dd></div>
           <div><dt>{t('panel.node.heartbeat')}</dt><dd>{n.last_heartbeat ? formatWhen(Date.parse(n.last_heartbeat)) : t('panel.nodes.noSignal')}</dd></div>
-          <div><dt>{t('panel.node.failed')}</dt><dd>{n.failed.length ? failedText(n.failed) : t('check.all')}</dd></div>
+          <div><dt>{t('panel.node.lastMeasure')}</dt><dd>{n.last_report_at ? formatWhen(Date.parse(n.last_report_at)) : t('panel.node.noMeasure')}</dd></div>
+          <div><dt>{t('panel.node.failed')}</dt><dd>{n.failed.length ? whyText(n.failed) : t('panel.node.allGood')}</dd></div>
         </dl>
       </section>
 

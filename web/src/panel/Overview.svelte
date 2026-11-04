@@ -1,24 +1,27 @@
 <script lang="ts">
   import { useNow } from '../lib/clock.svelte';
   import { formatSpan, formatWhen } from '../lib/dates';
-  import { buildScheme, secondsUntil } from '../lib/model';
+  import { buildScheme, secondsUntil, whyText } from '../lib/model';
   import type { BanRecord, ClientsRange, ClientsSeries, PublicDomain, StatsSeries } from '../lib/types';
   import BanTable from '../shared/BanTable.svelte';
   import ClientsChart from '../shared/ClientsChart.svelte';
   import PoolScheme from '../shared/PoolScheme.svelte';
   import TimeChart, { type Bar } from '../shared/TimeChart.svelte';
+  import { act } from './act';
   import AddNode from './AddNode.svelte';
+  import { usePanel } from './context.svelte';
   import { useData } from './data.svelte';
   import EventRow from './EventRow.svelte';
   import { t, tp } from './i18n';
   import { usePolled } from './live.svelte';
-  import { failedText, panelGroups } from './nodes';
+  import { panelGroups } from './nodes';
   import { hrefOf } from './route.svelte';
   import type { AdminNode, EventEntry } from './types';
   import { sensorKey } from './types';
   import Icon from './ui/Icon.svelte';
 
   // The pool at a glance: what needs a person, the main numbers, clients, the scheme, bans, events.
+  const panel = usePanel();
   const data = useData();
   const clock = useNow(1000);
   let range = $state<ClientsRange>('10m');
@@ -59,11 +62,14 @@
   const attention = $derived((groups?.quarantine.length ?? 0) + (dnsBroken ? 1 : 0) + silent.length);
   const calm = $derived(groups !== null && status !== null && attention === 0);
 
+  const unban = (id: string) =>
+    act(panel, () => panel.client.post('/api/v1/admin/nodes/{id}/unban', { params: { id } }), t('panel.node.unbanned', { id }));
+
   function quarantineText(n: AdminNode): string {
     const blocked = n.last_round?.votes.filter((v) => v.vote === 'blocked').length ?? 0;
     const left = secondsUntil(n.next_round_at, clock.ms);
     const next = left !== null && left > 0 ? t('panel.overview.nextRound', { span: formatSpan(left) }) : '';
-    const failed = n.failed.length ? failedText(n.failed) : '';
+    const failed = n.failed.length ? whyText(n.failed) : '';
     const why = blocked === 1 ? t('panel.overview.oneVote') : failed && `${failed[0].toUpperCase()}${failed.slice(1)}.`;
     return [why, next].filter(Boolean).join(' ');
   }
@@ -199,7 +205,11 @@
         <a href="/dashboard/">{t('panel.overview.allBans')}</a>
       </div>
       {#if recentBans.length > 0}
-        <BanTable rows={recentBans} href={banHref} compact />
+        <BanTable rows={recentBans} href={banHref} compact>
+          {#snippet action(ban)}
+            <button class="btn s" type="button" onclick={() => unban(ban.node_id)}>{t('panel.node.unban')}</button>
+          {/snippet}
+        </BanTable>
       {:else}
         <div class="tb-b"><p class="muted">{t('dash.log.empty')}</p></div>
       {/if}

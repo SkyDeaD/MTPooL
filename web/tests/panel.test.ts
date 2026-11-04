@@ -324,11 +324,16 @@ describe('node page', () => {
     expect(text()).toContain(t('panel.node.hint'));
   });
 
-  it('banned_node_has_unban_and_votes', async () => {
-    start('#/nodes/iota-p6q1c');
+  it('a_ban_is_lifted_from_the_ban_history', async () => {
+    start('#/overview');
     await login();
-    expect(button(t('panel.node.unban'))).toBeTruthy();
-    expect(button(t('panel.node.recheck'))).toBeUndefined();
+    const unban = button(t('panel.node.unban'));
+    expect(unban).toBeTruthy();
+    const row = unban!.closest('tr')!;
+    unban!.click();
+    await settle();
+    expect(api.writes().some((w) => w.startsWith('POST /admin/nodes/') && w.endsWith('/unban'))).toBe(true);
+    expect(row.textContent).toBeTruthy();
   });
 });
 
@@ -485,9 +490,9 @@ describe('settings limits follow the server', () => {
 });
 
 describe('journal days', () => {
-  it('a_day_turns_at_midnight_moscow_time_whatever_the_browser_zone', () => {
-    const lateEvening = Date.parse('2026-11-03T19:13:00Z'); // 22:13 in Moscow
-    const afterMidnight = Date.parse('2026-11-03T21:30:00Z'); // 00:30 in Moscow
+  it('a_day_turns_at_midnight_in_the_zone_of_the_browser', () => {
+    const lateEvening = new Date(2026, 10, 3, 23, 30).getTime();
+    const afterMidnight = new Date(2026, 10, 4, 0, 30).getTime();
     expect(dayOf(lateEvening)).not.toBe(dayOf(afterMidnight));
     expect(dayOf(lateEvening)).toBe('3 нояб.');
   });

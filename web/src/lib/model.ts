@@ -60,16 +60,37 @@ export function formatAvailability(bp: number | null | undefined): string {
   return `${text} %`;
 }
 
-export type CheckProblem = 'tcp' | 'globalping' | 'metrics' | 'globalping_nodata';
+export type CheckState = 'ok' | 'bad' | 'none';
+export type CheckName = 'tcp' | 'metrics' | 'globalping';
 
-/** The checks that did not pass, in the order the table lists them. */
-export function checksProblems(checks: NodeChecks): CheckProblem[] {
-  const out: CheckProblem[] = [];
-  if (!checks.tcp) out.push('tcp');
-  if (checks.globalping === 'failed') out.push('globalping');
-  else if (checks.globalping !== 'ok') out.push('globalping_nodata');
-  if (!checks.metrics) out.push('metrics');
-  return out;
+export interface CheckRow {
+  name: CheckName;
+  state: CheckState;
+  title: MessageKey;
+}
+
+/** Every check of a node, passed or not, in the order the table lists them. */
+export function checkRows(checks: NodeChecks): CheckRow[] {
+  const gp: CheckState = checks.globalping === 'ok' ? 'ok' : checks.globalping === 'failed' ? 'bad' : 'none';
+  return [
+    { name: 'tcp', state: checks.tcp ? 'ok' : 'bad', title: checks.tcp ? 'check.ok.tcp' : 'check.bad.tcp' },
+    { name: 'metrics', state: checks.metrics ? 'ok' : 'bad', title: checks.metrics ? 'check.ok.metrics' : 'check.bad.metrics' },
+    {
+      name: 'globalping',
+      state: gp,
+      title: gp === 'ok' ? 'check.ok.globalping' : gp === 'bad' ? 'check.bad.globalping' : 'check.none.globalping',
+    },
+  ];
+}
+
+/** Why a node is not working, in words; a code the page does not know is shown as it came. */
+export function whyText(codes: readonly string[]): string {
+  return codes
+    .map((code) => {
+      const key = `why.${code}`;
+      return key in messages ? t(key as MessageKey) : code;
+    })
+    .join(', ');
 }
 
 /** The first part of a domain: "proxy1.example.com" is "proxy1". */

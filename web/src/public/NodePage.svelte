@@ -8,6 +8,7 @@
   import HistStrip from '../shared/HistStrip.svelte';
   import Icon from '../shared/Icon.svelte';
   import MasterTag from '../shared/MasterTag.svelte';
+  import QuarantineNote from '../shared/QuarantineNote.svelte';
   import Sparkline from '../shared/Sparkline.svelte';
   import StateCell from '../shared/StateCell.svelte';
   import Votes from '../shared/Votes.svelte';
@@ -55,7 +56,7 @@
           <section class="t kpi">
             <span class="l">{t('node.kpi.availability')}</span>
             <span class="v">{formatAvailability(n.availability_bp)}</span>
-            <span class="s">{t('node.kpi.availabilityNote')}</span>
+            <span class="s">{t(days < 30 ? 'node.kpi.availabilityYoung' : 'node.kpi.availabilityNote')}</span>
           </section>
           <section class="t kpi">
             <span class="l">{t('node.kpi.clients')}</span>
@@ -73,16 +74,18 @@
               <span class="v">{n.queue_position ? t('node.kpi.queuePlace', { n: n.queue_position }) : t('node.kpi.queue')}</span>
               <span class="s">{t('node.kpi.queueText')}</span>
             {:else}
-              <span class="v">{t('node.kpi.none')}</span>
-              <span class="s">{round !== null ? t('node.role.nextRound', { time: clock(round) }) : t('node.role.outside')}</span>
+              <span class="v">{t('node.role.outside')}</span>
+              {#if round !== null}<span class="s">{t('node.role.nextRound', { time: clock(round) })}</span>{/if}
             {/if}
           </section>
           <section class="t kpi">
             <span class="l">{t('node.kpi.inPool')}</span>
             <span class="v">{days || '<1'} <small>{days ? tp('unit.day', days) : tp('unit.day', 2)}</small></span>
-            <span class="s">{t('node.kpi.since', { date: formatWhen(Date.parse(n.state_since)) })}</span>
+            <span class="s">{t('node.kpi.since', { date: formatWhen(Date.parse(n.registered_at)) })}</span>
           </section>
         </div>
+
+        {#if n.state === 'quarantine'}<QuarantineNote reasons={n.quarantine_reasons ?? []} nextRound={round} />{/if}
 
         {#if n.last_round}
           <section class="t">

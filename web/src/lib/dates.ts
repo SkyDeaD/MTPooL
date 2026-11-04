@@ -1,14 +1,12 @@
-// Numbers and moments as the pages show them: Russian formats, Moscow time.
-const ZONE = 'Europe/Moscow';
+// Numbers and moments as the pages show them: Russian formats, in the zone of the browser.
 const numberFormat = new Intl.NumberFormat('ru-RU');
-const hourFormat = new Intl.DateTimeFormat('ru-RU', { timeZone: ZONE, hour: '2-digit', minute: '2-digit' });
+const hourFormat = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' });
 const secondFormat = new Intl.DateTimeFormat('ru-RU', {
-  timeZone: ZONE,
   hour: '2-digit',
   minute: '2-digit',
   second: '2-digit',
 });
-const dayFormat = new Intl.DateTimeFormat('ru-RU', { timeZone: ZONE, day: 'numeric', month: 'short' });
+const dayFormat = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' });
 
 /** A whole number with grouping: "1 234". */
 export function formatNumber(n: number): string {

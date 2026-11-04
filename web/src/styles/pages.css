@@ -67,10 +67,10 @@ a.card.m:hover{border-color:var(--acc);background:var(--acc-t2)}
 .dtree{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;padding:14px 16px 16px;align-items:start}
 .dt{display:grid;gap:8px;min-width:0}
 .cth{align-items:center;padding-block:9px}
-.chv{display:grid;grid-template-columns:auto auto;align-items:baseline;column-gap:10px}
-.chv .l{grid-column:1/-1;color:var(--fg2);font-size:13px}
-.chv .v{font-size:24px;font-weight:600;line-height:1.15;letter-spacing:-.02em}
-.chv .s{color:var(--fg3);font-size:12.5px}
+.chv{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 10px;min-width:0}
+.chv .l{flex-basis:100%;color:var(--fg2);font-size:13px}
+.chv .v{font-size:24px;font-weight:600;line-height:1.15;letter-spacing:-.02em;white-space:nowrap}
+.chv .s{color:var(--fg3);font-size:12.5px;white-space:nowrap}
 .cbody{padding:8px 8px 6px}
 .clg{display:flex;flex-wrap:wrap;gap:4px 14px;padding:0 8px 6px;font-size:12.5px;color:var(--fg2)}
 .lg{display:inline-flex;align-items:center;gap:6px}
@@ -152,6 +152,19 @@ a.q:hover{border-color:var(--line2);text-decoration:none}
 .hs i{flex:1;background:var(--ok);opacity:.38;border-radius:1px;min-width:1px}
 .hs i.x{background:var(--bad);opacity:1}
 .hs i.w{background:var(--warn);opacity:1}
+.hs-lg{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:8px;font-size:var(--fs-xs);color:var(--fg2)}
+.hs-lg span{display:inline-flex;align-items:center;gap:5px}
+.hs-k{width:9px;height:9px;border-radius:2px;background:var(--ok);opacity:.38}
+.hs-k.w{background:var(--warn);opacity:1}.hs-k.x{background:var(--bad);opacity:1}.hs-k.n{background:var(--line2);opacity:1}
+.chks{display:flex;flex-wrap:wrap;gap:3px 10px;margin:0;padding:0;list-style:none;font-size:13px;color:var(--fg2)}
+.chks li{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.chks .i{width:14px;height:14px}
+.chks .ok .i{color:var(--ok)}
+.chks .bad{color:var(--bad);font-weight:500}
+.chks .none{color:var(--warn);font-weight:500}
+.nm-s.why{color:var(--warn);white-space:normal;max-width:24ch}
+.qnote .qwhy{margin:0 0 6px;font-weight:500}
+.qnote .muted{margin:0}
 
 .votes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .vote{padding:12px;border:1px solid var(--line);border-radius:var(--r2);display:grid;gap:3px}

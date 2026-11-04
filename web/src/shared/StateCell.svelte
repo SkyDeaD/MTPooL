@@ -1,13 +1,16 @@
 <script lang="ts">
   import { t } from '../lib/i18n';
+  import { whyText } from '../lib/model';
   import type { PublicNode } from '../lib/types';
   import Icon from './Icon.svelte';
 
-  let { state }: { state: PublicNode['state'] } = $props();
+  // The state of a node, and for a quarantine the reason it is in one.
+  let { state, reasons = [] }: { state: PublicNode['state']; reasons?: readonly string[] } = $props();
 </script>
 
 {#if state === 'quarantine'}
   <span class="st warn"><Icon name="alert" />{t('node.state.quarantine')}</span>
+  {#if reasons.length > 0}<div class="nm-s why">{whyText(reasons)}</div>{/if}
 {:else if state === 'banned'}
   <span class="st bad"><Icon name="stop" />{t('node.state.banned')}</span>
 {:else}

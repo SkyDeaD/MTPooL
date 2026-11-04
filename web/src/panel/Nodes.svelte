@@ -2,7 +2,7 @@
   import { useNow } from '../lib/clock.svelte';
   import { formatWhen } from '../lib/dates';
   import { t } from './i18n';
-  import { ENGINE_NAMES, formatAvailability } from '../lib/model';
+  import { ENGINE_NAMES, formatAvailability, whyText } from '../lib/model';
   import ChecksCell from '../shared/ChecksCell.svelte';
   import ClientsCell from '../shared/ClientsCell.svelte';
   import RoleCell from '../shared/RoleCell.svelte';
@@ -12,7 +12,7 @@
   import AddNode from './AddNode.svelte';
   import { useData } from './data.svelte';
   import Icon from './ui/Icon.svelte';
-  import { failedText, panelGroups } from './nodes';
+  import { panelGroups } from './nodes';
   import RetireDialog from './RetireDialog.svelte';
   import { hrefOf } from './route.svelte';
   import RowMenu from './RowMenu.svelte';
@@ -130,7 +130,7 @@
                         <span class="mono">{node.full_ip}:{node.port}</span>, {ENGINE_NAMES[node.engine]}{#if node.owner_name}, {node.owner_name}{/if}
                       </div></td
                     >
-                    <td data-l={t('stats.col.state')}><StateCell state={node.state} /></td>
+                    <td data-l={t('stats.col.state')}><StateCell state={node.state} reasons={node.quarantine_reasons} /></td>
                     <td data-l={t('stats.col.role')}><RoleCell {node} now={clock.ms} /></td>
                     <td data-l={t('stats.col.checks')}><ChecksCell checks={node.checks} /></td>
                     <td class="n" data-l={t('stats.col.availability')}>{formatAvailability(node.availability_bp)}</td>
@@ -171,7 +171,7 @@
                       <div class="nm-s"><span class="mono">{node.full_ip}:{node.port}</span></div></td
                     >
                     <td data-l={t('stats.col.state')}>{t(`panel.state.${node.state}` as 'panel.state.pending')}</td>
-                    <td data-l={t('panel.nodes.reason')}>{node.failed.length ? failedText(node.failed) : '—'}</td>
+                    <td data-l={t('panel.nodes.reason')}>{node.failed.length ? whyText(node.failed) : '—'}</td>
                     <td data-l={t('panel.nodes.lastSignal')}>{heartbeat(node)}</td>
                     <td class="n">
                       {#if node.state !== 'pruned'}

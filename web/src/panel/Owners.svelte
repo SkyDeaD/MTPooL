@@ -7,6 +7,7 @@
   import { act } from './act';
   import { usePanel } from './context.svelte';
   import { usePolled } from './live.svelte';
+  import { hrefOf } from './route.svelte';
   import type { NewTokenCreated, Owner, TokenMeta } from './types';
   import Choice from './ui/Choice.svelte';
   import Confirm from './ui/Confirm.svelte';
@@ -17,7 +18,15 @@
   // The people whose servers join the pool, and the tokens that let them and the bots in.
   const panel = usePanel();
   const owners = usePolled<Owner[]>(() => '/api/v1/admin/owners');
-  const tokens = usePolled<TokenMeta[]>(() => '/api/v1/admin/tokens');
+  // A pool has a token per node, so the list can be filtered; "all" is the newest of every kind.
+  let tokenFilter = $state('all');
+  const tokens = usePolled<TokenMeta[]>(() =>
+    tokenFilter === 'all' ? '/api/v1/admin/tokens' : `/api/v1/admin/tokens?kind=${tokenFilter}`,
+  );
+  const filterItems = $derived([
+    { value: 'all', label: t('panel.tokens.filterAll') },
+    ...['enroll', 'node', 'bot', 'metrics', 'admin'].map((value) => ({ value, label: kindText(value) })),
+  ]);
 
   const ownerName = (id: number | null | undefined) => owners.data?.find((o) => o.id === id)?.name ?? '';
   const kindText = (kind: string) => (['admin', 'enroll', 'node', 'bot', 'metrics'].includes(kind) ? t(`panel.tokens.kind.${kind}` as MessageKey) : kind);
@@ -181,6 +190,8 @@
     <div class="th">
       <h2>{t('panel.tokens.title')}</h2>
       <span class="sub">{t('panel.tokens.sub')}</span>
+      <span class="sp"></span>
+      <Choice bind:value={tokenFilter} items={filterItems} label={t('panel.tokens.filter')} />
     </div>
     <div class="tw">
       <table class="tb list">
@@ -198,7 +209,9 @@
           {#each tokens.data ?? [] as k (k.id)}
             <tr class={k.revoked_at && 'off'}>
               <td class="full" data-l=""><span class="mono">{k.prefix}</span></td>
-              <td data-l={t('panel.tokens.kindCol')}>{kindText(k.kind)}</td>
+              <td data-l={t('panel.tokens.kindCol')}>
+                {#if k.node_id}{kindText(k.kind)}: <a class="nm" href={hrefOf('node', k.node_id)}>{k.node_id}</a>{:else}{kindText(k.kind)}{/if}
+              </td>
               <td data-l={t('panel.tokens.owner')}>{ownerName(k.owner_id) || '—'}</td>
               <td data-l={t('panel.tokens.expires')}>
                 {#if k.revoked_at}{t('panel.tokens.revoked')}{:else if k.expires_at}{formatWhen(Date.parse(k.expires_at))}{:else}{t('panel.tokens.life.never')}{/if}

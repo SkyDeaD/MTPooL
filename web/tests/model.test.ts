@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatAvailability, groupNodes, historySlots, poolCounts, checksProblems } from '../src/lib/model';
+import { checkRows, formatAvailability, groupNodes, historySlots, poolCounts, whyText } from '../src/lib/model';
 import type { PublicNode } from '../src/lib/types';
 import history from './fixtures/node-history.json';
 import nodes from './fixtures/nodes.json';
@@ -31,10 +31,17 @@ describe('model', () => {
     expect(formatAvailability(undefined)).toBe('—');
   });
 
-  it('names_the_failed_checks', () => {
-    expect(checksProblems({ tcp: true, metrics: true, globalping: 'ok' })).toEqual([]);
-    expect(checksProblems({ tcp: false, metrics: false, globalping: 'failed' })).toEqual(['tcp', 'globalping', 'metrics']);
-    expect(checksProblems({ tcp: true, metrics: true, globalping: 'no_data' })).toEqual(['globalping_nodata']);
+  it('lists_every_check_by_name_with_how_it_went', () => {
+    const states = (checks: Parameters<typeof checkRows>[0]) => checkRows(checks).map((r) => `${r.name}:${r.state}`);
+    expect(states({ tcp: true, metrics: true, globalping: 'ok' })).toEqual(['tcp:ok', 'metrics:ok', 'globalping:ok']);
+    expect(states({ tcp: false, metrics: false, globalping: 'failed' })).toEqual(['tcp:bad', 'metrics:bad', 'globalping:bad']);
+    expect(states({ tcp: true, metrics: true, globalping: 'no_data' })).toEqual(['tcp:ok', 'metrics:ok', 'globalping:none']);
+  });
+
+  it('puts_quarantine_reasons_in_words_and_keeps_a_code_it_does_not_know', () => {
+    expect(whyText(['report_stale'])).toBe('нет свежего замера Globalping');
+    expect(whyText(['tcp', 'something_new'])).toBe('порт не отвечает снаружи, something_new');
+    expect(whyText([])).toBe('');
   });
 
   it('history_has_96_slots_and_a_missing_bucket_is_no_data_not_zero', () => {
