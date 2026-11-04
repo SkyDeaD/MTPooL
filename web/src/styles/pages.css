@@ -15,11 +15,10 @@ a.nm{color:var(--fg);text-decoration:none}
 a.nm:hover{text-decoration:underline}
 .nm-s{color:var(--fg3);font-size:12.5px;margin-top:1px}
 .bar{display:block;height:3px;border-radius:2px;background:var(--line);overflow:hidden;margin-top:6px;min-width:56px}
-.bar i{display:block;height:100%;border-radius:2px;background:var(--acc);transform-origin:left;animation:grow .45s cubic-bezier(.2,.7,.2,1) both;transition:width .9s linear}
+.bar i{display:block;height:100%;border-radius:2px;background:var(--acc);transition:width .9s linear}
 .bar.warn i{background:var(--warn)}.bar.bad i{background:var(--bad)}.bar.gr i{background:var(--fg3)}
 .bar.lg{height:6px;border-radius:3px}
 .bar.lg i{border-radius:3px}
-@keyframes grow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
 
 .chips{display:flex;gap:6px;flex-wrap:wrap}
 .chip{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px;border-radius:var(--r2);border:1px solid var(--line);background:transparent;color:var(--fg2);font-size:13px;cursor:pointer;transition:background .12s,color .12s,border-color .12s}
@@ -33,9 +32,6 @@ a.nm:hover{text-decoration:underline}
 .logo{display:flex;align-items:center;gap:9px;color:var(--fg);font-weight:600;font-size:15.5px;letter-spacing:-.01em;padding:2px 8px 12px}
 .logo:hover{text-decoration:none}
 .logo svg{width:24px;height:24px;flex:none}
-.view{animation:rise .18s ease-out both}
-.view .t,.view .an{animation:rise .26s ease-out both;animation-delay:calc(var(--i,0)*28ms)}
-.noan,.noan .t,.noan .an,.noan .bar i,.noan .bb{animation:none!important}
 @keyframes ping{0%{transform:scale(1);opacity:.5}70%,100%{transform:scale(2.8);opacity:0}}
 .chev{transition:transform .14s}
 pre.code{margin:0;padding:12px;background:var(--bg);border:1px solid var(--line);border-radius:var(--r2);font:12.5px/1.55 var(--mono);overflow-x:auto;white-space:pre;color:var(--fg);tab-size:2}
@@ -96,8 +92,7 @@ a.card.m:hover{border-color:var(--acc);background:var(--acc-t2)}
 .ccs .cdot{fill:var(--acc);stroke:var(--surf);stroke-width:2}
 .ccs .head{fill:var(--acc);stroke:var(--surf);stroke-width:2}
 .ccs .pulse{fill:var(--acc);transform-box:fill-box;transform-origin:center;animation:ping 2.4s ease-out infinite}
-.ccs .plot{animation:wipe .75s cubic-bezier(.3,.7,.2,1) both}
-.noan .ccs .plot{animation:none}
+.ccs .plot.wipe{animation:wipe .75s cubic-bezier(.3,.7,.2,1) both}
 @keyframes wipe{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 -10% 0 0)}}
 .ctag{position:absolute;right:2px;top:0;height:22px;padding:0 7px;display:grid;place-items:center;border-radius:var(--r3);background:var(--surf3);border:1px solid var(--line2);font-size:12px;font-weight:500;pointer-events:none;will-change:transform}
 .cft{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:4px 16px;padding:4px 8px 2px}
@@ -124,11 +119,9 @@ a.card:hover{border-color:var(--line2);text-decoration:none}
 .card .d{font-family:var(--mono);font-size:13px;font-weight:500;overflow-wrap:anywhere}
 .card .s{color:var(--fg3);font-size:12.5px}
 .lk{position:relative;align-self:center;height:1px;overflow:visible}
-.lk::before{content:"";position:absolute;inset:0;background:var(--line2);transform-origin:left;animation:draw .5s cubic-bezier(.3,.7,.2,1) both;transition:background .15s}
+.lk::before{content:"";position:absolute;inset:0;background:var(--line2);transition:background .15s}
 .lk::after{content:"";position:absolute;top:-2px;left:0;width:5px;height:5px;border-radius:50%;background:var(--acc);animation:run 3.2s linear infinite;animation-delay:var(--dl,0s)}
-@keyframes draw{from{transform:scaleX(0)}to{transform:scaleX(1)}}
 @keyframes run{0%{left:0;opacity:0}12%{opacity:.9}88%{opacity:.9}100%{left:calc(100% - 5px);opacity:0}}
-.noan .lk::before{animation:none}
 .tr.col .card{background:transparent;border-style:solid}
 .qlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;margin-top:6px}
 .q{display:grid;grid-template-columns:auto minmax(0,1fr);gap:0 9px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r2);color:var(--fg);align-items:center}
@@ -146,11 +139,10 @@ a.q:hover{border-color:var(--line2);text-decoration:none}
 .ch .bs{position:absolute;inset:0;display:flex;align-items:flex-end;gap:2px}
 .ch .bc{position:relative;flex:1;height:100%;display:flex;align-items:flex-end;justify-content:center;min-width:0;cursor:default;border-radius:3px}
 .ch .bc:hover,.ch .bc:focus-visible{background:var(--surf2)}
-.ch .bb{width:min(70%,30px);min-height:2px;background:var(--acc);border-radius:3px 3px 0 0;transform-origin:bottom;animation:growy .42s cubic-bezier(.2,.7,.2,1) both;animation-delay:calc(var(--i,0)*14ms)}
+.ch .bb{width:min(70%,30px);min-height:2px;background:var(--acc);border-radius:3px 3px 0 0}
 .ch .bc[data-v="0"] .bb{display:none}
 .xa{display:flex;gap:2px;padding:4px 16px 12px 56px;font-size:12px;color:var(--fg3)}
 .xa span{flex:1;text-align:center;min-width:0;white-space:nowrap}
-@keyframes growy{from{transform:scaleY(0)}to{transform:scaleY(1)}}
 .tip{position:fixed;z-index:70;pointer-events:none;background:var(--surf3);border:1px solid var(--line2);border-radius:var(--r2);padding:7px 10px;font-size:12.5px;max-width:240px}
 .ch-empty{display:grid;place-items:center;height:220px;text-align:center;color:var(--fg2);padding:16px}
 .ch-empty div{display:grid;gap:4px;justify-items:center}
@@ -173,7 +165,9 @@ a.q:hover{border-color:var(--line2);text-decoration:none}
 .ptabs a{display:flex;align-items:center;height:34px;padding:0 11px;border-radius:var(--r2);color:var(--fg2);font-size:13.5px;transition:background .12s,color .12s}
 .ptabs a:hover{background:var(--surf2);color:var(--fg);text-decoration:none}
 .ptabs a.on{background:var(--acc-t);color:var(--acc);font-weight:500}
-.pm{max-width:1240px;margin:auto;padding-block:20px 40px}
+.pm,.pf{box-sizing:content-box;max-width:1240px;margin:auto}
+.pm{padding-block:20px 40px}
+.pf{padding-bottom:24px}
 .hero{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px 24px;align-items:center;padding:18px 20px}
 .hero .w{display:flex;gap:12px;align-items:flex-start}
 .hero h1{font-size:22px;font-weight:600;line-height:1.25;letter-spacing:-.012em}
@@ -277,7 +271,6 @@ dialog::backdrop{background:var(--scrim)}
   *,*::before,*::after{animation-duration:.001ms!important;animation-delay:0ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
   .lk::after,.dot::after,.run,.ccs .pulse{display:none}
 }
-@keyframes rise{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
 .codew{position:relative}
 .codew .btn{position:absolute;top:6px;right:6px;background:var(--surf)}
 
@@ -327,3 +320,18 @@ dialog::backdrop{background:var(--scrim)}
 .empty p{margin:0;color:var(--fg2);max-width:60ch}
 .stale{display:flex;gap:8px;align-items:center;padding:9px 14px;margin-bottom:var(--gap);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:var(--r2);background:var(--warn-t);color:var(--fg);font-size:var(--fs-small)}
 .sk{display:block;height:1em;border-radius:var(--r);background:var(--surf3);min-width:3ch}
+
+/* Each public tab is a page of its own. Going between them is one soft change of the page under a
+   header that stays put. A browser that cannot do this just changes the page. */
+@media (prefers-reduced-motion:no-preference){
+  @view-transition{navigation:auto}
+  .phd{view-transition-name:phd}
+  ::view-transition-old(root),::view-transition-new(root){animation-duration:.12s}
+  ::view-transition-group(phd){animation:none}
+  ::view-transition-old(phd){display:none}
+  ::view-transition-new(phd){animation:none}
+}
+/* Coming back within a session the page has answers to show: it waits for them instead of showing
+   empty places first, one second at most so that a script that never comes hides nothing. */
+html.back .pm{visibility:hidden;animation:shown 0s 1s forwards}
+@keyframes shown{to{visibility:visible}}

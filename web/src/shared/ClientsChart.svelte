@@ -19,6 +19,13 @@
     onrange: (range: ClientsRange) => void;
   } = $props();
 
+  // The line is drawn anew only in answer to the reader, never because a page opened.
+  let asked = $state(false);
+  function pick(next: ClientsRange): void {
+    asked = true;
+    onrange(next);
+  }
+
   type Mode = 'total' | 'stack';
   let mode = $state<Mode>('total');
 
@@ -291,7 +298,7 @@
     <span class="sp"></span>
     <div class="row w">
       <Seg items={modeItems} value={mode} onchange={(v) => (mode = v)} label={t('clients.mode.label')} />
-      <Seg items={rangeItems} value={range} onchange={onrange} label={t('clients.range.label')} />
+      <Seg items={rangeItems} value={range} onchange={pick} label={t('clients.range.label')} />
     </div>
   </div>
   <div class="cbody">
@@ -330,7 +337,8 @@
             <text class="tx" x={tick.x} y={height - 7}>{tick.label}</text>
           {/each}
           <line class="bl" x1={ml} x2={width - mr} y1={height - MB} y2={height - MB} />
-          <g class="plot">
+          {#key range}
+          <g class={['plot', asked && 'wipe']}>
             {#each bands as band, i (i)}
               <path class="bd {seriesClass(band.key)}" d={band.d} />
             {/each}
@@ -338,10 +346,12 @@
               {#if line.area}<path class="fa" d={line.area} />{/if}
               <path class="ln" d={line.d} />
             {/each}
-            {#each marks as m (m.at)}
+            <!-- Two masters often change at the same instant: the time is not a key. -->
+            {#each marks as m, i (i)}
               <line class="mk {markClass[m.kind]}" x1={X(m.at)} x2={X(m.at)} y1={MT} y2={height - MB} />
             {/each}
           </g>
+          {/key}
           {#if hover}
             <line class="cross" x1={hover.x} x2={hover.x} y1={MT} y2={height - MB} />
             <circle class="cdot" r="4" cx={hover.x} cy={Y(hover.point.total)} />
@@ -361,7 +371,7 @@
             <div class="ti"><i class={seriesClass(key)}></i><span>{seriesName(key)}</span><b>{formatNumber(hover.point.parts[key] ?? 0)}</b></div>
           {/each}
         {/if}
-        {#each hover.near as m (m.at)}<div class="ti m">{t(`clients.mark.${m.kind}`)}</div>{/each}
+        {#each hover.near as m, i (i)}<div class="ti m">{t(`clients.mark.${m.kind}`)}</div>{/each}
       </div>
     {/if}
     <div class="cft">

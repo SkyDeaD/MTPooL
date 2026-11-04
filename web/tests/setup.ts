@@ -1,3 +1,10 @@
+import { afterEach } from 'vitest';
+
+// The pages remember answers for the session; a test starts with none.
+afterEach(() => {
+  sessionStorage.clear();
+});
+
 // jsdom has no ResizeObserver, which Svelte's size bindings use. Layout is not measured in
 // tests, so a stub that never fires is enough.
 if (typeof globalThis.ResizeObserver === 'undefined') {

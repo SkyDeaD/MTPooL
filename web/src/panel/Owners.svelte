@@ -131,9 +131,9 @@
 <div class="view stack">
   <header class="ph">
     <h1>{t('panel.owners.title')}</h1>
-    <span class="sub">{t('panel.owners.sub')}</span>
     <span class="sp"></span>
     <button class="btn pri" type="button" onclick={openIssue}><Icon name="key" />{t('panel.tokens.issue')}</button>
+    <span class="sub">{t('panel.owners.sub')}</span>
   </header>
   {#if owners.stale || tokens.stale}<p class="note" role="status">{t('common.stale')}</p>{/if}
 

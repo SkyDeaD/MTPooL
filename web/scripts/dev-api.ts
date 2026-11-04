@@ -173,5 +173,9 @@ export function devApi(): Plugin {
     configureServer(server) {
       server.middlewares.use(handle);
     },
+    // `vite preview`: the built pages, with the same answers.
+    configurePreviewServer(server) {
+      server.middlewares.use(handle);
+    },
   };
 }

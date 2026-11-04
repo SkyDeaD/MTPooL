@@ -72,7 +72,7 @@
           onpointerleave={() => (tip = null)}
           onblur={() => (tip = null)}
         >
-          <div class="bb" style="height:{(((b.value ?? 0) * 100) / top).toFixed(1)}%;--i:{i}"></div>
+          <div class="bb" style="height:{(((b.value ?? 0) * 100) / top).toFixed(1)}%"></div>
         </div>
       {/each}
     </div>
