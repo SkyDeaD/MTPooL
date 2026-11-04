@@ -55,6 +55,9 @@ pub struct NodeRecord {
     /// check was unproven (unknown, failed or aged out). Stays set until the node leaves
     /// `Quarantine`; only counted clean rounds, not a fresh measurement, end it.
     pub suspected: bool,
+    /// Why the node entered `Quarantine`; empty in every other state.
+    #[serde(default)]
+    pub quarantine_reasons: Vec<FailedCondition>,
     /// Registered from a blocked IP: a decisive round must lift the block before the node
     /// may proceed.
     pub reverify: bool,
@@ -95,6 +98,7 @@ impl NodeRecord {
             undecided_rounds: 0,
             clean_rounds: 0,
             suspected: false,
+            quarantine_reasons: Vec::new(),
             reverify: false,
         }
     }
@@ -140,6 +144,7 @@ impl NodeRecord {
     /// report age start over. The metrics latch and the heartbeat describe the agent, not the
     /// IP, so they stay.
     fn reset_for_recheck(&mut self, now: Ts) {
+        self.quarantine_reasons.clear();
         self.generation = self.generation.next();
         self.state = NodeState::Pending;
         self.state_since = now;
@@ -155,7 +160,8 @@ impl NodeRecord {
     }
 
     /// Enters `Quarantine`: the node leaves the masters and the prune timer starts.
-    fn enter_quarantine(&mut self, now: Ts, suspected: bool) {
+    fn enter_quarantine(&mut self, now: Ts, suspected: bool, reasons: Vec<FailedCondition>) {
+        self.quarantine_reasons = reasons;
         self.state = NodeState::Quarantine;
         self.state_since = now;
         self.last_round_at = None;
@@ -166,6 +172,7 @@ impl NodeRecord {
 
     /// Enters `Healthy` and the back of the master queue.
     fn enter_healthy(&mut self, now: Ts) {
+        self.quarantine_reasons.clear();
         self.state = NodeState::Healthy;
         self.state_since = now;
         self.queued_at = now;
@@ -176,6 +183,7 @@ impl NodeRecord {
     }
 
     pub(crate) fn enter_final(&mut self, state: NodeState, now: Ts) {
+        self.quarantine_reasons.clear();
         self.state = state;
         self.state_since = now;
     }
@@ -502,7 +510,7 @@ pub fn tick_node(n: &mut NodeRecord, now: Ts, s: &Settings) -> Vec<LifecycleEven
                     return Vec::new();
                 }
                 let suspected = is_alive(n, now, s) && globalping_unproven(&n.health, &failed);
-                n.enter_quarantine(now, suspected);
+                n.enter_quarantine(now, suspected, failed.clone());
                 return vec![LifecycleEvent::Quarantined { reason: failed }];
             }
             if n.state == NodeState::Pending {

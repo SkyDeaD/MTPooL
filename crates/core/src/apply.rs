@@ -518,7 +518,7 @@ fn enroll(state: &mut PoolState, r: EnrollRequest, now: Ts, out: &mut Out) -> An
         now,
         EventKind::NodeRegistered,
         &record,
-        json!({ "reverify": reverify, "replaced": replaced }),
+        json!({ "reverify": reverify, "replaced": replaced, "ip": r.ip.to_string() }),
     );
     // A reverify node starts its decisive round with the first measurement of the agent, which
     // the agent makes right after registering (see `report`); the tick is the fallback.
@@ -571,9 +571,17 @@ fn heartbeat(state: &mut PoolState, r: HeartbeatRequest, now: Ts, out: &mut Out)
         }
         Some(EnrollDecision::Accept) => {
             // A new IP is a new check: the node starts over as `Pending`.
+            let from = node.ip;
             node.change_ip(r.ip, now);
             node.health.last_heartbeat = now;
             persist(out, PersistOp::UpsertNode(node.clone()));
+            emit_node(
+                out,
+                now,
+                EventKind::NodeIpChanged,
+                node,
+                json!({ "from": from.to_string(), "to": r.ip.to_string() }),
+            );
         }
         Some(_) => {
             // The new address may not enroll: blocked, paused, or taken by another node.
@@ -1207,14 +1215,14 @@ fn dns_done(
         Ok(()) => {
             entry.applied = Some(entry.desired.clone());
             entry.retries = 0;
-            emit(
-                out,
-                now,
-                EventKind::DnsApplied,
-                None,
-                Some(domain),
-                json!({}),
-            );
+            let detail = match &entry.desired {
+                RecordValue::A(addresses) => json!({
+                    "records": addresses.len(),
+                    "addresses": addresses.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                }),
+                RecordValue::Cname(target) => json!({ "records": 1, "target": target }),
+            };
+            emit(out, now, EventKind::DnsApplied, None, Some(domain), detail);
         }
         Err(message) => {
             let wait = backoff(entry.retries);
@@ -1247,7 +1255,7 @@ mod tests {
 
     use super::*;
     use crate::dns::RecordValue;
-    use crate::health::GpStatus;
+    use crate::health::{FailedCondition, GpStatus};
     use crate::lifecycle::{IpBlock, RejectReason};
     use crate::selection::Slot;
     use crate::settings::Settings;
@@ -2464,6 +2472,120 @@ mod tests {
         persists(effects)
             .iter()
             .any(|op| matches!(op, PersistOp::DeleteNode(n) if *n == id(name)))
+    }
+
+    // ----- the journal ------------------------------------------------------------------------
+
+    #[test]
+    fn a_heartbeat_from_a_new_address_says_where_from_and_where_to() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.advance(SEC);
+        let effects = p.beat_from("n1", ip(9));
+        let event = event_of(&effects, EventKind::NodeIpChanged);
+        assert_eq!(event.node, Some(id("n1")));
+        assert_eq!(event.owner, Some(OwnerId(1)));
+        assert_eq!(
+            event.detail,
+            json!({ "from": ip(1).to_string(), "to": ip(9).to_string() })
+        );
+        assert_eq!(EventKind::NodeIpChanged.webhook_name(), None);
+    }
+
+    #[test]
+    fn a_heartbeat_from_the_same_address_and_a_refused_new_one_change_nothing_to_tell() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.make_healthy("n2", ip(2));
+        p.advance(SEC);
+        assert!(!kinds(&p.beat("n1")).contains(&EventKind::NodeIpChanged));
+        let refused = p.beat_from("n1", ip(2));
+        assert_eq!(kinds(&refused), [EventKind::NodeDead]);
+    }
+
+    #[test]
+    fn node_registered_names_the_address() {
+        let mut p = Pool::new();
+        let effects = p.enroll("n1", ip(1));
+        assert_eq!(
+            event_of(&effects, EventKind::NodeRegistered).detail["ip"],
+            ip(1).to_string()
+        );
+    }
+
+    #[test]
+    fn dns_applied_says_what_was_written() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        let generation = p.state.dns[DOMAIN].generation;
+        let effects = p.run(Command::DnsDone {
+            domain: DOMAIN.to_owned(),
+            generation,
+            result: Ok(()),
+        });
+        assert_eq!(
+            event_of(&effects, EventKind::DnsApplied).detail,
+            json!({ "records": 1, "addresses": [ip(1).to_string()] })
+        );
+
+        let entry = p.state.dns.get_mut(DOMAIN).unwrap();
+        entry.desired = RecordValue::Cname("target.example.com".to_owned());
+        let generation = entry.generation;
+        let effects = p.run(Command::DnsDone {
+            domain: DOMAIN.to_owned(),
+            generation,
+            result: Ok(()),
+        });
+        assert_eq!(
+            event_of(&effects, EventKind::DnsApplied).detail,
+            json!({ "records": 1, "target": "target.example.com" })
+        );
+    }
+
+    #[test]
+    fn a_node_remembers_why_it_is_in_quarantine_until_it_leaves() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.quarantine("n1");
+        assert_eq!(
+            p.state.nodes[&id("n1")].quarantine_reasons,
+            [FailedCondition::Globalping]
+        );
+
+        // A new address is a new check: it starts with no verdict.
+        p.advance(SEC);
+        p.beat_from("n1", ip(9));
+        assert!(p.state.nodes[&id("n1")].quarantine_reasons.is_empty());
+    }
+
+    #[test]
+    fn the_reasons_go_when_the_node_recovers_or_ends() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.quarantine("n1");
+        p.state.nodes.get_mut(&id("n1")).unwrap().suspected = false;
+        p.advance(SEC);
+        p.beat("n1");
+        p.report("n1", Vote::Clear);
+        p.run(Command::Tick);
+        assert_eq!(p.state_of("n1"), NodeState::Healthy);
+        assert!(p.state.nodes[&id("n1")].quarantine_reasons.is_empty());
+
+        p.quarantine("n1");
+        let action = p.node_action("n1");
+        p.run(Command::Retire(action));
+        assert_eq!(p.state_of("n1"), NodeState::Dead);
+        assert!(p.state.nodes[&id("n1")].quarantine_reasons.is_empty());
+    }
+
+    #[test]
+    fn a_record_stored_before_the_reasons_existed_still_loads() {
+        let mut p = Pool::new();
+        p.enroll("n1", ip(1));
+        let mut stored = serde_json::to_value(&p.state.nodes[&id("n1")]).unwrap();
+        stored.as_object_mut().unwrap().remove("quarantine_reasons");
+        let loaded: NodeRecord = serde_json::from_value(stored).unwrap();
+        assert!(loaded.quarantine_reasons.is_empty());
     }
 
     // ----- the owner limit ------------------------------------------------------------------

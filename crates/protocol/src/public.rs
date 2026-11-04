@@ -66,6 +66,10 @@ pub struct PublicNode {
     pub clients: Option<u64>,
     /// The conditions the pool watches on the node.
     pub checks: NodeChecks,
+    /// Why the node entered quarantine: `tcp`, `metrics`, `globalping`, `port`, `heartbeat_stale`,
+    /// `report_stale` (no confirmed measurement for too long). Absent in other states.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quarantine_reasons: Vec<String>,
     /// Place in the queue for a master slot, from 1: only for a healthy node that is not a
     /// master.
     #[serde(default, skip_serializing_if = "Option::is_none")]

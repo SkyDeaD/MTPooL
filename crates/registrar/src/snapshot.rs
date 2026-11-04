@@ -136,6 +136,14 @@ impl<'a> View<'a> {
                     GpStatus::NoData { .. } => GlobalpingCheck::NoData,
                 },
             },
+            quarantine_reasons: n
+                .quarantine_reasons
+                .iter()
+                .filter_map(|c| match serde_json::to_value(c) {
+                    Ok(serde_json::Value::String(name)) => Some(name),
+                    _ => None,
+                })
+                .collect(),
             queue_position: self.queue.get(&n.id).copied(),
             master_since: self.since_of.get(n.id.as_str()).map(|at| rfc3339(*at)),
             rotates_at,

@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use data_encoding::HEXLOWER;
 use hmac::{Hmac, KeyInit, Mac};
-use mtpool_core::{Effect, Event, NodeId, Ts};
+use mtpool_core::{Effect, Event, EventKind, NodeId, Ts};
 use mtpool_protocol::rfc3339;
 use serde_json::json;
 use sha2::Sha256;
@@ -157,13 +157,20 @@ fn enqueue(
     }
     // One event, one id, whatever the number of hooks and the number of tries.
     let event_id = new_event_id();
+    // The journal is for the admin; a pool-wide hook must not learn whole addresses from it.
+    let mut detail = event.detail.clone();
+    if event.kind == EventKind::NodeRegistered
+        && let Some(fields) = detail.as_object_mut()
+    {
+        fields.remove("ip");
+    }
     let payload = payload(
         &event_id,
         name,
         event.at,
         event.node.as_ref().map(NodeId::as_str),
         event.domain.as_deref(),
-        &event.detail,
+        &detail,
     );
     for hook in &hooks {
         store

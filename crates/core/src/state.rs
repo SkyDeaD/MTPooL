@@ -285,6 +285,9 @@ pub enum EventKind {
     /// A reverify round did not prove the IP clean. For the event log of the panel only: the
     /// agent registers again every few minutes, a webhook for each would be noise.
     NodeReverifyFailed,
+    /// A heartbeat came from another address and the node starts over there. For the event log
+    /// of the panel only.
+    NodeIpChanged,
     NodeDead,
     NodePruned,
     BanLifted,

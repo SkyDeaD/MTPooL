@@ -3986,6 +3986,13 @@
                 ],
                 "description": "RFC 3339, UTC: the last heartbeat; absent if none came."
               },
+              "last_report_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "RFC 3339, UTC: the last confirmed measurement; absent if none came since the node's last\nnew check began."
+              },
               "owner_id": {
                 "type": "integer",
                 "format": "int64"
@@ -5493,6 +5500,13 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "quarantine_reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Why the node entered quarantine: `tcp`, `metrics`, `globalping`, `port`, `heartbeat_stale`,\n`report_stale` (no confirmed measurement for too long). Absent in other states."
           },
           "queue_position": {
             "type": [

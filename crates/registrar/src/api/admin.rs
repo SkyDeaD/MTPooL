@@ -1325,6 +1325,7 @@ struct NodeExtras {
     full_ip: String,
     owner_id: i64,
     last_heartbeat: Option<String>,
+    last_report_at: Option<String>,
     failed: Vec<String>,
 }
 
@@ -1345,6 +1346,8 @@ async fn admin_nodes(app: &AppState) -> Result<Vec<AdminNode>, Failure> {
                     owner_id: n.owner.0,
                     last_heartbeat: (n.health.last_heartbeat.0 > 0)
                         .then(|| rfc3339(n.health.last_heartbeat.0)),
+                    last_report_at: (n.health.last_report.0 > 0)
+                        .then(|| rfc3339(n.health.last_report.0)),
                     failed: failed_conditions(&n.health, now, &state.settings)
                         .into_iter()
                         .filter_map(|c| match serde_json::to_value(c) {
@@ -1378,6 +1381,7 @@ async fn admin_nodes(app: &AppState) -> Result<Vec<AdminNode>, Failure> {
                 full_ip: e.full_ip,
                 owner_id: e.owner_id,
                 last_heartbeat: e.last_heartbeat,
+                last_report_at: e.last_report_at,
                 failed: e.failed,
             })
         })

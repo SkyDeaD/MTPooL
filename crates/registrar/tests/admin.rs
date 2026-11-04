@@ -611,6 +611,47 @@ async fn stream_requires_an_admin_token() {
     assert_problem(&anonymous, StatusCode::UNAUTHORIZED, "unauthorized");
 }
 
+#[tokio::test]
+async fn a_quarantined_node_says_why_and_when_it_was_last_measured() {
+    let mut sick = alpha();
+    sick.state = NodeState::Quarantine;
+    sick.quarantine_reasons = vec![
+        mtpool_core::FailedCondition::ReportStale,
+        mtpool_core::FailedCondition::Tcp,
+    ];
+    sick.health.last_report = Ts(NOW - 90_000);
+    let mut fresh = beta();
+    fresh.health.last_report = Ts(0);
+    let env = env(pool(vec![sick, fresh]));
+    let admin = admin_token(&env);
+
+    let body = get(&env, "/api/v1/admin/nodes/alpha-00001", &admin)
+        .await
+        .json();
+    assert_eq!(
+        body["quarantine_reasons"],
+        json!(["report_stale", "tcp"]),
+        "{body}"
+    );
+    assert_eq!(
+        body["last_report_at"],
+        mtpool_protocol::rfc3339(NOW - 90_000)
+    );
+    let public = get(&env, "/api/v1/nodes/alpha-00001", "").await.json();
+    assert_eq!(
+        public["quarantine_reasons"],
+        json!(["report_stale", "tcp"]),
+        "{public}"
+    );
+    assert!(public.get("last_report_at").is_none(), "{public}");
+
+    let body = get(&env, "/api/v1/admin/nodes/beta-00002", &admin)
+        .await
+        .json();
+    assert!(body.get("quarantine_reasons").is_none(), "{body}");
+    assert!(body.get("last_report_at").is_none(), "{body}");
+}
+
 /// The ban log names every node that failed on an address; the block only the first of them.
 /// Whichever row the admin starts from, the ban of that address is what gets lifted.
 #[tokio::test]
