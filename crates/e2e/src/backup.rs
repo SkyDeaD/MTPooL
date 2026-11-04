@@ -77,6 +77,7 @@ impl Stand {
                 "fresh",
                 "up",
                 "-d",
+                "--build",
                 "--wait",
                 "--no-deps",
                 "registrar-fresh",
@@ -113,10 +114,20 @@ impl Stand {
     /// Runs `command` (`sh -c`) on the fresh Ubuntu; a failure is an answer, as for
     /// [`Stand::registrar_exec`].
     pub async fn fresh_exec(&self, command: &str) -> Result<CommandRun> {
+        self.fresh_exec_env(command, &[]).await
+    }
+
+    /// Like [`Stand::fresh_exec`], with `env` handed over as environment (not in the command
+    /// line, so a secret in it shows in no log).
+    pub async fn fresh_exec_env(&self, command: &str, env: &[(&str, &str)]) -> Result<CommandRun> {
+        let mut compose = self.guard.compose();
+        compose.args(["exec", "-T"]);
+        for (name, _) in env {
+            compose.args(["-e", name]);
+        }
+        compose.envs(env.iter().copied());
         let raw = run_raw(
-            self.guard
-                .compose()
-                .args(["exec", "-T", "registrar-fresh", "sh", "-c", command]),
+            compose.args(["registrar-fresh", "sh", "-c", command]),
             "exec in the fresh machine",
             None,
         )

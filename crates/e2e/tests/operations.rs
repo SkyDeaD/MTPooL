@@ -211,6 +211,49 @@ async fn preset_telemt_installs_engine() {
         .expect("the node is healthy");
 }
 
+#[tokio::test]
+#[ignore = "needs Docker and the internet; run with --ignored"]
+async fn preset_mtproxyl_installs_engine() {
+    let stand = Stand::up().await.expect("the stand comes up");
+    offer_release(&stand, &ensure_test_key().expect("the test key")).await;
+    // MTProxyL's firewall lets one source address open about one connection a second (54 a minute)
+    // and rejects the rest; the stand probes every second, the pool's default is every 5.
+    settings(&stand, serde_json::json!({"tcp_probe_interval_sec": 5})).await;
+    let node = stand.node(1);
+    node.exec(
+        "systemctl disable --now telemt; rm -f /usr/local/bin/telemt /etc/systemd/system/telemt.service \
+         /etc/systemd/system/multi-user.target.wants/telemt.service; rm -rf /etc/telemt; \
+         systemctl daemon-reload",
+    )
+    .await
+    .unwrap();
+    let before = node.try_exec("test -e /opt/mtproxyl", &[]).await.unwrap();
+    assert!(!before.success, "MTProxyL is not there before the install");
+    let run = node
+        .install(&InstallOptions {
+            name: "node-one",
+            token: Token::Env(stand.enroll_token()),
+            preset: Some("mtproxyl"),
+            port: None,
+        })
+        .await
+        .expect("the installer runs");
+    assert!(run.success, "the installer works:\n{}", run.output);
+    let found = node
+        .exec("test -x /opt/mtproxyl/mtproxyl.sh && command -v mtproxyl")
+        .await
+        .unwrap();
+    assert!(
+        found.contains("mtproxyl"),
+        "the manager is installed: {found}"
+    );
+    let id = node.wait_node_id(secs(60)).await.expect("the node enrolls");
+    stand
+        .wait_state(&id, "healthy", secs(180))
+        .await
+        .expect("the node is healthy");
+}
+
 async fn node_ids(stand: &Stand) -> Vec<String> {
     let mut ids: Vec<String> = stand
         .nodes()
@@ -373,6 +416,111 @@ async fn registrar_installer_on_fresh_ubuntu() {
         .await
         .unwrap();
     assert_eq!(user.output.trim(), "mtpool\nmtpool", "{}", user.output);
+
+    // Socket activation: connections wait in the socket's queue while the service restarts, so
+    // no request is refused (slow answers are fine).
+    let restart = stand
+        .fresh_exec(
+            "systemctl restart mtpool-registrar.service & \
+             i=0; while [ $i -lt 150 ]; do \
+               curl -sS -o /dev/null -w '%{http_code}\\n' --max-time 60 http://127.0.0.1:8080/readyz \
+                 2>&1 || echo REFUSED; \
+               i=$((i+1)); sleep 0.05; done; wait",
+        )
+        .await
+        .unwrap();
+    let answers: Vec<&str> = restart.output.lines().collect();
+    assert_eq!(answers.len(), 150, "{}", restart.output);
+    assert!(
+        answers.iter().all(|a| *a == "200"),
+        "a request was refused or failed while the service restarted:\n{}",
+        answers
+            .iter()
+            .filter(|a| **a != "200")
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    // Running the installer again is an upgrade: no new token, the old one still works, and
+    // the service runs the new binary.
+    let token = run
+        .output
+        .lines()
+        .find_map(|l| l.strip_prefix("Admin token (shown once, keep it): "))
+        .expect("the first run printed a token")
+        .to_owned();
+    let exe_sum =
+        "sha256sum /proc/$(systemctl show -p MainPID --value mtpool-registrar)/exe | cut -d' ' -f1";
+    let before = stand.fresh_exec(exe_sum).await.unwrap().output;
+    stand
+        .fresh_exec("cp /opt/mtpool-registrar /opt/mtpool-registrar-v2 && printf x >> /opt/mtpool-registrar-v2")
+        .await
+        .unwrap();
+    let listing = stand
+        .fresh_exec("ls -la /var/lib/mtpool; grep -c . /etc/mtpool/registrar.env")
+        .await
+        .unwrap()
+        .output;
+    let again = stand
+        .fresh_exec(
+            "sh /opt/deploy/install-registrar.sh --domain pool.example.test \
+             --binary /opt/mtpool-registrar-v2",
+        )
+        .await
+        .unwrap();
+    assert!(
+        again.success,
+        "the upgrade works:\n{}",
+        redact_token(&again.output)
+    );
+    assert!(
+        !again.output.contains("Admin token (shown once") && !again.output.contains(&token),
+        "an upgrade prints no token:\n{}\n{listing}",
+        redact_token(&again.output)
+    );
+    assert!(
+        again.output.contains("unchanged") && again.output.contains("reset-token"),
+        "it says the token is unchanged and how to reset it:\n{}",
+        again.output
+    );
+    let login = stand
+        .fresh_exec_env(
+            "curl -s -o /dev/null -w '%{http_code}' -H \"Authorization: Bearer $T\" \
+             http://127.0.0.1:8080/api/v1/admin/settings",
+            &[("T", &token)],
+        )
+        .await
+        .unwrap();
+    assert_eq!(login.output.trim(), "200", "the first token still logs in");
+    let after = stand.fresh_exec(exe_sum).await.unwrap().output;
+    let expected = stand
+        .fresh_exec("sha256sum /opt/mtpool-registrar-v2 | cut -d' ' -f1")
+        .await
+        .unwrap()
+        .output;
+    assert_ne!(before, after, "the service was restarted");
+    assert_eq!(after, expected, "the service runs the new binary");
+
+    // A restore run as root hands the database back to the user that serves it.
+    let restore = stand
+        .fresh_exec(
+            "set -e; runuser -u mtpool -- /usr/local/bin/mtpool-registrar backup --to /var/backups/mtpool/r.db; \
+             systemctl stop mtpool-registrar.socket mtpool-registrar.service; \
+             MTPOOL_DB_PATH=/var/lib/mtpool/registrar.db /usr/local/bin/mtpool-registrar restore \
+               --from /var/backups/mtpool/r.db; \
+             stat -c '%U' /var/lib/mtpool/registrar.db /var/lib/mtpool/registrar.db.lock; \
+             systemctl start mtpool-registrar.socket; \
+             curl -fsS --max-time 30 -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/readyz",
+        )
+        .await
+        .unwrap();
+    assert!(restore.success, "the restore works:\n{}", restore.output);
+    assert!(
+        restore.output.contains("mtpool\nmtpool\n") && restore.output.ends_with("200"),
+        "the database and its lock belong to mtpool and the registrar serves:\n{}",
+        restore.output
+    );
 }
 
 fn redact_token(output: &str) -> String {

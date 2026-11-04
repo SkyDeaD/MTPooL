@@ -74,7 +74,7 @@ async fn all_sensors_down_no_ban_then_pruned() {
     let (_node, id) = enroll_healthy(&stand, 1, "node-one").await;
     settings(
         &stand,
-        json!({"report_max_age_sec": 15, "quarantine_max_sec": 30}),
+        json!({"report_max_age_sec": 15, "quarantine_max_sec": 120}),
     )
     .await;
 
@@ -91,22 +91,25 @@ async fn all_sensors_down_no_ban_then_pruned() {
         .wait_state_in(&id, &["quarantine"], secs(90))
         .await
         .expect("the node, with no valid Globalping report, goes to quarantine");
-    let round = eventually(
+    // A round must happen, and every one of the three sensors must have abstained in it.
+    let (verdict, votes) = eventually(
         "a round in which every sensor abstains",
-        secs(60),
+        secs(90),
         || async {
             match last_round(&stand, &id).await {
-                Some(round) => Ok(round),
-                None => Err("no round yet".to_owned()),
+                Some((verdict, votes)) if votes.len() >= 3 => Ok((verdict, votes)),
+                other => Err(format!("{other:?}")),
             }
         },
     )
-    .await;
-    if let Ok((verdict, votes)) = &round {
-        assert_eq!(verdict, "undecided", "{votes:?}");
-        assert!(
-            votes.iter().all(|(_, vote)| vote == "abstain"),
-            "a sensor voted although it was down: {votes:?}"
+    .await
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(verdict, "undecided", "{votes:?}");
+    for sensor in ["globalping", "cheburcheck", "red_flag"] {
+        assert_eq!(
+            vote_of(&votes, sensor).as_deref(),
+            Some("abstain"),
+            "{sensor} voted although it was down: {votes:?}"
         );
     }
     assert!(
@@ -114,7 +117,7 @@ async fn all_sensors_down_no_ban_then_pruned() {
         "a ban without any vote"
     );
     stand
-        .wait_state_in(&id, &["pruned", "banned"], secs(90))
+        .wait_state_in(&id, &["pruned", "banned"], secs(150))
         .await
         .expect("the node leaves quarantine");
     assert_eq!(
