@@ -138,7 +138,7 @@ function liveStream(req: IncomingMessage, res: ServerResponse): void {
     const wander = Math.round(Math.sin(Date.now() / 20_000) * 12);
     const counts = Object.fromEntries(nodes.filter((n) => n.clients != null).map((n) => [n.id, Math.max(0, (n.clients ?? 0) + wander)]));
     const total = Object.values(counts).reduce((a, b) => a + b, 0);
-    res.write(`event: clients\ndata: ${JSON.stringify({ at: new Date().toISOString(), total, domains: {}, nodes: counts })}\n\n`);
+    res.write(`event: clients\ndata: ${JSON.stringify({ at: new Date().toISOString(), total, domains: {}, other_nodes: Object.fromEntries(nodes.filter((n) => (n as { other_clients?: number }).other_clients).map((n) => [n.id, (n as { other_clients?: number }).other_clients])), nodes: counts })}\n\n`);
   };
   send();
   const timer = setInterval(send, 5000);

@@ -72,6 +72,11 @@ export const publicRoutes: ApiRoute[] = [
   },
   {
     "method": "GET",
+    "path": "/api/v1/stream",
+    "query": []
+  },
+  {
+    "method": "GET",
     "path": "/install.sh",
     "query": []
   },

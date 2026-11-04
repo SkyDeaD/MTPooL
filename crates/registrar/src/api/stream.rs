@@ -172,7 +172,11 @@ pub(super) fn event_stream<G: Send + 'static>(
         header::CONTENT_TYPE,
         HeaderValue::from_static("text/event-stream"),
     );
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    // `no-transform` keeps a compressing proxy away: a frame must not wait in its compressor.
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-cache, no-transform"),
+    );
     // Tells nginx-style proxies not to hold the events back.
     headers.insert(
         HeaderName::from_static("x-accel-buffering"),

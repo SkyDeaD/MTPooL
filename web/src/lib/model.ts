@@ -84,6 +84,13 @@ export function checkRows(checks: NodeChecks): CheckRow[] {
 }
 
 /** Why a node is not working, in words; a code the page does not know is shown as it came. */
+/** The owner's own users of the nodes the pool counts. A node in no such state keeps a stale number. */
+export function otherClientsTotal(nodes: readonly PublicNode[]): number {
+  return nodes
+    .filter((n) => n.state === 'pending' || n.state === 'healthy' || n.state === 'quarantine')
+    .reduce((sum, n) => sum + (n.other_clients ?? 0), 0);
+}
+
 export function whyText(codes: readonly string[]): string {
   return codes
     .map((code) => {

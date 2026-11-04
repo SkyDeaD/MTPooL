@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { withLiveClients } from '../lib/clients-live';
+  import { useClientsLive } from '../lib/clients-live.svelte';
   import { useNow } from '../lib/clock.svelte';
   import { formatWhen } from '../lib/dates';
   import { t } from './i18n';
@@ -21,6 +23,7 @@
   // Every node the pool counts on, in groups, and below them the ones it does not count on.
   const panel = usePanel();
   const nodes = useData().nodes;
+  const live = useClientsLive(() => nodes.refresh());
   let adding = $state(false);
   let query = $state('');
   let filter = $state<'all' | 'master' | 'queue' | 'prob'>('all');
@@ -28,7 +31,8 @@
   const clock = useNow(1000);
   let retiring = $state<string | null>(null);
 
-  const groups = $derived(nodes.data ? panelGroups(nodes.data) : null);
+  const current = $derived(nodes.data ? withLiveClients(nodes.data, [], live.last).nodes : null);
+  const groups = $derived(current ? panelGroups(current) : null);
   const match = (n: AdminNode) => {
     const q = query.trim().toLowerCase();
     return !q || `${n.id} ${n.full_ip} ${ENGINE_NAMES[n.engine]}`.toLowerCase().includes(q);
@@ -134,7 +138,7 @@
                     <td data-l={t('stats.col.role')}><RoleCell {node} now={clock.ms} /></td>
                     <td data-l={t('stats.col.checks')}><ChecksCell checks={node.checks} /></td>
                     <td class="n" data-l={t('stats.col.availability')}>{formatAvailability(node.availability_bp)}</td>
-                    <td class="n" data-l={t('stats.col.clients')}><ClientsCell clients={node.clients} max={maxClients} /></td>
+                    <td class="n" data-l={t('stats.col.clients')}><ClientsCell clients={node.clients} max={maxClients} other={node.other_clients} /></td>
                     <td class="nowrap" data-l={t('panel.nodes.signal')}>{heartbeat(node)}</td>
                     <td class="n">
                       <RowMenu id={node.id} onrecheck={() => recheck(node.id)} onretire={() => (retiring = node.id)} />

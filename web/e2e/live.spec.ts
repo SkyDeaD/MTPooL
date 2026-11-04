@@ -34,3 +34,28 @@ test('live: a retired node moves to the idle table without a reload', async ({ p
   const idle = page.locator('section.t').filter({ has: page.getByRole('heading', { name: 'Не в работе' }) });
   await expect(idle.getByRole('link', { name: node.id, exact: true })).toBeVisible({ timeout: 15_000 });
 });
+
+// The public stream of a real registrar: new numbers reach an open page without a reload or a poll.
+test('live: the numbers of a node reach its public page within one tick', async ({ page }) => {
+  const agent = stand.agent();
+  const node = await agent.enroll(`live-${Date.now().toString(36)}`, '203.0.113.62', 8443);
+  try {
+    await agent.report(node, { clients: 7, other: 30 });
+    let reloaded = false;
+    await page.goto(`/node/?id=${node.id}`);
+    page.on('load', () => {
+      reloaded = true;
+    });
+    const kpi = page.locator('.kpi').filter({ hasText: 'Клиенты' });
+    await expect(kpi.locator('.v')).toHaveText('7');
+    await expect(kpi).toContainText('ещё 30 своих у владельца ноды');
+
+    await agent.report(node, { clients: 23, other: 31 });
+    // Well under the 30 seconds of a poll: one tick is 5 seconds.
+    await expect(kpi.locator('.v')).toHaveText('23', { timeout: 10_000 });
+    await expect(kpi).toContainText('ещё 31 свой у владельца ноды');
+    expect(reloaded, 'the page was reloaded').toBe(false);
+  } finally {
+    await stand.admin(`/nodes/${node.id}/retire`, { method: 'POST', body: {} });
+  }
+});

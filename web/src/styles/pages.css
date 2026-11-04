@@ -352,3 +352,5 @@ dialog::backdrop{background:var(--scrim)}
    empty places first, one second at most so that a script that never comes hides nothing. */
 html.back .pm{visibility:hidden;animation:shown 0s 1s forwards}
 @keyframes shown{to{visibility:visible}}
+.oth{display:block;color:var(--fg3);font-size:12.5px;font-weight:400;white-space:nowrap;margin-top:2px}
+.tb tr.mrow .oth{color:var(--fg2)}

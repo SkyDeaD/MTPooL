@@ -1,6 +1,6 @@
 <script lang="ts">
   import { formatDay, formatHour, formatNumber, formatSecond, formatWhen } from '../lib/dates';
-  import { t } from '../lib/i18n';
+  import { t, tp } from '../lib/i18n';
   import { countTicks, monotonePath, niceStep, round1 } from '../lib/chart';
   import type { ClientsRange, ClientsSeries } from '../lib/types';
   import Icon from './Icon.svelte';
@@ -15,11 +15,14 @@
     range,
     onrange,
     delayMs,
+    other = 0,
   }: {
     series: ClientsSeries | null;
     range: ClientsRange;
     onrange: (range: ClientsRange) => void;
     delayMs?: number;
+    /** The owner's own users of the nodes now. They are not on the chart. */
+    other?: number;
   } = $props();
 
   // The line is drawn anew only in answer to the reader, never because a page opened.
@@ -299,6 +302,9 @@
       <span class="l">{t('clients.title')}</span>
       <span class="v">{nowTotal === null ? '—' : formatNumber(nowTotal)}</span>
       <span class="s">{delta}</span>
+      {#if other > 0}
+        <span class="s" title={t('clients.otherHint')}>{t('clients.otherPool', { n: other, word: tp('unit.ownClient', other) })}</span>
+      {/if}
     </div>
     <span class="sp"></span>
     <div class="row w">

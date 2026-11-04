@@ -3,6 +3,7 @@
   import { formatWhen } from '../lib/dates';
   import { t, tp } from '../lib/i18n';
   import { clock, ENGINE_NAMES, formatAvailability, historySlots, secondsUntil, shortDomain } from '../lib/model';
+  import { withLiveClients } from '../lib/clients-live';
   import { useClientsLive } from '../lib/clients-live.svelte';
   import { useResource } from '../lib/resource.svelte';
   import type { NodeHistory, PublicNode } from '../lib/types';
@@ -10,7 +11,7 @@
   import Icon from '../shared/Icon.svelte';
   import MasterTag from '../shared/MasterTag.svelte';
   import QuarantineNote from '../shared/QuarantineNote.svelte';
-  import Sparkline from '../shared/Sparkline.svelte';
+  import NodeClientsKpi from '../shared/NodeClientsKpi.svelte';
   import StateCell from '../shared/StateCell.svelte';
   import Votes from '../shared/Votes.svelte';
   import PublicShell from './PublicShell.svelte';
@@ -63,11 +64,7 @@
             <span class="v">{formatAvailability(n.availability_bp)}</span>
             <span class="s">{t(days < 30 ? 'node.kpi.availabilityYoung' : 'node.kpi.availabilityNote')}</span>
           </section>
-          <section class="t kpi">
-            <span class="l">{t('node.kpi.clients')}</span>
-            <span class="v">{live.last?.nodes[n.id] ?? n.clients ?? '—'}</span>
-            {#if spark.length > 1}<Sparkline values={spark} />{/if}
-          </section>
+          <NodeClientsKpi node={withLiveClients([n], [], live.last).nodes[0]} {spark} />
           <section class={['t kpi', n.is_master && 'mk']}>
             <span class="l">{t('node.kpi.role')}</span>
             {#if n.is_master}

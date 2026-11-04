@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { LIVE_STEP_MS, mergeLive } from '../lib/clients-live';
+  import { LIVE_STEP_MS, mergeLive, withLiveClients } from '../lib/clients-live';
   import { useClientsLive } from '../lib/clients-live.svelte';
   import { useNow } from '../lib/clock.svelte';
   import { formatSpan, formatWhen } from '../lib/dates';
-  import { buildScheme, secondsUntil, whyText } from '../lib/model';
+  import { buildScheme, otherClientsTotal, secondsUntil, whyText } from '../lib/model';
   import type { BanRecord, ClientsRange, ClientsSeries, PublicDomain, StatsSeries } from '../lib/types';
   import BanTable from '../shared/BanTable.svelte';
   import ClientsChart from '../shared/ClientsChart.svelte';
@@ -159,7 +159,7 @@
     </section>
   </div>
 
-  <ClientsChart series={chartSeries} {range} onrange={(r) => (range = r)} delayMs={live.connected ? LIVE_STEP_MS * 1.5 : undefined} />
+  <ClientsChart series={chartSeries} {range} onrange={(r) => (range = r)} delayMs={live.connected ? LIVE_STEP_MS * 1.5 : undefined} other={otherClientsTotal(withLiveClients(nodes ?? [], [], live.last).nodes)} />
 
   {#if scheme}<PoolScheme {scheme} href={(id) => hrefOf('node', id)} now={clock.ms} />{/if}
 

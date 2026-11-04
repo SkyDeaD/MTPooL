@@ -53,7 +53,7 @@ export class Agent {
   }
 
   /** The agent's measurement: asks the stand-in Globalping for one, then reports its id. */
-  async report(node: SimNode, opts: { clients?: number; sni?: string } = {}): Promise<void> {
+  async report(node: SimNode, opts: { clients?: number; other?: number; sni?: string } = {}): Promise<void> {
     const sni = opts.sni ?? 'tls.example.com';
     const made = await fetch(`${this.fakesBase}/globalping/v1/measurements`, {
       method: 'POST',
@@ -76,6 +76,7 @@ export class Agent {
         from_client_total: 1_000_000 + (opts.clients ?? 0) * 1000,
         to_client_total: 5_000_000 + (opts.clients ?? 0) * 4000,
         clients: opts.clients ?? 0,
+        ...(opts.other === undefined ? {} : { other_clients: opts.other, other_from_client_total: 0, other_to_client_total: 0 }),
       },
       dc2: { ok: true, reason: null },
       host: {

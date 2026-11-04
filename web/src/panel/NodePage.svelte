@@ -1,10 +1,12 @@
 <script lang="ts">
+  import { withLiveClients } from '../lib/clients-live';
+  import { useClientsLive } from '../lib/clients-live.svelte';
   import { useNow } from '../lib/clock.svelte';
   import { formatWhen } from '../lib/dates';
   import { t, tp } from './i18n';
   import { clock, ENGINE_NAMES, formatAvailability, historySlots, secondsUntil, shortDomain, whyText } from '../lib/model';
   import type { NodeHistory } from '../lib/types';
-  import Sparkline from '../shared/Sparkline.svelte';
+  import NodeClientsKpi from '../shared/NodeClientsKpi.svelte';
   import StateCell from '../shared/StateCell.svelte';
   import Votes from '../shared/Votes.svelte';
   import EventRow from './EventRow.svelte';
@@ -28,6 +30,11 @@
   const node = usePolled<AdminNodeDetail>(() => `/api/v1/admin/nodes/${encodeURIComponent(id)}`);
   const history = usePolled<NodeHistory>(() => `/api/v1/nodes/${encodeURIComponent(id)}/history`);
   const events = usePolled<EventEntry[]>(() => `/api/v1/admin/events?node=${encodeURIComponent(id)}`);
+  const live = useClientsLive(() => {
+    node.refresh();
+    history.refresh();
+    events.refresh();
+  });
   const clock1 = useNow(1000);
   let retiring = $state<string | null>(null);
 
@@ -81,11 +88,7 @@
           <span class="v">{formatAvailability(n.availability_bp)}</span>
           <span class="s">{t(days < 30 ? 'node.kpi.availabilityYoung' : 'node.kpi.availabilityNote')}</span>
         </section>
-        <section class="t kpi">
-          <span class="l">{t('node.kpi.clients')}</span>
-          <span class="v">{n.clients ?? '—'}</span>
-          {#if spark.length > 1}<Sparkline values={spark} />{/if}
-        </section>
+        <NodeClientsKpi node={withLiveClients([n], [], live.last).nodes[0]} {spark} />
         <section class={['t kpi', n.is_master && 'mk']}>
           <span class="l">{t('node.kpi.role')}</span>
           {#if n.is_master}

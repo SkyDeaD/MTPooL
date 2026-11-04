@@ -107,6 +107,11 @@ export const messages = {
   'hist.none': 'нет данных',
 
   'clients.title': 'Клиенты сейчас',
+  'clients.other': 'ещё {n} {word}',
+  'clients.otherPool': 'ещё {n} {word} у владельцев нод',
+  'clients.otherNode': 'ещё {n} {word} у владельца ноды',
+  'clients.otherTraffic': 'их трафик {size}',
+  'clients.otherHint': 'Пользователи самого владельца ноды. Пулу они недоступны и в его числа не входят',
   'clients.mode.label': 'Вид графика',
   'clients.mode.total': 'Всего',
   'clients.mode.stack': 'По доменам',
@@ -302,6 +307,7 @@ export const messages = {
   'api.route.GET /api/v1/bans': 'История банов, постранично.',
   'api.route.GET /api/v1/stats/summary': 'Сводка за период: 24h, 7d или 30d.',
   'api.route.GET /api/v1/stats/series': 'Ряды для графиков за период.',
+  'api.route.GET /api/v1/stream': 'Поток событий: числа клиентов сразу и каждые 5 секунд, сигнал об изменении пула',
   'api.route.GET /api/v1/stats/clients': 'Клиенты по доменам за период: 10m, 1h, 24h или 7d.',
   'api.route.GET /api/v1/openapi.json': 'Описание API в формате OpenAPI 3.',
   'api.route.GET /install.sh': 'Скрипт установки ноды.',
@@ -328,6 +334,7 @@ export const plurals = {
   'unit.ban': ['бан', 'бана', 'банов'],
   'unit.record': ['запись', 'записи', 'записей'],
   'unit.node': ['нода', 'ноды', 'нод'],
+  'unit.ownClient': ['свой', 'своих', 'своих'],
 } as const;
 
 export type PluralKey = keyof typeof plurals;

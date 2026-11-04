@@ -2,7 +2,7 @@
   import { useNow } from '../lib/clock.svelte';
   import { formatSpan } from '../lib/dates';
   import { t, tp } from '../lib/i18n';
-  import { buildScheme, formatAvailability, groupNodes, poolCounts } from '../lib/model';
+  import { buildScheme, formatAvailability, groupNodes, otherClientsTotal, poolCounts } from '../lib/model';
   import { LIVE_STEP_MS, mergeLive, withLiveClients } from '../lib/clients-live';
   import { useClientsLive } from '../lib/clients-live.svelte';
   import { useResource } from '../lib/resource.svelte';
@@ -108,7 +108,7 @@
     {/if}
 
     {#if !empty}
-      <ClientsChart {series} {range} onrange={(r) => (range = r)} delayMs={live.connected ? LIVE_STEP_MS * 1.5 : undefined} />
+      <ClientsChart {series} {range} onrange={(r) => (range = r)} delayMs={live.connected ? LIVE_STEP_MS * 1.5 : undefined} other={otherClientsTotal(current.nodes)} />
 
       {#if scheme}<PoolScheme {scheme} href={nodeHref} now={clock.ms} />{/if}
 

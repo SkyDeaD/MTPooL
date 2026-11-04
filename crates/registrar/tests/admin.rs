@@ -557,7 +557,10 @@ async fn stream_sends_events_and_keepalive_with_no_buffer_header() {
             .starts_with("text/event-stream")
     );
     assert_eq!(header("x-accel-buffering").as_deref(), Some("no"));
-    assert_eq!(header("cache-control").as_deref(), Some("no-cache"));
+    assert_eq!(
+        header("cache-control").as_deref(),
+        Some("no-cache, no-transform")
+    );
 
     let mut body = response.into_body();
     let mut seen = String::new();

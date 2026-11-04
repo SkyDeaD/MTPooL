@@ -37,4 +37,16 @@ describe('live clients', () => {
     expect(out.domains[0].clients).toBe(9);
     expect(withLiveClients(nodes, domains, null).nodes).toBe(nodes);
   });
+
+  it('keeps the owners users apart and clears them when a node has none left', () => {
+    const nodes = [
+      { id: 'a', clients: 1, other_clients: 5 },
+      { id: 'b', clients: 2, other_clients: 6 },
+      { id: 'c', clients: null, other_clients: 7 },
+    ] as PublicNode[];
+    const live: LiveTick = { at: at(0), total: 3, domains: {}, nodes: { a: 1, b: 2 }, other_nodes: { a: 40 } };
+    const out = withLiveClients(nodes, [], live).nodes;
+    expect(out.map((n) => n.other_clients)).toEqual([40, undefined, 7]);
+    expect(out[0].clients).toBe(1);
+  });
 });

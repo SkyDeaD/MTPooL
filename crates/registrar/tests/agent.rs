@@ -395,16 +395,16 @@ async fn enroll_respects_owner_limit() {
 
 #[tokio::test]
 async fn enroll_limit_counts_only_live_nodes_of_the_owner() {
-    let mut banned = node_at("gone-00003", [45, 33, 1, 7], NodeState::Banned);
-    banned.owner = OwnerId(1);
+    let mut gone = node_at("gone-00003", [45, 33, 1, 7], NodeState::Dead);
+    gone.owner = OwnerId(1);
     let mut mine = alpha();
     mine.owner = OwnerId(1);
-    let env = env(pool(vec![banned, mine]));
+    let env = env(pool(vec![gone, mine]));
     let me = owner(&env, "me", 2);
     assert_eq!(me, OwnerId(1));
     let enroll_token = enroll_token(&env, me);
 
-    // One live node and one banned: the banned one does not count.
+    // One live node and one dead: the dead one does not count.
     let ok = enroll(&env, &enroll_token, "203.0.113.21", "fresh").await;
     assert_eq!(ok.status, StatusCode::OK, "{}", ok.body);
     let full = enroll(&env, &enroll_token, "203.0.113.22", "late").await;

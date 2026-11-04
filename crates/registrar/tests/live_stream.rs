@@ -137,7 +137,7 @@ async fn anyone_gets_the_numbers_at_once_and_no_address() {
             .to_owned()
     };
     assert!(header("content-type").starts_with("text/event-stream"));
-    assert_eq!(header("cache-control"), "no-cache");
+    assert_eq!(header("cache-control"), "no-cache, no-transform");
     assert_eq!(header("x-accel-buffering"), "no");
 
     let mut body = response.into_body();
