@@ -398,22 +398,23 @@ async fn registrar_installer_on_fresh_ubuntu() {
         .count();
     assert_eq!(token_lines, 1, "the token is printed once");
 
-    // The installer writes the default release repository and starts the path unit that applies
-    // updates; the service is not running yet (the socket starts it on the first request), so
-    // the stand-in for GitHub can be put in before the registrar could ask the real one.
+    // The installer writes the default release repository, starts the path unit that applies
+    // updates and the service itself, without a request: its workers run from the start and
+    // after a reboot.
     let updates = stand
         .fresh_exec(
             "grep -c '^MTPOOL_RELEASE_REPO=SkyDeaD/MTPooL$' /etc/mtpool/registrar.env; \
              systemctl is-active mtpool-registrar-update.path; \
-             stat -c '%U %a' /var/lib/mtpool-update /var/lib/mtpool/releases; \
-             systemctl is-active mtpool-registrar.service || true",
+             stat -c '%U %a' /var/lib/mtpool-update /var/lib/mtpool /var/lib/mtpool/releases; \
+             systemctl is-active mtpool-registrar.service; \
+             systemctl is-enabled mtpool-registrar.service",
         )
         .await
         .unwrap();
     assert_eq!(
         updates.output.trim(),
-        "1\nactive\nroot 755\nmtpool 755\ninactive",
-        "the installer sets up self-update:\n{}",
+        "1\nactive\nroot 755\nmtpool 755\nmtpool 755\nactive\nenabled",
+        "the installer sets up self-update and starts the service:\n{}",
         updates.output
     );
     stand
@@ -434,6 +435,17 @@ async fn registrar_installer_on_fresh_ubuntu() {
         states.output
     );
     assert!(states.output.ends_with("200"), "{}", states.output);
+    // Nobody but the service reads the database: the file and its -wal are 0600.
+    let private = stand
+        .fresh_exec("stat -c '%a %U' /var/lib/mtpool/registrar.db /var/lib/mtpool/registrar.db-wal")
+        .await
+        .unwrap();
+    assert_eq!(
+        private.output.trim(),
+        "600 mtpool\n600 mtpool",
+        "{}",
+        private.output
+    );
     let user = stand
         .fresh_exec("systemctl show mtpool-registrar -p User --value; stat -c %U /var/lib/mtpool")
         .await

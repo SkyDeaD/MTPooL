@@ -206,6 +206,12 @@ impl Store {
     }
 
     pub fn open_with(path: &Path, opts: StoreOptions) -> Result<Store, StoreError> {
+        // Private from the first byte, and narrowed on every open so an older install heals.
+        // SQLite gives the -wal and -shm files the mode of this one.
+        // A failure here (a missing directory, say) shows again as the error of the open below.
+        if let Err(e) = crate::backup::make_private(path) {
+            tracing::warn!(error = %e, "cannot make the database file private");
+        }
         let mut conn = Connection::open(path).map_err(|e| classify(path, e))?;
         conn.busy_timeout(BUSY_TIMEOUT)
             .map_err(|e| classify(path, e))?;

@@ -170,3 +170,40 @@ fn restore_leaves_the_files_with_the_owner_of_their_directory() {
     // Run on its own, as a no-op when the files already match (and when not root).
     backup::match_directory_owner(&db).expect("owner already matches");
 }
+
+fn mode(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).expect("metadata").permissions().mode() & 0o777
+}
+
+#[test]
+fn database_and_copies_are_private() {
+    let (dir, db) = temp_db();
+    seeded(&db);
+    assert_eq!(mode(&db), 0o600, "a new database is private");
+
+    // An install made before this rule left it readable: opening heals it, and so does a store
+    // that is still open (its -wal and -shm are made with the mode of the database).
+    fs::set_permissions(&db, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
+    let store = mtpool_registrar::store::Store::open(&db).expect("open store");
+    assert_eq!(mode(&db), 0o600, "opening heals an old database");
+    store.flush().expect("flush");
+    let wal = std::path::PathBuf::from(format!("{}-wal", db.display()));
+    assert!(wal.exists(), "the check below looks at a real -wal");
+    for suffix in ["-wal", "-shm"] {
+        let side = std::path::PathBuf::from(format!("{}{suffix}", db.display()));
+        if side.exists() {
+            assert_eq!(mode(&side), 0o600, "{}", side.display());
+        }
+    }
+    store.close().expect("close");
+
+    let to = dir.path().join("out").join("copy.db");
+    backup::backup(&db, &to).expect("backup");
+    assert_eq!(mode(&to), 0o600, "the backup is private");
+    assert_eq!(mode(&dir.path().join("out").join("copy.db.sha256")), 0o600);
+
+    fs::set_permissions(&to, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
+    backup::restore(&db, &to).expect("restore");
+    assert_eq!(mode(&db), 0o600, "the restored database is private");
+}

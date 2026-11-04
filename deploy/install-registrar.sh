@@ -189,7 +189,9 @@ main() {
             --shell /usr/sbin/nologin mtpool
     fi
     install -d -m 0750 -o root -g mtpool /etc/mtpool
-    install -d -m 0750 -o mtpool -g mtpool /var/lib/mtpool
+    # 0755 like the unit's StateDirectoryMode: the update helper (no capabilities) passes through
+    # it to the releases. The database inside is a 0600 file.
+    install -d -m 0755 -o mtpool -g mtpool /var/lib/mtpool
     # The registrar service (user mtpool) publishes verified releases here; the root helper only
     # reads them. The state of the updater is root's and the service cannot write it.
     install -d -m 0755 -o mtpool -g mtpool /var/lib/mtpool/releases
@@ -246,7 +248,7 @@ main() {
     if [ -e "$db" ]; then first=no; else first=yes; fi
 
     systemctl daemon-reload
-    units="mtpool-registrar.socket mtpool-backup.timer mtpool-registrar-update.path"
+    units="mtpool-registrar.socket mtpool-registrar.service mtpool-backup.timer mtpool-registrar-update.path"
     [ "$caddy" = no ] || units="$units caddy"
     # shellcheck disable=SC2086
     systemctl enable --now $units

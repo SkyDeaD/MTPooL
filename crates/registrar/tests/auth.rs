@@ -1075,7 +1075,7 @@ async fn token_values_absent_from_logs_and_responses() {
     }
     // Not even the random part of a token, which would identify it as well.
     for token in [&admin, &wrong_admin, &wrong_bearer] {
-        assert!(!log.contains(token.rsplit('_').next().unwrap()));
+        assert!(!log.contains(token.splitn(3, '_').nth(2).expect("mtp_<kind>_<random>")));
     }
 }
 

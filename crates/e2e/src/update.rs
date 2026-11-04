@@ -109,8 +109,8 @@ impl Stand {
     }
 
     /// Points the registrar of the fresh machine at the GitHub stand-in and polls every two
-    /// seconds. To be done after the installer and before the first request: the socket starts
-    /// the service on that one, so it reads the new environment.
+    /// seconds, and restarts the service (the installer has started it) so that it reads the new
+    /// environment.
     pub async fn point_fresh_registrar_at_fakes(&self) -> Result<()> {
         let run = self
             .fresh_exec(
@@ -120,7 +120,8 @@ impl Stand {
                    MTPOOL_GITHUB_URL=http://fakes:9000/github \
                    MTPOOL_GITHUB_DOWNLOAD_URL=http://fakes:9000/github/dl \
                    MTPOOL_UPDATE_POLL_SECS=2 >> $f.new; \
-                 chown --reference=$f $f.new; chmod --reference=$f $f.new; mv $f.new $f",
+                 chown --reference=$f $f.new; chmod --reference=$f $f.new; mv $f.new $f; \
+                 systemctl restart mtpool-registrar.service",
             )
             .await?;
         if !run.success {

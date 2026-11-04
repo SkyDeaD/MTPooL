@@ -94,6 +94,29 @@ fn sha256_of(path: &Path) -> Result<String, BackupError> {
     Ok(HEXLOWER.encode(&hasher.finalize()))
 }
 
+/// Makes `path` readable and writable by its owner only: created that way when it is not there
+/// yet, and narrowed when it is. A caller that does not own the file may not narrow it; that is
+/// left alone, as `match_directory_owner` leaves an owner it may not change.
+pub fn make_private(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    match OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path)
+    {
+        Ok(_) => {}
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {}
+        Err(e) => return Err(e),
+    }
+    match fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => Ok(()),
+        other => other,
+    }
+}
+
 fn base_name(path: &Path) -> String {
     path.file_name()
         .map_or_else(|| "backup".to_owned(), |n| n.to_string_lossy().into_owned())
@@ -120,6 +143,7 @@ pub fn backup(db: &Path, to: &Path) -> Result<(), BackupError> {
     }
     let sum = sha256_of(to)?;
     let sum_path = beside(to, ".sha256");
+    make_private(&sum_path).map_err(io_error(format!("cannot write {}", sum_path.display())))?;
     let mut file = File::create(&sum_path)
         .map_err(io_error(format!("cannot write {}", sum_path.display())))?;
     writeln!(file, "{sum}  {}", base_name(to))
@@ -129,6 +153,7 @@ pub fn backup(db: &Path, to: &Path) -> Result<(), BackupError> {
 
 fn copy_database(db: &Path, to: &Path) -> Result<(), BackupError> {
     let source = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    make_private(to).map_err(io_error(format!("cannot create {}", to.display())))?;
     source.busy_timeout(Duration::from_secs(5))?;
     let mut target = Connection::open(to)?;
     {
@@ -180,7 +205,10 @@ pub fn restore(db: &Path, from: &Path) -> Result<(), BackupError> {
     let _ = fs::remove_file(&staged);
     let staged_result = fs::copy(from, &staged)
         .map_err(io_error(format!("cannot copy {}", from.display())))
-        .and_then(|_| check_integrity(&staged));
+        .and_then(|_| {
+            make_private(&staged).map_err(io_error(format!("cannot protect {}", staged.display())))
+        })
+        .and_then(|()| check_integrity(&staged));
     if let Err(error) = staged_result {
         let _ = fs::remove_file(&staged);
         return Err(error);

@@ -17,8 +17,11 @@ ExecStart=/usr/local/bin/mtpool-registrar serve
 Restart=on-failure
 RestartSec=2
 
-# /var/lib/mtpool (the database and the releases) is the only place it writes.
+# /var/lib/mtpool (the database and the releases) is the only place it writes. The directory is
+# 0755 because the update helper, which has no capabilities, must reach the published releases
+# through it; the database and its backups are 0600 files, so nobody else can read them.
 StateDirectory=mtpool
+StateDirectoryMode=0755
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
