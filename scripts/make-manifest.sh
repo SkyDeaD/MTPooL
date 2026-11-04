@@ -37,7 +37,9 @@ shift 2
 
 key_file=
 if [ "$#" -gt 0 ]; then
-    [ "$#" -eq 2 ] && [ "$1" = "--announce-key" ] || die "usage: make-manifest.sh VERSION DIR [--announce-key FILE]"
+    if [ "$#" -ne 2 ] || [ "$1" != "--announce-key" ]; then
+        die "usage: make-manifest.sh VERSION DIR [--announce-key FILE]"
+    fi
     key_file=$2
 fi
 
@@ -53,7 +55,9 @@ plain='^[A-Za-z0-9._-]{1,120}$'
 entries=()
 add() { # component target name
     local file=$dir/$3
-    [ -f "$file" ] && [ ! -L "$file" ] || die "missing file: $3"
+    if [ ! -f "$file" ] || [ -L "$file" ]; then
+        die "missing file: $3"
+    fi
     entries+=("$(jq -cn --arg c "$1" --arg t "$2" --arg n "$3" --arg s "$(sha256 "$file")" \
         '{component: $c, target: $t, name: $n, sha256: $s}')")
 }
@@ -65,7 +69,9 @@ for component in "${COMPONENTS[@]}"; do
 done
 
 if [ -n "$key_file" ]; then
-    [[ $key_file =~ $plain ]] && [[ $key_file != .* ]] || die "the key file name is not a plain name: $key_file"
+    if [[ ! $key_file =~ $plain ]] || [[ $key_file == .* ]]; then
+        die "the key file name is not a plain name: $key_file"
+    fi
     add "$KEY_COMPONENT" any "$key_file"
 fi
 
