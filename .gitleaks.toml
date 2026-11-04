@@ -1,7 +1,14 @@
 [extend]
 useDefault = true
 
-# Well-known fake proxy secret used in tests and docs.
 [allowlist]
-description = "test fixture proxy secret"
-regexes = ['''ee00112233445566778899aabbccddeeff''']
+description = "fake proxy secrets of the tests, a metric name, the query id in a recorded public answer"
+regexes = [
+  '''ee00112233445566778899aabbccddeeff''',
+  '''^00112233445566778899aabbccddeeff$''',
+  '''^0123456789abcdef0123456789abcdef$''',
+]
+paths = [
+  '''crates/agent/tests/fixtures/telemt/metrics.*\.txt''',
+  '''crates/registrar/tests/fixtures/cheburcheck/check_.*\.json''',
+]
