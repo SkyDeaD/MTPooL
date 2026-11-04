@@ -45,6 +45,19 @@ pub enum CliCommand {
     },
     /// Print the version.
     Version,
+    /// The root-side halves of the self-update (run by systemd units, not by hand).
+    Update {
+        #[command(subcommand)]
+        command: UpdateCommand,
+    },
+}
+
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum UpdateCommand {
+    /// Install the published release if it is newer and intact, and watch that it comes up.
+    Apply,
+    /// Put the previous build back when the last update did not come up.
+    Rollback,
 }
 
 #[derive(Debug, Subcommand, PartialEq, Eq)]
@@ -85,6 +98,19 @@ pub async fn run(cli: Cli, config: Config) -> ExitCode {
         CliCommand::Version => {
             println!("{}", version_line());
             ExitCode::SUCCESS
+        }
+        CliCommand::Update { command } => {
+            let result = match command {
+                UpdateCommand::Apply => crate::update::run_apply(config.listen).await,
+                UpdateCommand::Rollback => crate::update::run_rollback(config.listen).await,
+            };
+            match result {
+                Ok(message) => {
+                    println!("{message}");
+                    ExitCode::SUCCESS
+                }
+                Err(message) => fail(&message),
+            }
         }
         CliCommand::Openapi => {
             println!("{}", crate::api::openapi_pretty());
@@ -226,6 +252,19 @@ mod tests {
                 command: AdminCommand::ResetToken
             }
         );
+        assert_eq!(
+            parse(&["update", "apply"]).unwrap(),
+            CliCommand::Update {
+                command: UpdateCommand::Apply
+            }
+        );
+        assert_eq!(
+            parse(&["update", "rollback"]).unwrap(),
+            CliCommand::Update {
+                command: UpdateCommand::Rollback
+            }
+        );
+        assert!(parse(&["update"]).is_err());
         assert!(parse(&["nonsense"]).is_err());
     }
 

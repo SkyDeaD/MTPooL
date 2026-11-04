@@ -16,5 +16,6 @@ pub mod sensors;
 pub mod server;
 pub mod snapshot;
 pub mod store;
+pub mod update;
 pub mod verifier;
 pub mod webhooks;

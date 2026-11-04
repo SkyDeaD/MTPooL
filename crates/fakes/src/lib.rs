@@ -1,5 +1,5 @@
-//! Stand-ins for the services outside the pool: Globalping, cheburcheck, RedFlag and Cloudflare,
-//! plus the plain-text address service and the ipsum list the nodes ask. Every answer has the
+//! Stand-ins for the services outside the pool: Globalping, cheburcheck, RedFlag, Cloudflare and
+//! GitHub Releases, plus the plain-text address service and the ipsum list the nodes ask. Every answer has the
 //! shape of the recorded real one (the fixtures of the registrar tests are embedded and patched),
 //! and `POST /__control` switches what a sensor answers. `GET /__state` shows what the stand-ins
 //! have seen. Only for the end-to-end stand: they check almost nothing and keep everything in
@@ -11,10 +11,11 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Router;
-use axum::extract::{ConnectInfo, Query, Request, State};
+use axum::body::Bytes;
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post};
+use axum::routing::{any, get, post, put};
 use serde_json::{Map, Value, json};
 
 const GP_OK: &str = include_str!("../../registrar/tests/fixtures/globalping/finished_tls_403.json");
@@ -44,16 +45,21 @@ const CF_RATE_LIMITED: &str =
 const CF_MISSING_AUTH: &str =
     include_str!("../../registrar/tests/fixtures/cloudflare/error_missing_auth.json");
 
+const GH_RELEASE: &str = include_str!("../../registrar/tests/fixtures/github/release_latest.json");
+const GH_RATE_LIMITED: &str =
+    include_str!("../../registrar/tests/fixtures/github/rate_limited.json");
+
 /// The one zone the fake Cloudflare knows.
 const ZONE_NAME: &str = "example.com";
 const ZONE_ID: &str = "023e105f4ecef8ad9ca31a8372d0c353";
 
 /// The sensors and the modes each can be switched to; the first mode is the default.
-const MODES: [(&str, &[&str]); 4] = [
+const MODES: [(&str, &[&str]); 5] = [
     ("globalping", &["ok", "blocked", "timeout", "error"]),
     ("cheburcheck", &["ok", "blocked", "unavailable"]),
     ("redflag", &["ok", "blocked", "unauthorized"]),
     ("cloudflare", &["ok", "rate_limited"]),
+    ("github", &["ok", "rate_limited", "error"]),
 ];
 
 /// What a fake Globalping measurement was asked to do.
@@ -85,6 +91,19 @@ struct Inner {
     next_record: u64,
     /// Every create and delete of a DNS record, in the order they happened.
     dns_log: Vec<Value>,
+    /// Files uploaded for the next release, by name.
+    github_staged: BTreeMap<String, Vec<u8>>,
+    /// The published release: its tag, its files, and a counter that changes with every publish.
+    github_release: Option<GithubRelease>,
+    github_publishes: u64,
+    /// The name of every file that was downloaded, in order.
+    github_downloads: Vec<String>,
+}
+
+struct GithubRelease {
+    tag: String,
+    files: BTreeMap<String, Vec<u8>>,
+    etag: String,
 }
 
 /// The state of the stand-ins; cheap to clone, every clone is the same one.
@@ -120,6 +139,12 @@ pub fn router(fakes: Fakes) -> Router {
     Router::new()
         .route("/__control", post(control))
         .route("/__state", get(state))
+        .route(
+            "/__github/files/{name}",
+            put(github_upload).layer(DefaultBodyLimit::max(GITHUB_FILE_LIMIT)),
+        )
+        .route("/__github/publish", post(github_publish))
+        .route("/__github/reset", post(github_reset))
         .route("/ip", get(ip))
         .route("/ipsum", get(ipsum))
         .route("/{*path}", any(dispatch))
@@ -199,6 +224,12 @@ async fn state(State(fakes): State<Fakes>) -> Response {
         &json!({
             "dns": dns, "dns_log": inner.dns_log,
             "measurements": inner.created, "calls": inner.calls,
+            "github": {
+                "tag": inner.github_release.as_ref().map(|r| r.tag.clone()),
+                "files": inner.github_release.as_ref().map(|r| r.files.keys().cloned().collect::<Vec<_>>()),
+                "downloads": inner.github_downloads,
+                "publishes": inner.github_publishes,
+            },
         }),
     )
 }
@@ -271,12 +302,155 @@ async fn dispatch(State(fakes): State<Fakes>, request: Request) -> Response {
             fakes.count("cloudflare");
             cloudflare(&fakes, &method, &segments, &query, &headers, &body)
         }
+        "github" => {
+            fakes.count("github");
+            github(&fakes, &method, &segments, &headers)
+        }
         _ => not_found(),
     }
 }
 
 fn not_found() -> Response {
     json_response(StatusCode::NOT_FOUND, &json!({"error": "no such path"}))
+}
+
+// --- GitHub Releases ----------------------------------------------------------------------------
+
+/// The biggest file the stand takes for a release.
+const GITHUB_FILE_LIMIT: usize = 512 * 1024 * 1024;
+
+/// A stand-in for the release files, uploaded before the release is published (the way a
+/// workflow uploads the assets of a release).
+async fn github_upload(
+    State(fakes): State<Fakes>,
+    Path(name): Path<String>,
+    body: Bytes,
+) -> Response {
+    fakes.lock().github_staged.insert(name, body.to_vec());
+    json_response(StatusCode::OK, &json!({"ok": true}))
+}
+
+/// Publishes the uploaded files as the newest release `?tag=`.
+async fn github_publish(
+    State(fakes): State<Fakes>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let Some(tag) = query.get("tag").filter(|t| !t.is_empty()) else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            &json!({"error": "tag is required"}),
+        );
+    };
+    let mut inner = fakes.lock();
+    inner.github_publishes += 1;
+    let etag = format!("\"fake-{}\"", inner.github_publishes);
+    let files = std::mem::take(&mut inner.github_staged);
+    inner.github_release = Some(GithubRelease {
+        tag: tag.clone(),
+        files,
+        etag,
+    });
+    json_response(StatusCode::OK, &json!({"tag": tag}))
+}
+
+/// Forgets the release, the uploads and the list of downloads.
+async fn github_reset(State(fakes): State<Fakes>) -> Response {
+    let mut inner = fakes.lock();
+    inner.github_staged.clear();
+    inner.github_release = None;
+    inner.github_downloads.clear();
+    json_response(StatusCode::OK, &json!({"ok": true}))
+}
+
+fn github(
+    fakes: &Fakes,
+    method: &Method,
+    segments: &[&str],
+    headers: &axum::http::HeaderMap,
+) -> Response {
+    let mode = fakes.mode("github");
+    if *method != Method::GET {
+        return not_found();
+    }
+    if mode == "error" {
+        return json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &json!({"message": "fake"}),
+        );
+    }
+    match segments {
+        ["repos", _owner, _repo, "releases", "latest"] => {
+            if mode == "rate_limited" {
+                let reset = now_ms() / 1000 + 1200;
+                let mut response = json_response(StatusCode::FORBIDDEN, &recorded(GH_RATE_LIMITED));
+                let h = response.headers_mut();
+                h.insert("x-ratelimit-limit", HeaderValue::from_static("60"));
+                h.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
+                h.insert("x-ratelimit-used", HeaderValue::from_static("60"));
+                h.insert("x-ratelimit-resource", HeaderValue::from_static("core"));
+                if let Ok(value) = HeaderValue::from_str(&reset.to_string()) {
+                    h.insert("x-ratelimit-reset", value);
+                }
+                return response;
+            }
+            let inner = fakes.lock();
+            let Some(release) = &inner.github_release else {
+                return json_response(
+                    StatusCode::NOT_FOUND,
+                    &json!({"message": "Not Found", "status": "404"}),
+                );
+            };
+            let etag =
+                HeaderValue::from_str(&release.etag).unwrap_or(HeaderValue::from_static("\"x\""));
+            if headers.get(header::IF_NONE_MATCH) == Some(&etag) {
+                let mut response = StatusCode::NOT_MODIFIED.into_response();
+                response.headers_mut().insert(header::ETAG, etag);
+                return response;
+            }
+            let mut document = recorded(GH_RELEASE);
+            let template = document["assets"][0].clone();
+            document["tag_name"] = json!(release.tag);
+            document["name"] = json!(release.tag);
+            document["draft"] = json!(false);
+            let assets: Vec<Value> = release
+                .files
+                .keys()
+                .map(|name| {
+                    let mut asset = template.clone();
+                    asset["name"] = json!(name);
+                    asset
+                })
+                .collect();
+            document["assets"] = json!(assets);
+            let mut response = json_response(StatusCode::OK, &document);
+            response.headers_mut().insert(header::ETAG, etag);
+            response
+        }
+        // The download host: /github/dl/{owner}/{repo}/releases/download/{tag}/{name}
+        ["dl", _owner, _repo, "releases", "download", tag, name] => {
+            let mut inner = fakes.lock();
+            inner.github_downloads.push((*name).to_owned());
+            let found = inner
+                .github_release
+                .as_ref()
+                .filter(|r| r.tag == *tag)
+                .and_then(|r| r.files.get(*name))
+                .cloned();
+            match found {
+                Some(bytes) => (
+                    StatusCode::OK,
+                    [(
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("application/octet-stream"),
+                    )],
+                    bytes,
+                )
+                    .into_response(),
+                None => not_found(),
+            }
+        }
+        _ => not_found(),
+    }
 }
 
 // --- Globalping ---------------------------------------------------------------------------------
@@ -978,5 +1152,101 @@ mod tests {
             call(&app, get("/globalping/v1/nowhere")).await.0,
             StatusCode::NOT_FOUND
         );
+    }
+
+    #[tokio::test]
+    async fn github_serves_the_published_release_and_its_files() {
+        let app = router(Fakes::default());
+        let (status, _) = call(&app, get("/github/repos/o/r/releases/latest")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "no release yet");
+
+        let put = |name: &str, body: &str| {
+            Request::put(format!("/__github/files/{name}"))
+                .body(Body::from(body.to_owned()))
+                .expect("a request")
+        };
+        call(&app, put("manifest.json", "{}")).await;
+        call(&app, put("mtpool-registrar-x", "binary")).await;
+        let publish = Request::post("/__github/publish?tag=v9.9.9")
+            .body(Body::empty())
+            .expect("a request");
+        assert_eq!(call(&app, publish).await.0, StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(get("/github/repos/o/r/releases/latest"))
+            .await
+            .expect("an answer");
+        assert_eq!(response.status(), StatusCode::OK);
+        let etag = response.headers()["etag"].clone();
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("a body")
+            .to_bytes();
+        let release: Value = serde_json::from_slice(&body).expect("JSON");
+        assert_eq!(release["tag_name"], "v9.9.9");
+        let names: Vec<&str> = release["assets"]
+            .as_array()
+            .expect("assets")
+            .iter()
+            .map(|a| a["name"].as_str().expect("a name"))
+            .collect();
+        assert_eq!(names, ["manifest.json", "mtpool-registrar-x"]);
+
+        let again = Request::get("/github/repos/o/r/releases/latest")
+            .header("if-none-match", etag)
+            .body(Body::empty())
+            .expect("a request");
+        assert_eq!(call(&app, again).await.0, StatusCode::NOT_MODIFIED);
+
+        let (status, body) = call(
+            &app,
+            get("/github/dl/o/r/releases/download/v9.9.9/mtpool-registrar-x"),
+        )
+        .await;
+        assert_eq!((status, body.as_str()), (StatusCode::OK, "binary"));
+        let (status, _) = call(
+            &app,
+            get("/github/dl/o/r/releases/download/v1/mtpool-registrar-x"),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "another tag has no such file"
+        );
+
+        let (_, state) = call(&app, get("/__state")).await;
+        let state: Value = serde_json::from_str(&state).expect("JSON");
+        assert_eq!(
+            state["github"]["downloads"],
+            json!(["mtpool-registrar-x", "mtpool-registrar-x"])
+        );
+    }
+
+    #[tokio::test]
+    async fn github_can_be_rate_limited_or_broken() {
+        let app = router(Fakes::default());
+        let control = |mode: &str| {
+            Request::post("/__control")
+                .body(Body::from(
+                    json!({"sensor": "github", "mode": mode}).to_string(),
+                ))
+                .expect("a request")
+        };
+        assert_eq!(call(&app, control("rate_limited")).await.0, StatusCode::OK);
+        let response = app
+            .clone()
+            .oneshot(get("/github/repos/o/r/releases/latest"))
+            .await
+            .expect("an answer");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.headers()["x-ratelimit-remaining"], "0");
+        assert!(response.headers().contains_key("x-ratelimit-reset"));
+        call(&app, control("error")).await;
+        let (status, _) = call(&app, get("/github/repos/o/r/releases/latest")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

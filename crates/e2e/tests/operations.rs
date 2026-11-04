@@ -10,7 +10,7 @@ use std::time::Instant;
 use common::{enroll_healthy, secs, settings};
 use mtpool_e2e::{
     InstallOptions, PROXY_USER_SECRET, ReleaseSpec, Stand, TLS_DOMAIN, TestKey, Token,
-    ensure_test_key, eventually,
+    ensure_test_key, eventually, registrar_release,
 };
 use serde_json::Value;
 
@@ -398,6 +398,29 @@ async fn registrar_installer_on_fresh_ubuntu() {
         .count();
     assert_eq!(token_lines, 1, "the token is printed once");
 
+    // The installer writes the default release repository and starts the path unit that applies
+    // updates; the service is not running yet (the socket starts it on the first request), so
+    // the stand-in for GitHub can be put in before the registrar could ask the real one.
+    let updates = stand
+        .fresh_exec(
+            "grep -c '^MTPOOL_RELEASE_REPO=SkyDeaD/MTPooL$' /etc/mtpool/registrar.env; \
+             systemctl is-active mtpool-registrar-update.path; \
+             stat -c '%U %a' /var/lib/mtpool-update /var/lib/mtpool/releases; \
+             systemctl is-active mtpool-registrar.service || true",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        updates.output.trim(),
+        "1\nactive\nroot 755\nmtpool 755\ninactive",
+        "the installer sets up self-update:\n{}",
+        updates.output
+    );
+    stand
+        .point_fresh_registrar_at_fakes()
+        .await
+        .expect("the environment is edited");
+
     let states = stand
         .fresh_exec(
             "systemctl is-active mtpool-registrar.socket mtpool-backup.timer caddy; \
@@ -537,7 +560,7 @@ fn redact_token(output: &str) -> String {
         .join("\n")
 }
 
-const UNIT_FILES: [(&str, &str); 6] = [
+const UNIT_FILES: [(&str, &str); 9] = [
     (
         "mtpool-agent.service",
         include_str!("../../../deploy/systemd/mtpool-agent.service"),
@@ -562,6 +585,18 @@ const UNIT_FILES: [(&str, &str); 6] = [
         "mtpool-backup.timer",
         include_str!("../../../deploy/systemd/mtpool-backup.timer"),
     ),
+    (
+        "mtpool-registrar-update.service",
+        include_str!("../../../deploy/systemd/mtpool-registrar-update.service"),
+    ),
+    (
+        "mtpool-registrar-update.path",
+        include_str!("../../../deploy/systemd/mtpool-registrar-update.path"),
+    ),
+    (
+        "mtpool-registrar-rollback.service",
+        include_str!("../../../deploy/systemd/mtpool-registrar-rollback.service"),
+    ),
 ];
 
 #[tokio::test]
@@ -573,6 +608,7 @@ async fn units_pass_systemd_analyze_verify() {
     // registrar's binary and its user.
     node.exec(
         "mkdir -p /tmp/units && install -m 0755 /bin/true /usr/local/bin/mtpool-registrar \
+         && install -m 0755 /bin/true /usr/local/bin/mtpool-registrar.prev \
          && (id mtpool >/dev/null 2>&1 || useradd --system --no-create-home mtpool)",
     )
     .await
@@ -587,7 +623,7 @@ async fn units_pass_systemd_analyze_verify() {
     }
     let verify = node
         .try_exec(
-            "cd /tmp/units && systemd-analyze verify ./*.service ./*.socket ./*.timer 2>&1",
+            "cd /tmp/units && systemd-analyze verify ./*.service ./*.socket ./*.timer ./*.path 2>&1",
             &[],
         )
         .await
@@ -597,4 +633,251 @@ async fn units_pass_systemd_analyze_verify() {
         "systemd-analyze verify has something to say:\n{}",
         verify.output
     );
+}
+
+/// The fresh machine with the installer run (no Caddy), pointed at the GitHub stand-in, and
+/// its registrar started. Returns the target of its builds, the sha256 of the build it runs and
+/// the build itself.
+async fn fresh_registrar_with_updates(stand: &Stand) -> (String, String, Vec<u8>) {
+    stand
+        .start_fresh_ubuntu()
+        .await
+        .expect("the bare Ubuntu starts");
+    let install = stand
+        .fresh_exec(
+            "sh /opt/deploy/install-registrar.sh --domain pool.example.test --no-caddy \
+             --binary /opt/mtpool-registrar",
+        )
+        .await
+        .unwrap();
+    assert!(
+        install.success,
+        "the installer works:\n{}",
+        redact_token(&install.output)
+    );
+    stand
+        .point_fresh_registrar_at_fakes()
+        .await
+        .expect("the environment is edited");
+    let ready = stand
+        .fresh_exec(
+            "curl -fsS --max-time 30 -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/readyz",
+        )
+        .await
+        .unwrap();
+    assert_eq!(ready.output.trim(), "200", "the registrar serves");
+    let target = stand.fresh_target().await.expect("the target");
+    let sum = installed_sum(stand).await;
+    let build = std::fs::read(stand.fetch_registrar_binary().await.expect("the build"))
+        .expect("the build is readable");
+    (target, sum, build)
+}
+
+/// The sha256 of the binary that is installed as the registrar.
+async fn installed_sum(stand: &Stand) -> String {
+    stand
+        .fresh_exec("sha256sum /usr/local/bin/mtpool-registrar | cut -d' ' -f1")
+        .await
+        .unwrap()
+        .output
+        .trim()
+        .to_owned()
+}
+
+async fn fresh_text(stand: &Stand, command: &str) -> String {
+    stand.fresh_exec(command).await.unwrap().output
+}
+
+#[tokio::test]
+#[ignore = "needs Docker and the internet; run with --ignored"]
+async fn registrar_updates_and_rolls_back_when_readyz_fails_60s() {
+    let stand = Stand::up().await.expect("the stand comes up");
+    let key = ensure_test_key().expect("the stand's key");
+    let (target, original, build) = fresh_registrar_with_updates(&stand).await;
+
+    // A good release: the same build with a byte added, so it is another file that runs alike.
+    let mut good = build.clone();
+    good.push(b'x');
+    stand
+        .publish_github_release(&registrar_release("9.9.9", &target, &good, &key).unwrap())
+        .await
+        .expect("the release is published");
+    eventually("the update is installed", secs(180), || async {
+        let installed = fresh_text(&stand, "cat /var/lib/mtpool-update/installed 2>&1").await;
+        if installed.trim() == "9.9.9" {
+            Ok(())
+        } else {
+            Err(installed)
+        }
+    })
+    .await
+    .unwrap();
+    let updated = installed_sum(&stand).await;
+    assert_ne!(updated, original, "the binary was replaced");
+    let previous = fresh_text(
+        &stand,
+        "sha256sum /usr/local/bin/mtpool-registrar.prev | cut -d' ' -f1",
+    )
+    .await;
+    assert_eq!(
+        previous.trim(),
+        original,
+        "the previous binary is kept beside it"
+    );
+    let running = fresh_text(
+        &stand,
+        "sha256sum /proc/$(systemctl show -p MainPID --value mtpool-registrar)/exe | cut -d' ' -f1",
+    )
+    .await;
+    assert_eq!(running.trim(), updated, "the service runs the new binary");
+    let state = fresh_text(
+        &stand,
+        "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/readyz; \
+         ls /var/lib/mtpool-update; ls /var/lib/mtpool/releases",
+    )
+    .await;
+    assert!(state.starts_with("200"), "{state}");
+    assert!(
+        !state.contains("probation"),
+        "the probation is over:\n{state}"
+    );
+    assert!(state.contains("manifest.json.minisig"), "{state}");
+    let journal = fresh_text(
+        &stand,
+        "journalctl -u mtpool-registrar --no-pager | grep -c update.published",
+    )
+    .await;
+    assert!(
+        journal.trim().parse::<u32>().unwrap_or(0) >= 1,
+        "the admin can see it: {journal}"
+    );
+
+    // A release whose binary never gets ready: it answers `version` and then only sleeps. The
+    // socket keeps connections queued, so `/readyz` hangs for the whole watch.
+    let bad = b"#!/bin/sh\n[ \"$1\" = version ] && exec /usr/local/bin/mtpool-registrar version\nexec sleep infinity\n".to_vec();
+    let started = Instant::now();
+    stand
+        .publish_github_release(&registrar_release("9.9.10", &target, &bad, &key).unwrap())
+        .await
+        .expect("the release is published");
+    eventually("the bad release is rejected", secs(240), || async {
+        let rejected = fresh_text(&stand, "cat /var/lib/mtpool-update/rejected 2>&1").await;
+        if rejected.contains("9.9.10") {
+            Ok(())
+        } else {
+            Err(rejected)
+        }
+    })
+    .await
+    .unwrap();
+    let took = started.elapsed();
+    assert!(
+        took >= secs(55),
+        "the new binary was watched for about a minute, not {took:?}"
+    );
+    let restored = eventually("the good build is back and serves", secs(120), || async {
+        let sum = installed_sum(&stand).await;
+        let code = fresh_text(
+            &stand,
+            "curl -s --max-time 10 -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/readyz",
+        )
+        .await;
+        if sum == updated && code.trim() == "200" {
+            Ok(())
+        } else {
+            Err(format!("{sum} {code}"))
+        }
+    })
+    .await;
+    restored.unwrap();
+    let rollback = fresh_text(
+        &stand,
+        "journalctl -u mtpool-registrar-rollback -u mtpool-registrar-update --no-pager",
+    )
+    .await;
+    assert!(
+        rollback.contains("rolled back"),
+        "the rollback is in the journal:\n{rollback}"
+    );
+    let installed = fresh_text(
+        &stand,
+        "cat /var/lib/mtpool-update/installed; ls /var/lib/mtpool-update",
+    )
+    .await;
+    assert!(installed.starts_with("9.9.9"), "{installed}");
+    assert!(!installed.contains("probation"), "{installed}");
+
+    // The rolled-back release is not tried again.
+    let downloads_then = stand.github_downloads().await.unwrap().len();
+    tokio::time::sleep(secs(15)).await;
+    assert_eq!(
+        stand.github_downloads().await.unwrap().len(),
+        downloads_then,
+        "nothing was downloaded again"
+    );
+    assert_eq!(
+        installed_sum(&stand).await,
+        updated,
+        "and nothing was applied again"
+    );
+}
+
+#[tokio::test]
+#[ignore = "needs Docker and the internet; run with --ignored"]
+async fn bad_signature_release_rejected() {
+    let stand = Stand::up().await.expect("the stand comes up");
+    let foreign = TestKey::generate().expect("a key the build does not know");
+    let (target, original, build) = fresh_registrar_with_updates(&stand).await;
+    let mut other = build;
+    other.push(b'x');
+    stand
+        .publish_github_release(&registrar_release("9.9.9", &target, &other, &foreign).unwrap())
+        .await
+        .expect("the release is published");
+    eventually("the release is looked at and refused", secs(60), || async {
+        let log = fresh_text(
+            &stand,
+            "journalctl -u mtpool-registrar --no-pager | grep update.rejected",
+        )
+        .await;
+        if log.trim().is_empty() {
+            Err("not yet".to_owned())
+        } else {
+            Ok(log)
+        }
+    })
+    .await
+    .unwrap();
+    // A few more polls: nothing changes and nothing is fetched twice.
+    tokio::time::sleep(secs(8)).await;
+    let downloads = stand.github_downloads().await.unwrap();
+    assert!(
+        downloads.iter().all(|d| d.starts_with("manifest.json")) && !downloads.is_empty(),
+        "only the manifest and its signature were fetched: {downloads:?}"
+    );
+    let files = fresh_text(
+        &stand,
+        "ls -A /var/lib/mtpool/releases; ls -A /var/lib/mtpool-update; ls /usr/local/bin",
+    )
+    .await;
+    assert!(
+        !files.contains("mtpool-registrar-"),
+        "no artifact was published:\n{files}"
+    );
+    assert!(
+        !files.contains("installed") && !files.contains("probation"),
+        "{files}"
+    );
+    assert!(!files.contains("mtpool-registrar.prev"), "{files}");
+    assert_eq!(
+        installed_sum(&stand).await,
+        original,
+        "the binary is untouched"
+    );
+    let ready = fresh_text(
+        &stand,
+        "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/readyz",
+    )
+    .await;
+    assert_eq!(ready.trim(), "200");
 }

@@ -10,11 +10,13 @@ mod observe;
 mod release;
 mod signing;
 mod traffic;
+mod update;
 
 pub use install::{InstallOptions, Installed, Token};
 pub use observe::eventually;
 pub use release::{Release, ReleaseSpec};
 pub use signing::{TestKey, ensure_test_key};
+pub use update::{RegistrarRelease, registrar_release};
 
 use std::fmt;
 use std::path::PathBuf;

@@ -180,7 +180,7 @@ pub async fn install_script(
 }
 
 /// A release file name: letters, digits, dot, dash and underscore, not made of dots alone.
-fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     (1..=MAX_NAME_LEN).contains(&name.len())
         && name
             .bytes()

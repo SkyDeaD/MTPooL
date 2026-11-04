@@ -11,6 +11,8 @@
 #                         127.0.0.1:8080 only; put your own proxy in front of it)
 #   --release-url <url>   where releases are downloaded from
 #                         (default https://github.com/SkyDeaD/MTPooL/releases/latest/download)
+#   --release-repo <o/r>  the GitHub repository the registrar updates itself from, written to
+#                         /etc/mtpool/registrar.env on a first install (default SkyDeaD/MTPooL)
 #   --pubkey <key>        the release signing key (the base64 line of the .pub file); the
 #                         released copy of this script has it written in
 #
@@ -27,7 +29,7 @@ die() {
 }
 
 usage() {
-    echo "usage: install-registrar.sh --domain <name> [--binary <path>] [--no-caddy] [--release-url <url>] [--pubkey <key>]" >&2
+    echo "usage: install-registrar.sh --domain <name> [--binary <path>] [--no-caddy] [--release-url <url>] [--release-repo <owner/name>] [--pubkey <key>]" >&2
     exit 2
 }
 
@@ -35,6 +37,7 @@ main() {
     domain=
     binary=
     caddy=yes
+    release_repo=SkyDeaD/MTPooL
     here=$(cd "$(dirname "$0")" && pwd)
 
     while [ $# -gt 0 ]; do
@@ -58,6 +61,11 @@ main() {
             RELEASE_URL=${2%/}
             shift 2
             ;;
+        --release-repo)
+            [ $# -ge 2 ] || die "--release-repo needs owner/name"
+            release_repo=$2
+            shift 2
+            ;;
         --pubkey)
             [ $# -ge 2 ] || die "--pubkey needs a key"
             PUBKEY=$2
@@ -69,6 +77,11 @@ main() {
     done
 
     [ -n "$domain" ] || die "--domain is required"
+    case "$release_repo" in
+    */*/* | */ | /* | *[!A-Za-z0-9._/-]* | '') die "--release-repo is not owner/name: $release_repo" ;;
+    */*) ;;
+    *) die "--release-repo is not owner/name: $release_repo" ;;
+    esac
     case "$domain" in
     *[!A-Za-z0-9.-]* | .* | *. | *..* | -*) die "--domain is not a host name: $domain" ;;
     esac
@@ -89,7 +102,9 @@ main() {
     [ "$os" = "ubuntu 24.04" ] || die "only Ubuntu 24.04 is supported, this is $os"
 
     for file in systemd/mtpool-registrar.socket systemd/mtpool-registrar.service \
-        systemd/mtpool-backup.service systemd/mtpool-backup.timer Caddyfile; do
+        systemd/mtpool-backup.service systemd/mtpool-backup.timer \
+        systemd/mtpool-registrar-update.path systemd/mtpool-registrar-update.service \
+        systemd/mtpool-registrar-rollback.service Caddyfile; do
         [ -r "$here/$file" ] || die "$here/$file is missing: run this script from the deploy directory"
     done
 
@@ -175,19 +190,29 @@ main() {
     fi
     install -d -m 0750 -o root -g mtpool /etc/mtpool
     install -d -m 0750 -o mtpool -g mtpool /var/lib/mtpool
-    install -d -m 0755 -o root -g root /var/lib/mtpool/releases
+    # The registrar service (user mtpool) publishes verified releases here; the root helper only
+    # reads them. The state of the updater is root's and the service cannot write it.
+    install -d -m 0755 -o mtpool -g mtpool /var/lib/mtpool/releases
+    install -d -m 0755 -o root -g root /var/lib/mtpool-update
     install -d -m 0750 -o mtpool -g mtpool /var/backups/mtpool
     if [ ! -e /etc/mtpool/registrar.env ]; then
         {
             echo "# Settings of the registrar service, one NAME=value per line. See the documentation"
             echo "# for MTPOOL_DB_PATH, MTPOOL_LISTEN, MTPOOL_LOG and MTPOOL_RELEASES_DIR."
+            echo "# The registrar polls this GitHub repository for signed releases and updates itself;"
+            echo "# delete the line to switch self-update off."
+            echo "MTPOOL_RELEASE_REPO=$release_repo"
         } >/etc/mtpool/registrar.env
         chown root:mtpool /etc/mtpool/registrar.env
         chmod 0640 /etc/mtpool/registrar.env
     fi
 
+    # A fresh install is the new truth: forget what an earlier self-update recorded, and drop the
+    # previous build kept for it, so that neither points at a version that is no longer here.
+    rm -f /var/lib/mtpool-update/installed /var/lib/mtpool-update/probation /usr/local/bin/mtpool-registrar.prev
     install -m 0755 "$binary" /usr/local/bin/mtpool-registrar
-    for unit in mtpool-registrar.socket mtpool-registrar.service mtpool-backup.service mtpool-backup.timer; do
+    for unit in mtpool-registrar.socket mtpool-registrar.service mtpool-backup.service mtpool-backup.timer \
+        mtpool-registrar-update.path mtpool-registrar-update.service mtpool-registrar-rollback.service; do
         install -m 0644 "$here/systemd/$unit" "/etc/systemd/system/$unit"
     done
 
@@ -221,7 +246,7 @@ main() {
     if [ -e "$db" ]; then first=no; else first=yes; fi
 
     systemctl daemon-reload
-    units="mtpool-registrar.socket mtpool-backup.timer"
+    units="mtpool-registrar.socket mtpool-backup.timer mtpool-registrar-update.path"
     [ "$caddy" = no ] || units="$units caddy"
     # shellcheck disable=SC2086
     systemctl enable --now $units

@@ -1,0 +1,10 @@
+HTTP/2.0 200 OK
+Cache-Control: private, max-age=60, s-maxage=60
+Content-Type: application/json; charset=utf-8
+Etag: W/"403aee5f7c76983ae2f3d8b65620070c8a20ae61ae8feda8745d4ba03a45b71b"
+Last-Modified: Thu, 16 Jan 2025 13:14:50 GMT
+X-Ratelimit-Limit: 5000
+X-Ratelimit-Remaining: 4999
+X-Ratelimit-Reset: 1793761162
+X-Ratelimit-Resource: core
+X-Ratelimit-Used: 1

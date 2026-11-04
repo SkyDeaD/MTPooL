@@ -3,6 +3,11 @@ Description=MTPooL registrar
 Requires=mtpool-registrar.socket
 After=mtpool-registrar.socket network-online.target
 Wants=network-online.target
+# A build that keeps crashing after an update is put back; without an update on probation the
+# rollback unit does nothing.
+OnFailure=mtpool-registrar-rollback.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 User=mtpool

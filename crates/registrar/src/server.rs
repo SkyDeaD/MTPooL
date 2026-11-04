@@ -332,13 +332,15 @@ pub async fn run_with(
     let actor = Actor::spawn(state, store.clone(), drivers);
     // The prober and the sender end on their own when the state owner is gone; the handles let
     // the shutdown cut a round that is still running.
-    let workers = [
+    let mut workers = vec![
         tokio::spawn(Prober::new().run(actor.clone())),
         tokio::spawn(
             WebhookSender::new(store.clone(), Arc::new(SystemResolver), system_clock())
                 .run(actor.clone()),
         ),
     ];
+    // The poller only fetches and checks files; it has no say over the state owner.
+    workers.extend(crate::update::spawn_poller(store.clone()));
     let app = router(
         AppState::new(store.clone(), actor.clone(), actor.snapshots())
             .with_events(fan.clone())

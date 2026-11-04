@@ -1,0 +1,29 @@
+[Unit]
+Description=MTPooL registrar: put the previous build back
+# Does nothing unless an update is on probation and a previous build is kept beside the current one.
+ConditionPathExists=/var/lib/mtpool-update/probation
+ConditionFileIsExecutable=/usr/local/bin/mtpool-registrar.prev
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/mtpool/registrar.env
+# The previous build does the switch back: the current one is the one that failed.
+ExecStart=/usr/local/bin/mtpool-registrar.prev update rollback
+TimeoutStartSec=120
+
+StateDirectory=mtpool-update
+StateDirectoryMode=0755
+ReadWritePaths=/usr/local/bin
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+CapabilityBoundingSet=
