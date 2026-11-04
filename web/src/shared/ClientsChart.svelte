@@ -1,7 +1,7 @@
 <script lang="ts">
   import { formatDay, formatHour, formatNumber, formatSecond, formatWhen } from '../lib/dates';
   import { t } from '../lib/i18n';
-  import { monotonePath, niceStep, round1 } from '../lib/chart';
+  import { countTicks, monotonePath, niceStep, round1 } from '../lib/chart';
   import type { ClientsRange, ClientsSeries } from '../lib/types';
   import Icon from './Icon.svelte';
   import Seg from './Seg.svelte';
@@ -85,6 +85,9 @@
   const target = $derived.by(() => {
     const vals = visible.map((p) => p.total);
     if (vals.length === 0) return { lo: 0, hi: 1 };
+    // The next point is about to be drawn; the scale has room for it before the line gets there.
+    const ahead = pts.find((p) => p.at > tEnd);
+    if (ahead) vals.push(ahead.total);
     let mn = Math.min(...vals);
     const mx = Math.max(...vals);
     if (zero) mn = 0;
@@ -101,12 +104,7 @@
   const yHi = $derived(Math.max(yr.hi, yr.lo + 1));
   const Y = (v: number) => MT + (1 - (v - yLo) / (yHi - yLo)) * plotH;
 
-  const yTicks = $derived.by(() => {
-    const step = niceStep((yHi - yLo) / 2.5);
-    const out: number[] = [];
-    for (let v = Math.ceil(yLo / step) * step; v <= yHi + 1e-6 && out.length < 7; v += step) out.push(v);
-    return out;
-  });
+  const yTicks = $derived(countTicks(yLo, yHi));
 
   const xTicks = $derived.by(() => {
     const iv = TICK_MS[range] * (phone ? 2 : 1);

@@ -42,3 +42,20 @@ for (const theme of THEMES) {
     });
   }
 }
+
+// The pictures in the README, one for each theme: what a first look at the product shows.
+const DOCS = resolve(import.meta.dirname, '..', '..', 'docs', 'images');
+for (const theme of THEMES) {
+  test(`pictures for the README, ${theme}`, async ({ page }) => {
+    mkdirSync(DOCS, { recursive: true });
+    await useTheme(page, theme);
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(1500);
+    await page.screenshot({ path: `${DOCS}/public-${theme}.png` });
+    await openPanel(page, '#/overview');
+    await page.waitForTimeout(1500);
+    await page.screenshot({ path: `${DOCS}/panel-${theme}.png` });
+  });
+}

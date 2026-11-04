@@ -108,6 +108,25 @@ function start(bin: string, env: Record<string, string>, args: string[], log: st
   return child;
 }
 
+// Pictures show a pool with a past. Only for `MTPOOL_SHOTS`: the checks run on what the pool made.
+function seedClientHistory(db: string): void {
+  const conn = new DatabaseSync(db);
+  conn.exec('DELETE FROM client_samples');
+  const insert = conn.prepare('INSERT OR REPLACE INTO client_samples (at, domain, clients) VALUES (?, ?, ?)');
+  const now = Date.now();
+  const add = (at: number) => {
+    const hours = (now - at) / 3_600_000;
+    const wave = 34 * Math.sin(hours / 3.8) + 9 * Math.sin(hours * 7) + 8 * Math.sin(hours * 40) + 5 * Math.sin(hours * 97);
+    const total = Math.round(450 - hours * 1.2 + wave);
+    insert.run(at, '', total);
+    insert.run(at, 'alpha.example.com', Math.round(total * 0.42));
+    insert.run(at, 'beta.example.com', Math.round(total * 0.58));
+  };
+  for (let at = now - 7 * 86_400_000; at < now - 3_600_000; at += 600_000) add(at);
+  for (let at = now - 3_600_000; at < now; at += 30_000) add(at);
+  conn.close();
+}
+
 function stopChild(child: ChildProcess): Promise<void> {
   return new Promise((done) => {
     if (child.exitCode !== null || child.signalCode !== null) return done();
@@ -317,6 +336,7 @@ export async function startStand(): Promise<Stand> {
     // The node that waits in the queue: pending, never reported.
     // (It enrolled and was latched up above, but sends no report, so it stays Pending.)
 
+    if (process.env.MTPOOL_SHOTS) seedClientHistory(db);
     return stand;
   } catch (e) {
     await cleanup();

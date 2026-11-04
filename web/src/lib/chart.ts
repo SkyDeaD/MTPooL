@@ -32,6 +32,14 @@ export function monotonePath(p: readonly (readonly [number, number])[]): string 
 }
 
 /** A round step for an axis: 1, 2, 2.5, 5 or 10 times a power of ten. */
+// Ticks for a count of things: whole numbers only, so a small scale does not label 0.5 as 1.
+export function countTicks(lo: number, hi: number): number[] {
+  const step = Math.max(1, Math.ceil(niceStep((hi - lo) / 2.5)));
+  const out: number[] = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-6 && out.length < 7; v += step) out.push(v);
+  return out;
+}
+
 export function niceStep(x: number): number {
   const e = Math.pow(10, Math.floor(Math.log10(x || 1)));
   const f = x / e;
