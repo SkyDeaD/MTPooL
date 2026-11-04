@@ -186,7 +186,7 @@ The guides are in Russian.
 
 ## Development
 
-You need Rust and Node.js, plus Docker for the end-to-end scenarios. Run the tests:
+You need Rust, Node.js and `jq`, plus Docker for the end-to-end scenarios. Run the tests:
 
 ```bash
 cargo test --workspace

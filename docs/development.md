@@ -22,6 +22,7 @@ deploy/            установщики, systemd, Caddy
 
 - Rust нужной версии: она задана в `rust-toolchain.toml`.
 - Node.js и npm для `web/`.
+- `jq`: его вызывает `scripts/make-manifest.sh`, а этот скрипт проверяют тесты `mtpool-selfupdate`.
 - Docker для сценариев в `e2e/`.
 
 ## Команды

@@ -184,7 +184,7 @@ curl -s https://pool.example.com/api/v1/links
 
 ## Разработка
 
-Нужны Rust и Node.js, для сквозных сценариев ещё Docker. Запустите тесты:
+Нужны Rust, Node.js и `jq`, для сквозных сценариев ещё Docker. Запустите тесты:
 
 ```bash
 cargo test --workspace
