@@ -303,7 +303,10 @@ async fn a_healthy_new_build_is_confirmed_and_reported() {
     rig.publish_good("0.2.0");
     rig.offer("0.2.0");
     rig.script_restart();
-    rig.updater().check().await;
+    assert_eq!(
+        rig.updater().check().await,
+        Checked::Restarting(Version::parse("0.2.0").unwrap())
+    );
 
     let new_process = rig.updater_running("0.2.0");
     let got = new_process.confirm(|| async { true }).await;
