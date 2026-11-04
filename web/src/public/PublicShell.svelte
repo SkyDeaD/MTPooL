@@ -19,6 +19,10 @@
   }: { active: Section | null; updatedAt?: number | null; stale?: boolean; children: Snippet } = $props();
 
   const now = useNow(1000);
+  // The page is alive and has filled itself from what the session remembers: it may be seen.
+  $effect(() => {
+    document.documentElement.classList.remove('back');
+  });
   const tabs: { id: Section; href: string; label: string }[] = [
     { id: 'stats', href: '/', label: t('shell.tab.stats') },
     { id: 'dashboard', href: '/dashboard', label: t('shell.tab.dashboard') },
@@ -48,5 +52,5 @@
   </div>
 </header>
 <main class="pm gut"><div class="view">{@render children()}</div></main>
-<div class="gut" style="max-width:1240px;margin:auto"><p class="faint xs" style="padding-bottom:24px">{t('shell.footer')}</p></div>
+<div class="gut pf"><p class="faint xs">{t('shell.footer')}</p></div>
 <Toasts />

@@ -85,6 +85,7 @@
     <span class="sub">{t('panel.srmd.sub')}</span>
   </header>
   {#if srmd.stale}<p class="note" role="status">{t('common.stale')}</p>{/if}
+  {#if store.doc && enabled && !base && !store.original['domains']}<p class="note" role="status">{t('panel.srmd.noBase')}</p>{/if}
 
   {#if !srmd.settled}
     <p class="muted">{t('common.loading')}</p>

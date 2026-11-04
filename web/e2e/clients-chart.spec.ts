@@ -17,3 +17,27 @@ test('the scale of the clients chart holds the current number', async ({ page })
   expect(current).toBeGreaterThan(0);
   expect(Math.max(...ticks) * 1.5).toBeGreaterThanOrEqual(current);
 });
+
+// Domains rotate together, so two marks with the same time are the normal case.
+test('two master changes at the same instant do not break the clients chart', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.route('**/api/v1/stats/clients*', async (route) => {
+    const at = (back: number) => new Date(Date.now() - back * 1000).toISOString();
+    await route.fulfill({
+      json: {
+        range: '10m',
+        step_sec: 30,
+        points: [120, 90, 60, 30].map((back) => ({ at: at(back), total: 10, domains: {} })),
+        marks: [
+          { at: at(100), kind: 'master_change' },
+          { at: at(100), kind: 'master_change' },
+        ],
+      },
+    });
+  });
+  await page.goto('/');
+  await expect(page.locator('.cc[role="img"] .ty').first()).toBeVisible();
+  await expect(page.locator('.cc[role="img"] .sk')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});

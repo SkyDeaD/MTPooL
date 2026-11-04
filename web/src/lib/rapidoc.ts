@@ -8,6 +8,8 @@ export function loadRapidoc(): Promise<void> {
   if (loading) return loading;
   loading = new Promise<void>((resolve, reject) => {
     const script = document.createElement('script');
+    // The file is an ES module: as a plain script it stops at its first `export`, and `onload` still fires.
+    script.type = 'module';
     script.src = RAPIDOC_SRC;
     script.onload = () => resolve();
     script.onerror = () => {

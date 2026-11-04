@@ -16,6 +16,29 @@ export interface Resource<T> {
   readonly status: number | null;
 }
 
+// Each public tab is a page of its own, so without this it starts empty every time. The last answers
+// live for the session and are shown until the fresh one comes. Public data only: the panel has its
+// own client and keeps nothing here.
+const SEEN = 'mtpool-seen';
+
+function recall<T>(url: string): { data: T; at: number } | null {
+  try {
+    const saved = sessionStorage.getItem(`mtpool-answer:${url}`);
+    return saved ? (JSON.parse(saved) as { data: T; at: number }) : null;
+  } catch {
+    return null;
+  }
+}
+
+function remember(url: string, data: unknown, at: number): void {
+  try {
+    sessionStorage.setItem(`mtpool-answer:${url}`, JSON.stringify({ data, at }));
+    sessionStorage.setItem(SEEN, '1');
+  } catch {
+    // Storage is blocked or full: the page simply waits for its answers.
+  }
+}
+
 export function useResource<T>(url: () => string, fetchFn?: typeof fetch): Resource<T> {
   let data = $state.raw<T | null>(null);
   let stale = $state(false);
@@ -24,8 +47,15 @@ export function useResource<T>(url: () => string, fetchFn?: typeof fetch): Resou
   let status = $state<number | null>(null);
 
   $effect(() => {
+    const path = url();
+    const known = recall<T>(path);
+    if (known) {
+      data = known.data;
+      settled = true;
+      updatedAt = known.at;
+    }
     const poller = createPoller<T>({
-      url: url(),
+      url: path,
       fetchFn,
       onData(next) {
         data = next;
@@ -33,6 +63,7 @@ export function useResource<T>(url: () => string, fetchFn?: typeof fetch): Resou
         stale = false;
         settled = true;
         updatedAt = Date.now();
+        remember(path, next, updatedAt);
       },
       onUnchanged() {
         stale = false;

@@ -121,7 +121,7 @@ export function seed(doc: Record<string, unknown>): Values {
   return out;
 }
 
-export type Problem = { code: 'int' | 'float' | 'empty' | 'users' | 'domains'; min?: number; max?: number };
+export type Problem = { code: 'int' | 'float' | 'empty' | 'users'; min?: number; max?: number };
 
 export function parse(field: Field, value: Value): { ok: true; value: unknown } | { ok: false; problem: Problem } {
   const text = typeof value === 'string' ? value.trim() : '';
@@ -131,10 +131,8 @@ export function parse(field: Field, value: Value): { ok: true; value: unknown } 
     case 'text':
       if (!text && field.optional) return { ok: true, value: null };
       return text ? { ok: true, value: text } : { ok: false, problem: { code: 'empty' } };
-    case 'domains': {
-      const list = text.split(/\s+/).filter(Boolean);
-      return list.length > 0 ? { ok: true, value: list } : { ok: false, problem: { code: 'domains' } };
-    }
+    case 'domains':
+      return { ok: true, value: text.split(/\s+/).filter(Boolean) };
     case 'users': {
       const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
       const users = lines.map((l) => {

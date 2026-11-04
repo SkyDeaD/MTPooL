@@ -44,7 +44,7 @@
   <div class="stack">
     {#if links.stale}<p class="stale">{t('common.stale')}</p>{/if}
 
-    <section class="t" style="--i:0">
+    <section class="t">
       <div class="steps">
         {#each steps as step, i (step)}
           <div class="stp">
@@ -57,14 +57,14 @@
     </section>
 
     {#if links.data && links.data.length === 0}
-      <section class="t empty" style="--i:1">
+      <section class="t empty">
         <h2>{t('links.empty.title')}</h2>
         <p>{t('links.empty.text')}</p>
       </section>
     {:else if links.data}
       <div class="g4">
         {#each links.data as link, i (link.id)}
-          <section class="t dom" style="--i:{i + 1}">
+          <section class="t dom">
             <div class="qrw">
               <div class="qr">
                 <img class="qr-img" src={link.qr_url} alt={t('links.qr', { domain: link.domain })} width="132" height="132" loading="lazy" />

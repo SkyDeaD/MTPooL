@@ -154,7 +154,7 @@
                 </tr>
               </thead>
               <tbody>
-                {#each n.rounds as round (round.at)}
+                {#each n.rounds as round, i (i)}
                   <tr>
                     <td>{formatWhen(Date.parse(round.at))}</td>
                     <td>{t(`panel.verdict.${round.verdict}` as 'panel.verdict.clean')}</td>

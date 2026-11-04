@@ -2,6 +2,11 @@ name: E2E
 
 on:
   pull_request:
+    # The stand checks the servers, not the pages: those have the browser job in CI.
+    paths-ignore:
+      - 'web/**'
+      - 'docs/**'
+      - '**/*.md'
   workflow_dispatch:
 
 concurrency:

@@ -15,12 +15,20 @@
 
   let seg: HTMLElement | undefined = $state();
   let thumb: HTMLElement | undefined = $state();
+  let placed = false;
 
   function place(): void {
     const on = seg?.querySelector<HTMLElement>('button[aria-pressed="true"]');
     if (!thumb || !on) return;
+    // The first placing is where the thumb starts from, not a move: it must not slide in.
+    if (!placed) thumb.style.transition = 'none';
     thumb.style.width = `${on.offsetWidth}px`;
     thumb.style.transform = `translateX(${on.offsetLeft}px)`;
+    if (!placed) {
+      void thumb.offsetWidth;
+      thumb.style.transition = '';
+      placed = true;
+    }
   }
 
   // Again when the choice changes and when the buttons change size (a font arrives, the window

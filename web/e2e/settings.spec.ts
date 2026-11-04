@@ -44,3 +44,53 @@ test('settings: a saved value is still there after a reload', async ({ page }) =
   await page.getByRole('tab', { name: 'Домены и DNS' }).click();
   await expect(page.locator(`input[data-key="${KEY}"]`)).toHaveValue(next);
 });
+
+test('settings: a proxy user is added with a generated secret and removed again', async ({ page }) => {
+  await openPanel(page, '#/settings');
+  await page.getByRole('tab', { name: 'Прокси' }).click();
+  const block = page.locator('section[data-key="proxy_users"]');
+  const name = block.getByLabel('Имя нового пользователя');
+  const add = block.getByRole('button', { name: 'Добавить' });
+
+  // Names the engines would refuse never leave the page.
+  await name.fill('Вася');
+  await add.click();
+  await expect(block.locator('.e')).toContainText('Латинские буквы');
+  await name.fill('main');
+  await add.click();
+  await expect(block.locator('.e')).toContainText('уже есть');
+
+  await name.fill('guest-1');
+  await add.click();
+  const row = block.getByRole('row').filter({ hasText: 'guest-1' });
+  await expect(row).toBeVisible();
+  await expect(row).toContainText('••••');
+  await expect(name).toHaveValue('');
+
+  await page.reload();
+  await page.getByRole('tab', { name: 'Прокси' }).click();
+  await expect(row).toBeVisible();
+
+  await row.getByRole('button', { name: 'Удалить' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Удалить' }).click();
+  await expect(row).toHaveCount(0);
+  await expect(block.getByRole('row').filter({ hasText: 'main' })).toBeVisible();
+});
+
+test('settings: SRMD says so when it has nothing to build a domain name from', async ({ page }) => {
+  const note = page.getByRole('status').filter({ hasText: 'не из чего создать домен' });
+  const answer = (over: Record<string, unknown>) =>
+    page.route('**/api/v1/admin/settings', async (route) => {
+      const real = await route.fetch();
+      const doc = await real.json();
+      await route.fulfill({ response: real, json: { ...doc, domains: [], srmd: { ...doc.srmd, enabled: true, ...over } } });
+    });
+  await answer({ base_domain: null });
+  await openPanel(page, '#/srmd');
+  await expect(note).toBeVisible();
+  await page.unroute('**/api/v1/admin/settings');
+  await answer({ base_domain: 'mt.example.com' });
+  await page.reload();
+  await expect(page.locator('[data-key="srmd.base_domain"]')).toHaveValue('mt.example.com');
+  await expect(note).toHaveCount(0);
+});

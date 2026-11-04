@@ -64,22 +64,22 @@
     {#if stale}<p class="stale">{t('common.stale')}</p>{/if}
 
     <div class="kpis">
-      <section class="t kpi" style="--i:0">
+      <section class="t kpi">
         <span class="l">{t('dash.kpi.bans')}</span>
         <span class="v">{sum ? sum.kpi.bans : '—'}</span>
         <span class="s">{t(`dash.of.${range}`)}</span>
       </section>
-      <section class="t kpi" style="--i:1">
+      <section class="t kpi">
         <span class="l">{t('dash.kpi.life')}</span>
         <span class="v">{sum?.kpi.avg_lifetime_sec ? formatSpan(sum.kpi.avg_lifetime_sec) : '—'}</span>
         <span class="s">{t('dash.kpi.lifeNote')}</span>
       </section>
-      <section class="t kpi" style="--i:2">
+      <section class="t kpi">
         <span class="l">{t('dash.kpi.gap')}</span>
         <span class="v">{sum?.kpi.avg_gap_sec ? formatSpan(sum.kpi.avg_gap_sec) : '—'}</span>
         <span class="s">{t('dash.kpi.gapNote')}</span>
       </section>
-      <section class="t kpi" style="--i:3">
+      <section class="t kpi">
         <span class="l">{t('dash.kpi.traffic')}</span>
         <span class="v">{sum ? formatBytes(sum.kpi.traffic_total_bytes) : '—'}</span>
         <span class="s">
@@ -88,7 +88,7 @@
       </section>
     </div>
 
-    <section class="t" style="--i:3">
+    <section class="t">
       <div class="th">
         <h2>{t(`dash.chart.${metric}`)}</h2>
         <span class="sp"></span>
@@ -117,7 +117,7 @@
     </section>
 
     {#if reasons.length > 0}
-      <section class="t" style="--i:4">
+      <section class="t">
         <div class="th">
           <h2>{t('dash.reasons.title')}</h2>
           <span class="sub">{t('dash.reasons.sub')}</span>
@@ -132,7 +132,7 @@
       </section>
     {/if}
 
-    <section class="t" style="--i:5">
+    <section class="t">
       <div class="th">
         <h2>{t('dash.log.title')}</h2>
         {#if rows}<span class="sub">{rows.length} {tp('unit.record', rows.length)}</span>{/if}

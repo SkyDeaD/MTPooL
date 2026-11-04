@@ -474,6 +474,98 @@ mod tests {
     }
 
     #[test]
+    fn one_written_domain_grows_by_number_as_nodes_come() {
+        let s = settings(true, &["mt.example.com"]);
+        let mut state = SrmdState::default();
+        // Five nodes fit the one domain, nothing is created.
+        let out = ticks(&mut state, &["mt.example.com"], 5, &s, 20);
+        assert!(out.iter().all(Vec::is_empty));
+        let out = ticks(&mut state, &["mt.example.com"], 6, &s, 20);
+        assert_eq!(out[19], vec![create("mt1.example.com")]);
+        let out = ticks(
+            &mut state,
+            &["mt.example.com", "mt1.example.com"],
+            11,
+            &s,
+            20,
+        );
+        assert_eq!(out[19], vec![create("mt2.example.com")]);
+    }
+
+    #[test]
+    fn no_written_domain_starts_from_the_base_name() {
+        let mut s = settings(true, &[]);
+        s.srmd.base_domain = Some("mt.example.com".into());
+        let mut state = SrmdState::default();
+        let out = ticks(&mut state, &[], 1, &s, 20);
+        assert_eq!(out[19], vec![create("mt1.example.com")]);
+        let out = ticks(&mut state, &["mt1.example.com"], 6, &s, 20);
+        assert_eq!(out[19], vec![create("mt2.example.com")]);
+        // The nodes leave: the first domain stays and the other folds onto it.
+        let out = ticks(
+            &mut state,
+            &["mt1.example.com", "mt2.example.com"],
+            1,
+            &s,
+            20,
+        );
+        assert_eq!(
+            out[19],
+            vec![SrmdAction::Fold {
+                domain: "mt2.example.com".into(),
+                target: "mt1.example.com".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn written_domains_handed_over_fold_and_come_back_before_new_ones() {
+        let names = [
+            "mt1.example.com",
+            "mt2.example.com",
+            "mt3.example.com",
+            "mt4.example.com",
+        ];
+        let mut s = settings(true, &names);
+        s.srmd.base_domain = Some("mt.example.com".into());
+        let mut state = SrmdState::default();
+        // Not handed over: all four stay whatever the queue is.
+        assert!(
+            ticks(&mut state, &names, 1, &s, 20)
+                .iter()
+                .all(Vec::is_empty)
+        );
+
+        for name in names {
+            take(&mut state, name).unwrap();
+        }
+        let out = ticks(&mut state, &names, 1, &s, 20);
+        assert_eq!(state.cnames.len(), 3, "{:?}", out[19]);
+        assert!(state.cnames.values().all(|t| t == "mt1.example.com"));
+
+        // More nodes bring a folded domain back and no new name.
+        let out = ticks(&mut state, &["mt1.example.com"], 6, &s, 20);
+        assert_eq!(out[19], vec![unfold("mt2.example.com")]);
+
+        // Past the four, the rest come back and the numbering goes on from the free name.
+        let out = ticks(
+            &mut state,
+            &["mt1.example.com", "mt2.example.com"],
+            21,
+            &s,
+            20,
+        );
+        assert_eq!(
+            out[19],
+            vec![
+                unfold("mt3.example.com"),
+                unfold("mt4.example.com"),
+                create("mt5.example.com"),
+            ]
+        );
+    }
+
+    #[test]
     fn no_usable_base_means_no_create() {
         for domains in [&[][..], &["localhost"], &[".example.com"], &["host."]] {
             let s = settings(true, domains);

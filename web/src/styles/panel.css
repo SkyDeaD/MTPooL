@@ -5,6 +5,7 @@
 .app { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; align-items: start; }
 .rail { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; border-right: 1px solid var(--line); background: var(--surf); overflow-y: auto; }
 .rail .logo { padding: 2px 8px 12px; }
+.mhead .logo { padding: 0; }
 .rail a.nav { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: var(--r2); color: var(--fg2); font-size: 13.5px; background: none; border: 0; width: 100%; text-align: left; cursor: pointer; font-family: inherit; }
 .rail .nav { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: var(--r2); color: var(--fg2); font-size: 13.5px; background: none; border: 0; width: 100%; text-align: left; cursor: pointer; font-family: inherit; }
 .rail .nav:hover { background: var(--surf2); color: var(--fg); text-decoration: none; }
@@ -85,7 +86,8 @@
 .ev .ts { color: var(--fg3); font-size: 12.5px; white-space: nowrap; }
 .sub a { text-decoration: underline; text-underline-offset: 2px; }
 .tabs { display: flex; gap: 4px; margin-bottom: 14px; flex-wrap: wrap; }
-.tabs [role='tab'] { height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--r2); background: var(--surf); color: var(--fg2); cursor: pointer; font: inherit; font-size: 13.5px; }
+.tabs [role='tab'] { display: inline-flex; align-items: center; height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--r2); background: var(--surf); color: var(--fg2); cursor: pointer; font: inherit; font-size: 13.5px; }
+.tabs [role='tab']:hover { color: var(--fg); text-decoration: none; }
 .tabs [role='tab'][aria-selected='true'] { background: var(--acc-t); color: var(--fg); border-color: transparent; font-weight: 500; }
 
 /* Rounds table on the node page */

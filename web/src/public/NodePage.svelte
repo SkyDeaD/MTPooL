@@ -52,17 +52,17 @@
       {#if node.data}
         {@const n = node.data}
         <div class="kpis">
-          <section class="t kpi" style="--i:0">
+          <section class="t kpi">
             <span class="l">{t('node.kpi.availability')}</span>
             <span class="v">{formatAvailability(n.availability_bp)}</span>
             <span class="s">{t('node.kpi.availabilityNote')}</span>
           </section>
-          <section class="t kpi" style="--i:1">
+          <section class="t kpi">
             <span class="l">{t('node.kpi.clients')}</span>
             <span class="v">{n.clients ?? '—'}</span>
             {#if spark.length > 1}<Sparkline values={spark} />{/if}
           </section>
-          <section class={['t kpi', n.is_master && 'mk']} style="--i:2">
+          <section class={['t kpi', n.is_master && 'mk']}>
             <span class="l">{t('node.kpi.role')}</span>
             {#if n.is_master}
               <span class="v">{t('node.role.master')}</span>
@@ -77,7 +77,7 @@
               <span class="s">{round !== null ? t('node.role.nextRound', { time: clock(round) }) : t('node.role.outside')}</span>
             {/if}
           </section>
-          <section class="t kpi" style="--i:3">
+          <section class="t kpi">
             <span class="l">{t('node.kpi.inPool')}</span>
             <span class="v">{days || '<1'} <small>{days ? tp('unit.day', days) : tp('unit.day', 2)}</small></span>
             <span class="s">{t('node.kpi.since', { date: formatWhen(Date.parse(n.state_since)) })}</span>
@@ -85,7 +85,7 @@
         </div>
 
         {#if n.last_round}
-          <section class="t" style="--i:5">
+          <section class="t">
             <div class="th">
               <h2>{t(`node.round.${n.last_round.verdict}`)}</h2>
               <span class="sub">{t(`node.round.${n.last_round.verdict}Text`)}</span>
@@ -97,13 +97,13 @@
             <div class="tb-b"><Votes votes={n.last_round.votes} /></div>
           </section>
         {:else}
-          <section class="t pad" style="--i:5"><p class="muted">{t('node.round.none')}</p></section>
+          <section class="t pad"><p class="muted">{t('node.round.none')}</p></section>
         {/if}
       {:else if !node.stale}
         <div class="kpis"><section class="t kpi"><div class="sk" style="height:60px"></div></section></div>
       {/if}
 
-      <section class="t" style="--i:6">
+      <section class="t">
         <div class="th">
           <h2>{t('node.history.title')}</h2>
           <span class="sub">{t('node.history.sub')}</span>

@@ -55,12 +55,12 @@
     {#if stale}<p class="stale">{t('common.stale')}</p>{/if}
 
     {#if empty}
-      <section class="t empty" style="--i:0">
+      <section class="t empty">
         <h2>{t('stats.empty.title')}</h2>
         <p>{t('stats.empty.text')}</p>
       </section>
     {:else if counts && groups}
-      <section class="t hero" style="--i:0">
+      <section class="t hero">
         <div class="w">
           <span class={['ic', !healthy && 'warn']}><Icon name={healthy ? 'check' : 'alert'} lg /></span>
           <div>
@@ -72,17 +72,17 @@
       </section>
 
       <div class="kpis">
-        <section class="t kpi" style="--i:1" data-kpi="working">
+        <section class="t kpi" data-kpi="working">
           <span class="l">{t('stats.kpi.working')}</span>
           <span class="v">{counts.working}</span>
           <span class="s">{t('stats.kpi.workingOf', { n: counts.shown })}</span>
         </section>
-        <section class="t kpi" style="--i:2" data-kpi="availability">
+        <section class="t kpi" data-kpi="availability">
           <span class="l">{t('stats.kpi.availability')}</span>
           <span class="v">{formatAvailability(counts.availabilityBp)}</span>
           <span class="s">{t('stats.kpi.availabilityNote')}</span>
         </section>
-        <section class="t kpi" style="--i:3" data-kpi="bans">
+        <section class="t kpi" data-kpi="bans">
           <span class="l">{t('stats.kpi.bans')}</span>
           <span class="v">{lastBans ? lastBans.bans : '—'}</span>
           <a class="s" href="/dashboard">
@@ -91,7 +91,12 @@
         </section>
       </div>
     {:else if !stale}
-      <section class="t pad" style="--i:0"><div class="sk" style="height:84px"></div></section>
+      <section class="t pad"><div class="sk" style="height:64px"></div></section>
+      <div class="kpis">
+        {#each [0, 1, 2] as i (i)}
+          <section class="t kpi"><div class="sk" style="height:76px"></div></section>
+        {/each}
+      </div>
     {/if}
 
     {#if !empty}
