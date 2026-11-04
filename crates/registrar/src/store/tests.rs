@@ -700,6 +700,13 @@ fn full_state() -> (PoolState, Vec<PersistOp>) {
                 from_client_total: 100,
                 to_client_total: 200,
                 clients: Some(4),
+                other_counters: Some(TrafficCounters {
+                    from_client: 300,
+                    to_client: 400,
+                }),
+                other_from_client_total: 30,
+                other_to_client_total: 40,
+                other_clients: Some(5),
                 availability_bp: None,
             },
         ),

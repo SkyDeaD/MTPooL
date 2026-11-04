@@ -537,6 +537,9 @@ fn snapshot_of(config: &TelemtToml, samples: &[Sample]) -> Snapshot {
             from_client_total: octets("from_client"),
             to_client_total: octets("to_client"),
             clients,
+            other_clients: None,
+            other_from_client_total: None,
+            other_to_client_total: None,
         },
         user_telemetry_off,
     }

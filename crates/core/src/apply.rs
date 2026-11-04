@@ -644,12 +644,16 @@ fn report(state: &mut PoolState, r: ReportRequest, now: Ts, out: &mut Out) -> An
         },
     );
 
-    if r.traffic.is_some() || r.clients.is_some() {
+    if r.traffic.is_some() || r.clients.is_some() || r.other_clients.is_some() {
         let entry = stats.entry(r.node.clone()).or_default();
         if let Some(counters) = r.traffic {
+            // An agent that tells the pool's users from the others reports another number than
+            // one that sums them all. When that changes, a counter going up or down says nothing
+            // about traffic: the reading only sets the base, like the first one ever does.
+            let same_kind = r.other_traffic.is_some() == entry.other_counters.is_some();
             // The first reading only sets the base: what came before the registrar looked
             // is not traffic of this pool.
-            if let Some(previous) = entry.counters {
+            if let Some(previous) = entry.counters.filter(|_| same_kind) {
                 let from = traffic_delta(previous.from_client, counters.from_client);
                 let to = traffic_delta(previous.to_client, counters.to_client);
                 entry.from_client_total = entry.from_client_total.saturating_add(from);
@@ -667,9 +671,24 @@ fn report(state: &mut PoolState, r: ReportRequest, now: Ts, out: &mut Out) -> An
                 }
             }
             entry.counters = Some(counters);
+            if let (Some(previous), Some(current)) = (entry.other_counters, r.other_traffic) {
+                entry.other_from_client_total = entry
+                    .other_from_client_total
+                    .saturating_add(traffic_delta(previous.from_client, current.from_client));
+                entry.other_to_client_total = entry
+                    .other_to_client_total
+                    .saturating_add(traffic_delta(previous.to_client, current.to_client));
+            }
+            entry.other_counters = r.other_traffic;
+            if r.other_traffic.is_none() {
+                entry.other_clients = None;
+            }
         }
         if r.clients.is_some() {
             entry.clients = r.clients;
+        }
+        if r.other_clients.is_some() {
+            entry.other_clients = r.other_clients;
         }
         persist(
             out,
@@ -1374,6 +1393,8 @@ mod tests {
                 globalping: gp,
                 traffic: None,
                 clients: None,
+                other_traffic: None,
+                other_clients: None,
             }))
         }
 
@@ -1679,6 +1700,8 @@ mod tests {
             globalping: Vote::Blocked,
             traffic: None,
             clients: None,
+            other_traffic: None,
+            other_clients: None,
         }));
         assert_eq!(effects, [Effect::Reply(reply_id, Reply::Stale)]);
         assert_eq!(p.state, before);
@@ -1747,6 +1770,8 @@ mod tests {
                     to_client: to,
                 }),
                 clients,
+                other_traffic: None,
+                other_clients: None,
             }))
         };
         let effects = send(&mut p, 1000, 2000, Some(4));
@@ -1776,6 +1801,213 @@ mod tests {
         );
     }
 
+    /// One report of the kind `other` says: `None` is an agent that does not tell the users apart.
+    fn traffic_report(
+        p: &mut Pool,
+        pool: (u64, u64),
+        other: Option<(u64, u64)>,
+        clients: Option<u64>,
+        other_clients: Option<u64>,
+    ) -> Vec<Effect> {
+        let reply = p.rid();
+        let generation = p.generation("n1");
+        let counters = |(from_client, to_client)| TrafficCounters {
+            from_client,
+            to_client,
+        };
+        p.run(Command::Report(ReportRequest {
+            reply,
+            node: id("n1"),
+            generation,
+            metrics_ok: true,
+            globalping: Vote::Clear,
+            traffic: Some(counters(pool)),
+            clients,
+            other_traffic: other.map(counters),
+            other_clients,
+        }))
+    }
+
+    fn deltas(effects: &[Effect]) -> Vec<(u64, u64)> {
+        persists(effects)
+            .iter()
+            .filter_map(|op| match op {
+                PersistOp::Traffic {
+                    from_client,
+                    to_client,
+                    ..
+                } => Some((*from_client, *to_client)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn pool_with_node() -> Pool {
+        let mut p = Pool::new();
+        p.enroll("n1", ip(1));
+        p
+    }
+
+    #[test]
+    fn the_first_report_that_tells_users_apart_only_sets_the_base() {
+        let mut p = pool_with_node();
+        // An older agent: the counter holds every user of the engine.
+        traffic_report(&mut p, (9_000, 90_000), None, Some(50), None);
+        let effects = traffic_report(&mut p, (9_100, 90_200), None, Some(51), None);
+        assert_eq!(deltas(&effects), [(100, 200)]);
+
+        // The updated agent counts the pool's users alone: the counter is lower, but nothing was
+        // reset and nothing has to be added.
+        let effects = traffic_report(
+            &mut p,
+            (1_000, 2_000),
+            Some((8_200, 88_400)),
+            Some(5),
+            Some(46),
+        );
+        assert_eq!(deltas(&effects), []);
+        let stats = &p.state.stats[&id("n1")];
+        assert_eq!((stats.from_client_total, stats.to_client_total), (100, 200));
+        assert_eq!(
+            (stats.other_from_client_total, stats.other_to_client_total),
+            (0, 0)
+        );
+        assert_eq!((stats.clients, stats.other_clients), (Some(5), Some(46)));
+
+        // From here on each side has its own deltas.
+        let effects = traffic_report(&mut p, (1_010, 2_020), Some((8_230, 88_440)), None, None);
+        assert_eq!(deltas(&effects), [(10, 20)]);
+        let stats = &p.state.stats[&id("n1")];
+        assert_eq!((stats.from_client_total, stats.to_client_total), (110, 220));
+        assert_eq!(
+            (stats.other_from_client_total, stats.other_to_client_total),
+            (30, 40)
+        );
+        assert_eq!(
+            (stats.clients, stats.other_clients),
+            (Some(5), Some(46)),
+            "no number in a report keeps the last value"
+        );
+    }
+
+    #[test]
+    fn a_real_reset_after_the_change_is_still_counted() {
+        let mut p = pool_with_node();
+        traffic_report(&mut p, (9_000, 90_000), None, None, None);
+        traffic_report(&mut p, (1_000, 2_000), Some((8_000, 88_000)), None, None);
+        traffic_report(&mut p, (1_100, 2_100), Some((8_100, 88_100)), None, None);
+
+        // The engine restarted: every counter starts from zero again.
+        let effects = traffic_report(&mut p, (30, 40), Some((5, 6)), None, None);
+        assert_eq!(deltas(&effects), [(30, 40)]);
+        let stats = &p.state.stats[&id("n1")];
+        assert_eq!(
+            (stats.from_client_total, stats.to_client_total),
+            (100 + 30, 100 + 40)
+        );
+        assert_eq!(
+            (stats.other_from_client_total, stats.other_to_client_total),
+            (100 + 5, 100 + 6)
+        );
+    }
+
+    #[test]
+    fn a_node_whose_first_report_tells_users_apart_starts_from_that_base() {
+        let mut p = pool_with_node();
+        let effects = traffic_report(
+            &mut p,
+            (1_000, 2_000),
+            Some((8_000, 88_000)),
+            Some(1),
+            Some(2),
+        );
+        assert_eq!(deltas(&effects), []);
+        let effects = traffic_report(
+            &mut p,
+            (1_001, 2_002),
+            Some((8_003, 88_004)),
+            Some(1),
+            Some(2),
+        );
+        assert_eq!(deltas(&effects), [(1, 2)]);
+        let stats = &p.state.stats[&id("n1")];
+        assert_eq!(
+            (stats.other_from_client_total, stats.other_to_client_total),
+            (3, 4)
+        );
+    }
+
+    #[test]
+    fn an_agent_rolled_back_to_one_that_sums_all_users_makes_no_spike() {
+        let mut p = pool_with_node();
+        traffic_report(
+            &mut p,
+            (1_000, 2_000),
+            Some((8_000, 88_000)),
+            Some(5),
+            Some(46),
+        );
+        traffic_report(
+            &mut p,
+            (1_100, 2_100),
+            Some((8_100, 88_100)),
+            Some(5),
+            Some(46),
+        );
+
+        // The old agent's counter holds the owner's users too: far above the pool's alone.
+        let effects = traffic_report(&mut p, (9_300, 90_300), None, Some(51), None);
+        assert_eq!(deltas(&effects), []);
+        let stats = &p.state.stats[&id("n1")];
+        assert_eq!((stats.from_client_total, stats.to_client_total), (100, 100));
+        assert_eq!(
+            stats.other_clients, None,
+            "nobody says how many there are any more"
+        );
+        assert_eq!(stats.other_counters, None);
+        assert_eq!(
+            (stats.other_from_client_total, stats.other_to_client_total),
+            (100, 100),
+            "what was counted stays"
+        );
+
+        // The old agent goes on with plain deltas, and the new one comes back without a spike.
+        let effects = traffic_report(&mut p, (9_310, 90_320), None, None, None);
+        assert_eq!(deltas(&effects), [(10, 20)]);
+        let effects = traffic_report(&mut p, (1_200, 2_200), Some((8_110, 88_120)), None, None);
+        assert_eq!(deltas(&effects), []);
+        assert_eq!(p.state.stats[&id("n1")].from_client_total, 110);
+    }
+
+    #[test]
+    fn a_report_without_the_split_before_the_pool_users_are_known_makes_no_spike() {
+        let mut p = pool_with_node();
+        // The agent knows no pool users yet: zeros and no split.
+        traffic_report(&mut p, (0, 0), None, None, None);
+        // The real counters arrive with the first report that tells the users apart.
+        let effects = traffic_report(&mut p, (20_000, 30_000), Some((1, 2)), Some(7), Some(0));
+        assert_eq!(deltas(&effects), []);
+        assert_eq!(p.state.stats[&id("n1")].from_client_total, 0);
+
+        // A later moment without the list (a lost state file) changes nothing either.
+        traffic_report(&mut p, (0, 0), None, None, None);
+        let effects = traffic_report(&mut p, (20_010, 30_010), Some((1, 2)), None, None);
+        assert_eq!(deltas(&effects), []);
+        assert_eq!(p.state.stats[&id("n1")].from_client_total, 0);
+    }
+
+    #[test]
+    fn stats_stored_before_the_split_load_as_an_agent_that_does_not_split() {
+        let stored = r#"{"counters":{"from_client":7,"to_client":8},"from_client_total":1,"to_client_total":2,"clients":3}"#;
+        let stats: NodeStats = serde_json::from_str(stored).unwrap();
+        assert_eq!(stats.other_counters, None);
+        assert_eq!(stats.other_clients, None);
+        assert_eq!(
+            (stats.other_from_client_total, stats.other_to_client_total),
+            (0, 0)
+        );
+    }
+
     #[test]
     fn domain_clients_are_kept_while_srmd_is_off() {
         let mut p = Pool::new();
@@ -1791,6 +2023,8 @@ mod tests {
             globalping: Vote::Clear,
             traffic: None,
             clients: Some(12),
+            other_traffic: None,
+            other_clients: None,
         }));
         p.advance(SEC);
         p.run(Command::Tick);

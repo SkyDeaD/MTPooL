@@ -123,6 +123,9 @@ pub fn sample_report() -> ReportRequest {
             from_client_total: 10,
             to_client_total: 20,
             clients: Some(1),
+            other_clients: None,
+            other_from_client_total: None,
+            other_to_client_total: None,
         },
         dc2: None,
         host: None,
@@ -146,6 +149,7 @@ pub fn agent_config(heartbeat_sec: u32, sync_sec: u32) -> AgentConfig {
             sync_sec,
         },
         antiscan: true,
+        report_other_users: true,
     }
 }
 
@@ -307,6 +311,9 @@ impl FakeEngine {
                 from_client_total: 10,
                 to_client_total: 20,
                 clients: Some(3),
+                other_clients: None,
+                other_from_client_total: None,
+                other_to_client_total: None,
             })),
             dc2: Mutex::new(Some(Dc2Report {
                 ok: true,

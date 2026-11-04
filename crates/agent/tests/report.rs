@@ -35,6 +35,9 @@ fn inputs() -> ReportInputs {
             from_client_total: 5,
             to_client_total: 7,
             clients: Some(2),
+            other_clients: None,
+            other_from_client_total: None,
+            other_to_client_total: None,
         }),
         dc2: Some(Dc2Report {
             ok: true,
@@ -89,7 +92,10 @@ fn an_engine_that_does_not_answer_is_ok_false() {
             ok: false,
             from_client_total: 0,
             to_client_total: 0,
-            clients: None
+            clients: None,
+            other_clients: None,
+            other_from_client_total: None,
+            other_to_client_total: None,
         }
     );
 }

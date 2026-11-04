@@ -29,8 +29,8 @@ use mtpool_core::{
 };
 use mtpool_protocol::agent::{
     AgentConfig, AgentUser, Empty, EmptyRequest, EnrollRequest, EnrollResponse, GpReport,
-    Intervals, ReportRequest, Terminate, TerminateReason, UpdateOffer, UpdateOutcome, UpdatePoll,
-    UpdateStatus,
+    Intervals, MetricsReport, ReportRequest, Terminate, TerminateReason, UpdateOffer,
+    UpdateOutcome, UpdatePoll, UpdateStatus,
 };
 use mtpool_protocol::problem::Problem;
 use mtpool_protocol::public::Engine;
@@ -728,6 +728,8 @@ struct Settled {
     globalping: Vote,
     traffic: Option<TrafficCounters>,
     clients: Option<u64>,
+    other_traffic: Option<TrafficCounters>,
+    other_clients: Option<u64>,
 }
 
 impl Settled {
@@ -740,8 +742,20 @@ impl Settled {
             globalping: self.globalping,
             traffic: self.traffic,
             clients: self.clients,
+            other_traffic: self.other_traffic,
+            other_clients: self.other_clients,
         })
     }
+}
+
+/// The counters of the other users of the engine: both directions or nothing. Like the pool's,
+/// they mean nothing from an engine that is not serving.
+fn other_traffic(metrics: &MetricsReport) -> Option<TrafficCounters> {
+    Some(TrafficCounters {
+        from_client: metrics.other_from_client_total?,
+        to_client: metrics.other_to_client_total?,
+    })
+    .filter(|_| metrics.ok)
 }
 
 /// Claims the measurement id: `false` when it was used before, by any node.
@@ -895,6 +909,8 @@ pub async fn report(
             to_client: request.metrics.to_client_total,
         }),
         clients: request.metrics.clients,
+        other_traffic: other_traffic(&request.metrics),
+        other_clients: request.metrics.other_clients,
     };
     match request.gp {
         GpReport::NoData { reason } => {
@@ -990,6 +1006,7 @@ pub async fn config(State(app): State<AppState>, auth: NodeAuth) -> Result<Respo
                     sync_sec: s.sync_interval_sec,
                 },
                 antiscan: true,
+                report_other_users: true,
             }))
         })
         .await

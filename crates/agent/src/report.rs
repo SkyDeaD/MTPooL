@@ -56,6 +56,9 @@ pub fn build_report(inputs: ReportInputs) -> ReportRequest {
         from_client_total: 0,
         to_client_total: 0,
         clients: None,
+        other_clients: None,
+        other_from_client_total: None,
+        other_to_client_total: None,
     });
     let error = (inputs.health.reason.as_deref() == Some(REASON_USER_TELEMETRY_DISABLED))
         .then(|| REASON_USER_TELEMETRY_DISABLED.to_owned());

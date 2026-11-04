@@ -1663,6 +1663,7 @@ fn agent_config(users: &[(&str, &str)], sni: &str, port: u16) -> AgentConfig {
             sync_sec: 60,
         },
         antiscan: false,
+        report_other_users: false,
     }
 }
 

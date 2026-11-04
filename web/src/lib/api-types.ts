@@ -947,6 +947,12 @@ export interface components {
             intervals: components["schemas"]["Intervals"];
             /** Format: int32 */
             port: number;
+            /**
+             * @description This registrar takes the `other_*` fields of a report. A registrar that does not say so may
+             *     refuse a report with them, so the agent then sums all the users of the engine into the
+             *     plain fields, as older agents did.
+             */
+            report_other_users?: boolean;
             /** @description The TLS domain the proxy pretends to be. */
             sni: string;
             users: components["schemas"]["AgentUser"][];
@@ -1243,22 +1249,44 @@ export interface components {
             owner: components["schemas"]["OwnerInfo"];
             token: components["schemas"]["TokenInfo"];
         };
-        /** @description What the engine's metrics said. */
+        /**
+         * @description What the engine's metrics said. The first three numbers count the users the pool set up on
+         *     the node; the `other_*` ones count everyone else on the engine, that is the owner's own users.
+         *     A report without `other_*` comes from an older agent, or from one that does not yet know the
+         *     pool's users or has no per-user statistics; then the first three are all the engine has.
+         */
         MetricsReport: {
             /**
              * Format: int64
-             * @description Clients connected now.
+             * @description Clients of the pool's users now: the unique addresses the engine counts for them.
              */
             clients?: number | null;
             /**
              * Format: int64
-             * @description Cumulative octets from clients, as the engine exports them.
+             * @description Cumulative octets from clients of the pool's users, as the engine exports them.
              */
             from_client_total: number;
             ok: boolean;
             /**
              * Format: int64
-             * @description Cumulative octets to clients.
+             * @description Clients of the other users of the engine now, counted the same way.
+             */
+            other_clients?: number | null;
+            /**
+             * Format: int64
+             * @description Cumulative octets from clients of the other users. Present (0 included) whenever the agent
+             *     tells the pool's users from the others.
+             */
+            other_from_client_total?: number | null;
+            /**
+             * Format: int64
+             * @description Cumulative octets to clients of the other users. Present together with
+             *     `other_from_client_total`.
+             */
+            other_to_client_total?: number | null;
+            /**
+             * Format: int64
+             * @description Cumulative octets to clients of the pool's users.
              */
             to_client_total: number;
         };
@@ -1456,7 +1484,8 @@ export interface components {
             checks: components["schemas"]["NodeChecks"];
             /**
              * Format: int64
-             * @description Clients connected to the node, as its last report said; absent until it reported one.
+             * @description Clients of the pool's users on the node, as its last report said; absent until it reported
+             *     one. A client is a unique address the engine counts for the user.
              */
             clients?: number | null;
             /** @description The domains the node is master of. */
@@ -1476,6 +1505,20 @@ export interface components {
             master_since?: string | null;
             /** @description When the next sensor round of the node is due (RFC 3339, UTC). */
             next_round_at?: string | null;
+            /**
+             * Format: int64
+             * @description Clients of the owner's own users on the node, counted apart from `clients`. Absent when
+             *     there are none or it is not known (an agent that does not tell them apart): nothing to
+             *     show either way.
+             */
+            other_clients?: number | null;
+            /**
+             * Format: int64
+             * @description Bytes of the owner's own users on the node since the pool began to count them apart, both
+             *     directions together. Not part of the pool's traffic. Absent when there are none or it is
+             *     not known.
+             */
+            other_traffic_bytes?: number | null;
             /** Format: int32 */
             port: number;
             /**
@@ -1512,7 +1555,7 @@ export interface components {
             /** @description RFC 3339, UTC. */
             ts: string;
         };
-        /** @description `POST /agent/report`. */
+        /** @description `POST /agent/report`. Fields this version does not name are ignored. */
         ReportRequest: {
             /**
              * @description When the agent made the checks, RFC 3339. Must be within 10 minutes before and one

@@ -126,6 +126,13 @@ impl<'a> View<'a> {
             is_master: !domains.is_empty(),
             domains,
             clients: stats.and_then(|s| s.clients),
+            other_clients: stats.and_then(|s| s.other_clients).filter(|n| *n > 0),
+            other_traffic_bytes: stats
+                .map(|s| {
+                    s.other_from_client_total
+                        .saturating_add(s.other_to_client_total)
+                })
+                .filter(|n| *n > 0),
             checks: NodeChecks {
                 tcp: n.health.tcp.up,
                 metrics: n.health.metrics.up,
@@ -342,6 +349,30 @@ mod tests {
     }
 
     #[test]
+    fn the_owners_users_show_only_when_there_is_something_to_show() {
+        let n = node("alpha-00001", T0);
+        let id = n.id.clone();
+        let mut state = pool(settings(0), vec![n]);
+        let stats = state.stats.entry(id.clone()).or_default();
+        stats.other_clients = Some(0);
+        let doc = Snapshot::build(&state).node_docs["alpha-00001"].clone();
+        assert_eq!((doc.other_clients, doc.other_traffic_bytes), (None, None));
+        let json = serde_json::to_value(&doc).unwrap();
+        assert!(json.get("other_clients").is_none());
+        assert!(json.get("other_traffic_bytes").is_none());
+
+        let stats = state.stats.entry(id).or_default();
+        stats.other_clients = Some(7);
+        stats.other_from_client_total = 100;
+        stats.other_to_client_total = 900;
+        let doc = Snapshot::build(&state).node_docs["alpha-00001"].clone();
+        assert_eq!(
+            (doc.other_clients, doc.other_traffic_bytes),
+            (Some(7), Some(1000))
+        );
+    }
+
+    #[test]
     fn a_node_carries_its_counters_and_checks() {
         let mut n = node("alpha-00001", T0);
         n.health.tcp.up = true;
@@ -356,6 +387,8 @@ mod tests {
         let doc = &snapshot.node_docs["alpha-00001"];
         assert_eq!(doc.clients, Some(12));
         assert_eq!(doc.availability_bp, Some(9997));
+        assert_eq!(doc.other_clients, None);
+        assert_eq!(doc.other_traffic_bytes, None);
         assert!(doc.checks.tcp);
         assert!(!doc.checks.metrics);
         assert_eq!(doc.checks.globalping, GlobalpingCheck::NoData);

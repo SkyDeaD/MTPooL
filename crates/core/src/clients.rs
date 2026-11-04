@@ -101,6 +101,28 @@ mod tests {
 
     const NOW: Ts = Ts(1_800_000_000_000);
 
+    #[test]
+    fn only_the_pools_clients_reach_the_samples() {
+        let mut state = PoolState::new(Settings::default());
+        add(&mut state, "a", NodeState::Healthy, None);
+        let node = NodeId::parse("a-a1b2c").unwrap();
+        let generation = state.nodes[&node].generation;
+        let report = Command::Report(ReportRequest {
+            reply: ReplyId(1),
+            node,
+            generation,
+            metrics_ok: true,
+            globalping: Vote::Clear,
+            traffic: None,
+            clients: Some(4),
+            other_traffic: None,
+            other_clients: Some(100),
+        });
+        apply(&mut state, report, NOW);
+        assert_eq!(client_sample(&state, NOW).total, 4);
+        assert_eq!(node_samples(&state)[0].clients, Some(4));
+    }
+
     fn add(state: &mut PoolState, name: &str, node_state: NodeState, clients: Option<u64>) {
         let id = NodeId::parse(&format!("{name}-a1b2c")).unwrap();
         let mut node = NodeRecord::new(
@@ -159,6 +181,8 @@ mod tests {
                 globalping: Vote::Clear,
                 traffic: None,
                 clients,
+                other_traffic: None,
+                other_clients: None,
             });
             apply(&mut state, report, NOW);
         }

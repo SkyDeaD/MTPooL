@@ -46,13 +46,26 @@ impl PoolState {
 /// What an agent reports besides the health conditions.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeStats {
-    /// The last cumulative counters seen: the base of the next delta.
+    /// The last cumulative counters of the pool's users seen: the base of the next delta. From an
+    /// agent that does not tell the users apart they cover the whole engine.
     pub counters: Option<TrafficCounters>,
-    /// Bytes counted since registration.
+    /// Bytes of the pool's users counted since registration.
     pub from_client_total: u64,
     pub to_client_total: u64,
-    /// Clients connected to the node, as the last report said.
+    /// Clients of the pool's users on the node, as the last report said.
     pub clients: Option<u64>,
+    /// The last cumulative counters of the other users of the engine. `Some` says that `counters`
+    /// holds the pool's users alone.
+    #[serde(default)]
+    pub other_counters: Option<TrafficCounters>,
+    /// Bytes of the other users counted since the agent began to tell them apart.
+    #[serde(default)]
+    pub other_from_client_total: u64,
+    #[serde(default)]
+    pub other_to_client_total: u64,
+    /// Clients of the other users, as the last report said.
+    #[serde(default)]
+    pub other_clients: Option<u64>,
     /// Uptime of the last 30 days in hundredths of a percent (9997 is 99.97 %). Kept in
     /// memory only: the registrar recomputes it from the stored samples.
     #[serde(skip)]
@@ -136,8 +149,13 @@ pub struct ReportRequest {
     /// The verified Globalping result: `Clear` is a success, `Blocked` a failure, `Abstain`
     /// no data (a 429 or a measurement that could not be verified).
     pub globalping: Vote,
+    /// The counters of the pool's users.
     pub traffic: Option<TrafficCounters>,
     pub clients: Option<u64>,
+    /// The counters of the other users of the engine. `None` from an agent that does not tell
+    /// them apart; `traffic` then covers the whole engine.
+    pub other_traffic: Option<TrafficCounters>,
+    pub other_clients: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -61,9 +61,20 @@ pub struct PublicNode {
     pub is_master: bool,
     /// The domains the node is master of.
     pub domains: Vec<String>,
-    /// Clients connected to the node, as its last report said; absent until it reported one.
+    /// Clients of the pool's users on the node, as its last report said; absent until it reported
+    /// one. A client is a unique address the engine counts for the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clients: Option<u64>,
+    /// Clients of the owner's own users on the node, counted apart from `clients`. Absent when
+    /// there are none or it is not known (an agent that does not tell them apart): nothing to
+    /// show either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_clients: Option<u64>,
+    /// Bytes of the owner's own users on the node since the pool began to count them apart, both
+    /// directions together. Not part of the pool's traffic. Absent when there are none or it is
+    /// not known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_traffic_bytes: Option<u64>,
     /// The conditions the pool watches on the node.
     pub checks: NodeChecks,
     /// Why the node entered quarantine: `tcp`, `metrics`, `globalping`, `port`, `heartbeat_stale`,

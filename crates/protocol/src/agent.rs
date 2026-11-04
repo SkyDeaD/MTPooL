@@ -1,5 +1,7 @@
 //! Documents of the agent API under `/api/v1/agent`. Requests refuse fields they do not name:
-//! the node an agent acts for always comes from its token, never from a body.
+//! the node an agent acts for always comes from its token, never from a body. The report and its
+//! metrics are the exception: a newer agent may say more than this registrar knows, and refusing
+//! it would take the node out of the pool for a number nobody here reads.
 
 use std::net::Ipv4Addr;
 
@@ -63,17 +65,30 @@ pub enum GpReport {
     },
 }
 
-/// What the engine's metrics said.
+/// What the engine's metrics said. The first three numbers count the users the pool set up on
+/// the node; the `other_*` ones count everyone else on the engine, that is the owner's own users.
+/// A report without `other_*` comes from an older agent, or from one that does not yet know the
+/// pool's users or has no per-user statistics; then the first three are all the engine has.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
 pub struct MetricsReport {
     pub ok: bool,
-    /// Cumulative octets from clients, as the engine exports them.
+    /// Cumulative octets from clients of the pool's users, as the engine exports them.
     pub from_client_total: u64,
-    /// Cumulative octets to clients.
+    /// Cumulative octets to clients of the pool's users.
     pub to_client_total: u64,
-    /// Clients connected now.
+    /// Clients of the pool's users now: the unique addresses the engine counts for them.
     pub clients: Option<u64>,
+    /// Clients of the other users of the engine now, counted the same way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_clients: Option<u64>,
+    /// Cumulative octets from clients of the other users. Present (0 included) whenever the agent
+    /// tells the pool's users from the others.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_from_client_total: Option<u64>,
+    /// Cumulative octets to clients of the other users. Present together with
+    /// `other_from_client_total`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_to_client_total: Option<u64>,
 }
 
 /// The check of the second Telegram data center.
@@ -95,9 +110,8 @@ pub struct HostReport {
     pub disk_total_bytes: u64,
 }
 
-/// `POST /agent/report`.
+/// `POST /agent/report`. Fields this version does not name are ignored.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
 pub struct ReportRequest {
     /// The address the measurement was made against. Must be the registered one.
     #[schema(value_type = String, format = "ipv4", example = "203.0.113.7")]
@@ -144,6 +158,11 @@ pub struct AgentConfig {
     pub intervals: Intervals,
     /// Whether the agent defends the port against active probing.
     pub antiscan: bool,
+    /// This registrar takes the `other_*` fields of a report. A registrar that does not say so may
+    /// refuse a report with them, so the agent then sums all the users of the engine into the
+    /// plain fields, as older agents did.
+    #[serde(default)]
+    pub report_other_users: bool,
 }
 
 /// `POST /agent/update`: the agent says which version it runs and asks whether to update.
@@ -226,6 +245,53 @@ mod tests {
         assert!(serde_json::from_value::<EnrollRequest>(enroll).is_err());
         assert!(serde_json::from_value::<EmptyRequest>(json!({ "node": "a-00001" })).is_err());
         assert!(serde_json::from_value::<EmptyRequest>(json!({})).is_ok());
+    }
+
+    #[test]
+    fn a_report_says_more_than_this_version_knows() {
+        let metrics = json!({
+            "ok": true, "from_client_total": 1, "to_client_total": 2, "clients": 3,
+            "from_a_later_version": 4
+        });
+        let parsed: MetricsReport = serde_json::from_value(metrics).expect("metrics");
+        assert_eq!(parsed.other_from_client_total, None);
+        let report = json!({
+            "ip": "192.0.2.1", "port": 443, "sni": "tls.example.test",
+            "gp": { "kind": "no_data", "reason": "rate_limited" },
+            "metrics": { "ok": true, "from_client_total": 1, "to_client_total": 2, "clients": 3 },
+            "dc2": null, "host": null, "checked_at": "2026-11-03T12:00:00Z", "error": null,
+            "from_a_later_version": 4
+        });
+        assert!(serde_json::from_value::<ReportRequest>(report).is_ok());
+    }
+
+    #[test]
+    fn metrics_leave_out_what_the_agent_does_not_tell() {
+        let old_shape = MetricsReport {
+            ok: true,
+            from_client_total: 1,
+            to_client_total: 2,
+            clients: None,
+            other_clients: None,
+            other_from_client_total: None,
+            other_to_client_total: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&old_shape).unwrap(),
+            json!({ "ok": true, "from_client_total": 1, "to_client_total": 2, "clients": null })
+        );
+    }
+
+    #[test]
+    fn a_config_without_the_report_capability_is_an_older_registrar() {
+        let config = json!({
+            "users": [], "sni": "tls.example.test", "port": 443, "antiscan": true,
+            "intervals": {
+                "heartbeat_sec": 15, "globalping_sec": 300, "metrics_sec": 60, "sync_sec": 60
+            }
+        });
+        let parsed: AgentConfig = serde_json::from_value(config).expect("config");
+        assert!(!parsed.report_other_users);
     }
 
     #[test]

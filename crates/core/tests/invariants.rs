@@ -374,6 +374,8 @@ impl Driver {
             globalping: gp,
             traffic: None,
             clients: Some(3),
+            other_traffic: None,
+            other_clients: None,
         })
     }
 }

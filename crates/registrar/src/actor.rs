@@ -424,6 +424,8 @@ mod tests {
                 globalping: Vote::Clear,
                 traffic: None,
                 clients: None,
+                other_traffic: None,
+                other_clients: None,
             }),
             Command::Retire(action()),
             Command::AdminUnban(action()),

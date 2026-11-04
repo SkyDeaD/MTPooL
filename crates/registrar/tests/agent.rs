@@ -1000,13 +1000,23 @@ async fn node_token_cannot_act_for_other_node() {
         let resp = post(&env, path, ALPHA_IP, &token_a, Some(body)).await;
         assert_problem(&resp, StatusCode::BAD_REQUEST, "bad_request");
     }
+    // A report ignores what it does not know, so naming a node there changes nothing: the numbers
+    // go to the node of the token.
     let mut named = report_at(NOW + 9_000, no_data());
     named["node_id"] = json!("beta-00002");
-    assert_problem(
-        &report(&env, &token_a, named).await,
-        StatusCode::BAD_REQUEST,
-        "bad_request",
-    );
+    let resp = report(&env, &token_a, named).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let stats_of = |name: &'static str| {
+        let actor = env.actor.clone();
+        async move {
+            actor
+                .inspect(move |s| s.stats.get(&node_id(name)).cloned())
+                .await
+                .unwrap()
+        }
+    };
+    assert!(stats_of("alpha-00001").await.is_some());
+    assert_eq!(stats_of("beta-00002").await, None, "beta was not touched");
     let beta = node_of(&env, "beta-00002").await.unwrap();
     assert_eq!(beta.health.last_heartbeat, Ts(NOW), "beta was not touched");
 
@@ -1100,14 +1110,25 @@ async fn report_limit_256kib() {
 }
 
 #[tokio::test]
+async fn report_ignores_what_a_later_agent_may_add() {
+    let env = env(pool(vec![alpha()]));
+    let token = node_token(&env, "alpha-00001");
+
+    let mut top = report_at(NOW, no_data());
+    top["from_a_later_version"] = json!(1);
+    let mut metrics = report_at(NOW, no_data());
+    metrics["metrics"]["from_a_later_version"] = json!(1);
+    for body in [top, metrics] {
+        let resp = report(&env, &token, body).await;
+        assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    }
+}
+
+#[tokio::test]
 async fn report_unknown_fields_rejected() {
     let env = env(pool(vec![alpha()]));
     let token = node_token(&env, "alpha-00001");
 
-    let mut top = report_at(NOW, measured("m-1"));
-    top["extra"] = json!(1);
-    let mut metrics = report_at(NOW, measured("m-2"));
-    metrics["metrics"]["extra"] = json!(1);
     let mut gp = report_at(NOW, measured("m-3"));
     gp["gp"]["extra"] = json!(1);
     let mut kind = report_at(NOW, measured("m-4"));
@@ -1118,7 +1139,7 @@ async fn report_unknown_fields_rejected() {
     host["host"]["extra"] = json!(1);
     let mut missing = report_at(NOW, no_data());
     missing.as_object_mut().unwrap().remove("metrics");
-    for body in [top, metrics, gp, kind, dc2, host, missing] {
+    for body in [gp, kind, dc2, host, missing] {
         let resp = report(&env, &token, body.clone()).await;
         assert_problem(&resp, StatusCode::BAD_REQUEST, "bad_request");
     }
@@ -1530,6 +1551,70 @@ async fn report_feeds_traffic_and_clients() {
     assert_eq!(stats.clients, Some(3));
 }
 
+/// One report that tells the pool's users from the others.
+fn split_report(pool: (u64, u64), other: (u64, u64), other_clients: u64) -> Value {
+    let mut body = report_at(NOW, no_data());
+    body["metrics"]["from_client_total"] = json!(pool.0);
+    body["metrics"]["to_client_total"] = json!(pool.1);
+    body["metrics"]["other_from_client_total"] = json!(other.0);
+    body["metrics"]["other_to_client_total"] = json!(other.1);
+    body["metrics"]["other_clients"] = json!(other_clients);
+    body
+}
+
+#[tokio::test]
+async fn report_keeps_the_owners_users_apart() {
+    let env = env(pool(vec![alpha()]));
+    let token = node_token(&env, "alpha-00001");
+
+    // An agent that sums all users, then the updated one: its lower counter is no reset.
+    let mut before = report_at(NOW, no_data());
+    before["metrics"]["from_client_total"] = json!(50_000);
+    before["metrics"]["to_client_total"] = json!(90_000);
+    for body in [
+        before,
+        split_report((1_000, 2_000), (49_000, 88_000), 4),
+        split_report((1_500, 2_900), (49_010, 88_020), 6),
+    ] {
+        let resp = report(&env, &token, body).await;
+        assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    }
+    let stats = env
+        .actor
+        .inspect(|s| s.stats.get(&node_id("alpha-00001")).cloned())
+        .await
+        .unwrap()
+        .expect("stats");
+    assert_eq!((stats.from_client_total, stats.to_client_total), (500, 900));
+    assert_eq!(
+        (stats.other_from_client_total, stats.other_to_client_total),
+        (10, 20)
+    );
+    assert_eq!((stats.clients, stats.other_clients), (Some(3), Some(6)));
+}
+
+#[tokio::test]
+async fn an_engine_that_is_not_serving_moves_no_counter_of_the_owners_users() {
+    let env = env(pool(vec![alpha()]));
+    let token = node_token(&env, "alpha-00001");
+    let first = report(&env, &token, split_report((1, 2), (3, 4), 1)).await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.body);
+
+    let mut down = split_report((0, 0), (0, 0), 1);
+    down["metrics"]["ok"] = json!(false);
+    let resp = report(&env, &token, down).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+
+    let stats = env
+        .actor
+        .inspect(|s| s.stats.get(&node_id("alpha-00001")).cloned())
+        .await
+        .unwrap()
+        .expect("stats");
+    assert_eq!(stats.counters.unwrap().from_client, 1);
+    assert_eq!(stats.other_counters.unwrap().from_client, 3);
+}
+
 // ----- config --------------------------------------------------------------------------------
 
 #[tokio::test]
@@ -1563,7 +1648,8 @@ async fn config_returns_users_sni_port_intervals() {
                 "metrics_sec": 30,
                 "sync_sec": 90
             },
-            "antiscan": true
+            "antiscan": true,
+            "report_other_users": true
         })
     );
 
