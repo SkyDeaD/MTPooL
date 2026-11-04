@@ -92,7 +92,9 @@ main() {
         case "$engine_port" in
         *[!0-9]* | '') die "--port must be a number" ;;
         esac
-        [ "$engine_port" -ge 1 ] && [ "$engine_port" -le 65535 ] || die "--port must be 1-65535"
+        if ! [ "$engine_port" -ge 1 ] || ! [ "$engine_port" -le 65535 ]; then
+            die "--port must be 1-65535"
+        fi
     fi
 
     [ "$(id -u)" -eq 0 ] || die "run as root"
