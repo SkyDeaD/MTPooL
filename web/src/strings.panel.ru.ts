@@ -205,7 +205,7 @@ export const panelMessages = {
   'panel.settings.title': 'Настройки',
   'settings.h.heartbeat_interval_sec': 'Как часто нода сообщает, что жива.',
   'settings.h.globalping_interval_sec': 'Как часто нода сама заказывает замер своего порта из России.',
-  'settings.h.metrics_interval_sec': 'Как часто агент читает клиентов и трафик.',
+  'settings.h.metrics_interval_sec': 'Как часто агент читает клиентов и трафик. Страницы показывают новые числа раз в 5 секунд, поэтому чаще 5 секунд ставить незачем.',
   'settings.h.sync_interval_sec': 'Как быстро ноды подхватят изменения с этой страницы.',
   'settings.h.heartbeat_ttl_sec': 'Сколько можно молчать, прежде чем нода перестанет считаться исправной.',
   'settings.h.report_max_age_sec': 'Сколько действует последний замер Globalping.',
