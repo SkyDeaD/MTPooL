@@ -233,6 +233,8 @@ main() {
                 die "cannot read the Caddy repository key"
             fetch https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt /etc/apt/sources.list.d/caddy-stable.list ||
                 die "cannot fetch the Caddy repository list"
+            # apt reads these as an unprivileged user, whatever umask this shell was started with.
+            chmod 0644 /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
             apt_install caddy
         fi
         install -d -m 0755 /etc/caddy
