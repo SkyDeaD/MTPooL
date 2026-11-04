@@ -32,6 +32,8 @@ pub struct ReportInputs {
     pub dc2: Option<Dc2Report>,
     pub host: Option<HostReport>,
     pub health: EngineHealth,
+    /// What the last config said: whether the registrar takes the `other_*` fields.
+    pub registrar_takes_other_users: bool,
     pub now: SystemTime,
 }
 
@@ -49,6 +51,26 @@ fn rfc3339(now: SystemTime) -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
 }
 
+/// The metrics the way a registrar without the `other_*` fields takes them: it would refuse the
+/// whole report for them, and for it the plain fields have always held every user of the engine.
+fn with_all_users_summed(metrics: MetricsReport) -> MetricsReport {
+    MetricsReport {
+        ok: metrics.ok,
+        from_client_total: metrics
+            .from_client_total
+            .saturating_add(metrics.other_from_client_total.unwrap_or(0)),
+        to_client_total: metrics
+            .to_client_total
+            .saturating_add(metrics.other_to_client_total.unwrap_or(0)),
+        clients: metrics
+            .clients
+            .map(|clients| clients.saturating_add(metrics.other_clients.unwrap_or(0))),
+        other_clients: None,
+        other_from_client_total: None,
+        other_to_client_total: None,
+    }
+}
+
 pub fn build_report(inputs: ReportInputs) -> ReportRequest {
     // An engine that does not answer is a proxy that does not serve: `ok: false`, not a gap.
     let metrics = inputs.metrics.unwrap_or(MetricsReport {
@@ -60,6 +82,11 @@ pub fn build_report(inputs: ReportInputs) -> ReportRequest {
         other_from_client_total: None,
         other_to_client_total: None,
     });
+    let metrics = if inputs.registrar_takes_other_users {
+        metrics
+    } else {
+        with_all_users_summed(metrics)
+    };
     let error = (inputs.health.reason.as_deref() == Some(REASON_USER_TELEMETRY_DISABLED))
         .then(|| REASON_USER_TELEMETRY_DISABLED.to_owned());
     ReportRequest {
@@ -75,28 +102,38 @@ pub fn build_report(inputs: ReportInputs) -> ReportRequest {
     }
 }
 
-/// What the config last said, for the checks: the domain the proxy pretends to be and how often
-/// to ask Globalping.
+/// What the config last said, for the checks: the domain the proxy pretends to be, how often to
+/// ask Globalping and whether the registrar takes the `other_*` fields of a report.
 #[derive(Debug, Clone, Default)]
-pub struct ConfigMemory(Arc<Mutex<Option<(String, u32)>>>);
+pub struct ConfigMemory(Arc<Mutex<Option<(String, u32, bool)>>>);
 
 impl ConfigMemory {
     pub fn new() -> ConfigMemory {
         ConfigMemory::default()
     }
 
-    fn slot(&self) -> MutexGuard<'_, Option<(String, u32)>> {
+    fn slot(&self) -> MutexGuard<'_, Option<(String, u32, bool)>> {
         self.0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     pub fn remember(&self, config: &AgentConfig) {
-        *self.slot() = Some((config.sni.clone(), config.intervals.globalping_sec));
+        *self.slot() = Some((
+            config.sni.clone(),
+            config.intervals.globalping_sec,
+            config.report_other_users,
+        ));
     }
 
     pub fn get(&self) -> Option<(String, u32)> {
-        self.slot().clone()
+        self.slot()
+            .as_ref()
+            .map(|(sni, seconds, _)| (sni.clone(), *seconds))
+    }
+
+    pub fn takes_other_users(&self) -> bool {
+        self.slot().as_ref().is_some_and(|(_, _, takes)| *takes)
     }
 }
 
@@ -226,6 +263,7 @@ impl<H: HttpGet + 'static> ReportSource for NodeChecks<H> {
             dc2,
             host,
             health,
+            registrar_takes_other_users: self.shared.memory.takes_other_users(),
             now: (self.clock)(),
         }))
     }

@@ -93,8 +93,8 @@ pub trait Engine: Send + Sync {
     /// The port the engine listens on, from its own configuration.
     fn port(&self) -> Option<u16>;
 
-    /// Totals and clients from the engine's metrics. An engine that does not answer is an `Err`;
-    /// one that answers but is not serving is `ok: false`.
+    /// Totals and clients from the engine's metrics, the pool's users apart from the others. An
+    /// engine that does not answer is an `Err`; one that answers but is not serving is `ok: false`.
     async fn metrics(&self) -> Result<MetricsReport>;
 
     /// The check of the second data center. `None` when the engine has no interface for it.

@@ -37,6 +37,30 @@ pub fn sum(samples: &[Sample], name: &str) -> Option<f64> {
     found.then_some(total)
 }
 
+/// The sums of every series called `name` by its `label`: those with one of `values` first, all
+/// the others second, a series without the label among them. `None` if there is none. A value
+/// that is not a finite number is left out.
+pub fn split_sum(
+    samples: &[Sample],
+    name: &str,
+    label: &str,
+    values: &[String],
+) -> Option<(f64, f64)> {
+    let mut found = false;
+    let (mut with, mut without) = (0.0, 0.0);
+    for sample in samples.iter().filter(|s| s.name == name) {
+        found = true;
+        if !sample.value.is_finite() {
+            continue;
+        }
+        match sample.label(label) {
+            Some(value) if values.iter().any(|v| v == value) => with += sample.value,
+            _ => without += sample.value,
+        }
+    }
+    found.then_some((with, without))
+}
+
 /// The value of the first series called `name`.
 pub fn first(samples: &[Sample], name: &str) -> Option<f64> {
     samples.iter().find(|s| s.name == name).map(|s| s.value)
