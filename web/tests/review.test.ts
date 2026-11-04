@@ -203,7 +203,7 @@ describe('page frame', () => {
   });
 
   it('every_entry_sets_the_theme_before_first_paint', () => {
-    for (const p of [['index.html'], ['dashboard', 'index.html'], ['links', 'index.html'], ['api', 'index.html'], ['node', 'index.html']]) {
+    for (const p of [['index.html'], ['dashboard', 'index.html'], ['links', 'index.html'], ['api', 'index.html'], ['node', 'index.html'], ['panel', 'index.html']]) {
       const html = read(...p);
       const head = html.slice(html.indexOf('<head>'), html.indexOf('</head>'));
       expect(head).toContain("localStorage.getItem('mtpool-theme')");
