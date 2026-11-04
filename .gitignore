@@ -16,7 +16,6 @@ web/dist/
 # Databases
 *.db
 *.db-*
-deploy/minisign.pub
 e2e/keys/
 web/.ssr/
 

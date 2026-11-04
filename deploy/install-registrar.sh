@@ -13,8 +13,8 @@
 #                         (default https://github.com/SkyDeaD/MTPooL/releases/latest/download)
 #   --release-repo <o/r>  the GitHub repository the registrar updates itself from, written to
 #                         /etc/mtpool/registrar.env on a first install (default SkyDeaD/MTPooL)
-#   --pubkey <key>        the release signing key (the base64 line of the .pub file); the
-#                         released copy of this script has it written in
+#   --pubkey <key>        the release signing key (the base64 line of the .pub file); by default
+#                         the key from minisign.pub next to this script
 #
 # It creates the `mtpool` user, /etc/mtpool, /var/lib/mtpool and /var/backups/mtpool, installs the
 # systemd units, starts them, and prints the admin token once.
@@ -152,6 +152,9 @@ main() {
     # --- the binary ------------------------------------------------------------------------------
 
     if [ -z "$binary" ]; then
+        if [ "$PUBKEY" = __MTPOOL_PUBKEY__ ] && [ -r "$here/minisign.pub" ]; then
+            PUBKEY=$(sed -n 2p "$here/minisign.pub")
+        fi
         case "$PUBKEY" in
         '' | __MTPOOL_PUBKEY__) die "no release signing key: pass --pubkey, or use --binary" ;;
         esac
