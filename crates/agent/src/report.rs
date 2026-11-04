@@ -171,6 +171,20 @@ impl<H: HttpGet + 'static> NodeChecks<H> {
         self
     }
 
+    /// Tells the Globalping loop what to measure: it follows the address, the domain and the port.
+    fn update_gp_job(&self, ip: Option<Ipv4Addr>, port: Option<u16>) {
+        let job = match (ip, port, self.shared.memory.get()) {
+            (Some(ip), Some(port), Some((sni, seconds))) => Some(GpJob {
+                ip,
+                port,
+                sni,
+                interval: Duration::from_secs(u64::from(seconds.max(1))),
+            }),
+            _ => None,
+        };
+        self.shared.gp.set_job(job);
+    }
+
     /// The port of the proxy: the local configuration's, else the engine's own.
     fn port(&self) -> Option<u16> {
         self.shared.port.or_else(|| self.shared.engine.port())
@@ -191,6 +205,9 @@ impl<H: HttpGet + 'static> ReportSource for NodeChecks<H> {
         let ip = self.shared.ip.lock().await.current()?;
         let (sni, _) = self.shared.memory.get()?;
         let port = self.port()?;
+        // The first report comes right after the first config: the first measurement starts now,
+        // not at the next round of checks.
+        self.update_gp_job(Some(ip), Some(port));
         let engine = &self.shared.engine;
         let (metrics, dc2, health) = tokio::join!(engine.metrics(), engine.dc2(), engine.health());
         let host = HostStats::read(&*self.shared.fs).map(HostStats::into_report);
@@ -225,22 +242,16 @@ impl<H: HttpGet + 'static> ReportSource for NodeChecks<H> {
             verdict(now, &health)
         };
 
-        // What Globalping is to measure follows the address, the domain and the port.
-        let job = match (ip, port, self.shared.memory.get()) {
-            (Some(ip), Some(port), Some((sni, seconds))) => Some(GpJob {
-                ip,
-                port,
-                sni,
-                interval: Duration::from_secs(u64::from(seconds.max(1))),
-            }),
-            _ => None,
-        };
-        self.shared.gp.set_job(job);
+        self.update_gp_job(ip, port);
 
         Watch {
             ip_changed: matches!(event, IpEvent::Changed { .. }),
             health,
         }
+    }
+
+    fn has_measurement(&self) -> bool {
+        self.shared.gp.has_measurement()
     }
 
     fn enrolled(&self) {

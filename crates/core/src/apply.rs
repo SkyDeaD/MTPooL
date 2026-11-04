@@ -29,7 +29,7 @@ use crate::state::{
 };
 use crate::traffic::traffic_delta;
 use crate::types::{Generation, NodeId, NodeState, Ts};
-use crate::votes::{RoundVerdict, SensorKind, SensorVote, Vote, judge_round};
+use crate::votes::{AbstainReason, RoundVerdict, SensorKind, SensorVote, Vote, judge_round};
 
 type Out = Vec<Effect>;
 type Answer = (ReplyId, Reply);
@@ -531,8 +531,10 @@ fn report(state: &mut PoolState, r: ReportRequest, now: Ts, out: &mut Out) -> An
             node.health.gp = GpStatus::Failed { at: now };
             node.health.last_report = now;
         }
-        // No data neither proves nor refutes: the report time stays, so a long run of
-        // them ages the last proof out.
+        // No measurement this time: the agent reports more often than it measures, so the
+        // last verdict stands. The report time stays, and a long run of them ages it out.
+        Vote::Abstain(AbstainReason::NoData) => {}
+        // A measurement that could not be made neither proves nor refutes.
         Vote::Abstain(_) => node.health.gp = node.health.gp.on_no_data(now),
     }
     persist(
@@ -1569,6 +1571,28 @@ mod tests {
         let verified = p.state.nodes[&id("n1")].health.last_report;
         assert_eq!(verified, p.now);
         p.advance(10 * SEC);
+        p.report("n1", Vote::Abstain(AbstainReason::RateLimited));
+        let h = p.state.nodes[&id("n1")].health;
+        assert_eq!(h.gp, GpStatus::NoData { at: p.now });
+        assert_eq!(h.last_report, verified);
+    }
+
+    #[test]
+    fn a_report_between_measurements_keeps_the_last_verdict() {
+        let mut p = Pool::new();
+        p.enroll("n1", ip(1));
+        p.report("n1", Vote::Clear);
+        let verified = p.now;
+
+        // The agent reports every minute and measures every five: most reports carry nothing.
+        p.advance(60 * SEC);
+        p.report("n1", Vote::Abstain(AbstainReason::NoData));
+        let h = p.state.nodes[&id("n1")].health;
+        assert_eq!(h.gp, GpStatus::Ok { at: verified });
+        assert_eq!(h.last_report, verified);
+
+        // A measurement that Globalping refused does say there is no data.
+        p.advance(60 * SEC);
         p.report("n1", Vote::Abstain(AbstainReason::RateLimited));
         let h = p.state.nodes[&id("n1")].health;
         assert_eq!(h.gp, GpStatus::NoData { at: p.now });

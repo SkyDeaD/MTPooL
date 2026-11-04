@@ -120,6 +120,7 @@ struct Node {
     ports: Arc<FakePorts>,
     http: Arc<ScriptedHttp>,
     memory: ConfigMemory,
+    gp: GpLoop,
 }
 
 fn node(port_override: Option<u16>) -> Node {
@@ -158,7 +159,7 @@ fn node(port_override: Option<u16>) -> Node {
         ports: ports.clone(),
         fs: fs.clone(),
         ip: IpWatch::new(http.clone(), fs.clone(), "/state".into()),
-        gp,
+        gp: gp.clone(),
         memory: memory.clone(),
     };
     Node {
@@ -168,6 +169,7 @@ fn node(port_override: Option<u16>) -> Node {
         ports,
         http,
         memory,
+        gp,
     }
 }
 
@@ -200,6 +202,21 @@ async fn nothing_is_reported_before_the_address_and_the_domain_are_known() {
     );
     assert_eq!((host.disk_total_bytes, host.disk_used_bytes), (100, 30));
     assert_eq!(report.error, None);
+}
+
+#[tokio::test]
+async fn the_first_measurement_starts_as_soon_as_the_domain_is_known() {
+    let n = node(None);
+    // The order of a fresh node: the checks, then the config, then the first report.
+    n.checks.watch(Instant::now()).await;
+    n.memory.remember(&agent_config(30, 60));
+    n.checks.build().await.expect("everything is known now");
+
+    n.gp.tick(Instant::now()).await;
+    assert!(
+        n.gp.take_result().is_some(),
+        "the measurement does not wait for the next round of checks"
+    );
 }
 
 #[tokio::test]
