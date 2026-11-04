@@ -18,6 +18,9 @@ use crate::state_files::{Credentials, Fs, Secret, StateFiles};
 
 /// How often a terminated node tries to enroll again: that is its reverify.
 pub const TERMINATED_RETRY: Duration = Duration::from_secs(15 * 60);
+/// How long a node on a new address waits for its old record to be taken off. Not long: the pool
+/// removes a silent node by itself.
+pub const RETIRE_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentPhase {
@@ -25,9 +28,11 @@ pub enum AgentPhase {
     Enrolling,
     /// Enrolled: heartbeat, config sync and reports.
     Active,
-    /// The registrar answered 403 terminate: no reports, the engine untouched.
+    /// The registrar answered 403 terminate: no reports, the engine untouched. Only a new address
+    /// or the next retry brings it back.
     Terminated,
-    /// The registrar answered 429: nothing is sent until `Retry-After` has passed.
+    /// The registrar answered 429: nothing is sent until `Retry-After` has passed or the node has
+    /// another address.
     Silent,
     /// The node found itself dead for too long and left the pool (`/agent/retire`); it enrolls
     /// again when its checks come back.
@@ -287,6 +292,8 @@ pub struct Lifecycle<E, S, K> {
     silent_until: Option<Instant>,
     /// When a terminated node tries to enroll again.
     retry_at: Option<Instant>,
+    /// When a silent or terminated node looks at its address next.
+    next_look: Option<Instant>,
     enroll: Job,
     heartbeat: Job,
     sync: Job,
@@ -324,6 +331,7 @@ impl<E: EngineProbe, S: ReportSource, K: ConfigSink> Lifecycle<E, S, K> {
             resume: phase,
             silent_until: None,
             retry_at: None,
+            next_look: None,
             enroll: Job::default(),
             heartbeat: Job::default(),
             sync: Job::default(),
@@ -345,7 +353,7 @@ impl<E: EngineProbe, S: ReportSource, K: ConfigSink> Lifecycle<E, S, K> {
     pub async fn step(&mut self, now: Instant) -> Step {
         if self.phase == AgentPhase::Silent {
             match self.silent_until {
-                Some(until) if now < until => return Step::Wait(until - now),
+                Some(until) if now < until => return self.wait_watching(now, until).await,
                 _ => {
                     self.phase = self.resume;
                     self.silent_until = None;
@@ -358,7 +366,7 @@ impl<E: EngineProbe, S: ReportSource, K: ConfigSink> Lifecycle<E, S, K> {
                 _ => self.try_enroll(now).await,
             },
             AgentPhase::Terminated => match self.retry_at {
-                Some(at) if now < at => Step::Wait(at - now),
+                Some(at) if now < at => self.wait_watching(now, at).await,
                 _ => self.try_enroll(now).await,
             },
             AgentPhase::Active => self.work(now).await,
@@ -404,8 +412,9 @@ impl<E: EngineProbe, S: ReportSource, K: ConfigSink> Lifecycle<E, S, K> {
         );
         self.resume = self.phase;
         self.phase = AgentPhase::Silent;
-        self.silent_until = Some(now + retry_after);
-        Step::Wait(retry_after)
+        let until = now + retry_after;
+        self.silent_until = Some(until);
+        self.wait_until(now, until)
     }
 
     fn terminated(&mut self, now: Instant, reason: &impl std::fmt::Debug) -> Step {
@@ -414,8 +423,57 @@ impl<E: EngineProbe, S: ReportSource, K: ConfigSink> Lifecycle<E, S, K> {
             "the registrar terminated this node: reports stop, the engine is left as it is"
         );
         self.phase = AgentPhase::Terminated;
-        self.retry_at = Some(now + TERMINATED_RETRY);
-        Step::Wait(TERMINATED_RETRY)
+        self.retry_later(now)
+    }
+
+    fn retry_later(&mut self, now: Instant) -> Step {
+        let at = now + TERMINATED_RETRY;
+        self.retry_at = Some(at);
+        self.wait_until(now, at)
+    }
+
+    /// Waits for `until`, or for the next look at the address if that comes first.
+    fn wait_until(&mut self, now: Instant, until: Instant) -> Step {
+        let look = now + seconds(self.intervals.heartbeat_sec);
+        self.next_look = Some(look);
+        Step::Wait(look.min(until).saturating_duration_since(now))
+    }
+
+    /// A node that may send nothing still looks at its address, as often as it would beat. With
+    /// another address neither the pause nor the termination is about it any more.
+    async fn wait_watching(&mut self, now: Instant, until: Instant) -> Step {
+        match self.next_look {
+            Some(look) if now < look => Step::Wait(look.min(until).saturating_duration_since(now)),
+            _ => {
+                if self.hooks.reports.watch(now).await.ip_changed {
+                    return self.address_changed().await;
+                }
+                self.wait_until(now, until)
+            }
+        }
+    }
+
+    /// The node moved. It tries to take its old record off, so that it does not hold a place of
+    /// the owner until the pool notices the silence, and enrolls again whatever came of that.
+    async fn address_changed(&mut self) -> Step {
+        tracing::warn!("the public address changed; enrolling again");
+        let terminated = self.phase == AgentPhase::Terminated
+            || (self.phase == AgentPhase::Silent && self.resume == AgentPhase::Terminated);
+        let token = self
+            .credentials
+            .as_ref()
+            .filter(|_| !terminated)
+            .map(|c| c.node_token.expose().to_owned());
+        if let Some(token) = token {
+            let retired = tokio::time::timeout(RETIRE_TIMEOUT, self.client.retire(&token)).await;
+            if !matches!(retired, Ok(Answer::Ok(_))) {
+                tracing::info!("the old record stays until the pool notices its silence");
+            }
+        }
+        self.silent_until = None;
+        self.retry_at = None;
+        self.next_look = None;
+        self.start_enrolling(true)
     }
 
     /// Back to enrolling; `forget_id` if the registrar does not know the node at all.
@@ -489,8 +547,7 @@ impl<E: EngineProbe, S: ReportSource, K: ConfigSink> Lifecycle<E, S, K> {
 
     fn enroll_failed(&mut self, now: Instant, was_terminated: bool) -> Step {
         if was_terminated {
-            self.retry_at = Some(now + TERMINATED_RETRY);
-            return Step::Wait(TERMINATED_RETRY);
+            return self.retry_later(now);
         }
         let delay = self.enroll.backoff.next_delay(&mut *self.jitter);
         self.enroll.next_at = Some(now + delay);
@@ -543,8 +600,7 @@ impl<E: EngineProbe, S: ReportSource, K: ConfigSink> Lifecycle<E, S, K> {
         if beat_due {
             let watch = self.hooks.reports.watch(now).await;
             if watch.ip_changed {
-                tracing::warn!("the public address changed; enrolling again");
-                return self.start_enrolling(true);
+                return self.address_changed().await;
             }
             self.quiet = watch.health != Health::Good;
             if watch.health == Health::Dead
