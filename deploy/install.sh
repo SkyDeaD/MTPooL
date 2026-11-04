@@ -7,7 +7,8 @@
 # Options:
 #   --name <name>        the name of this node (required)
 #   --token-file <path>  read the enroll token from a file instead of MTPOOL_TOKEN
-#   --preset telemt      install the telemt engine too (mtproxyl is not supported yet)
+#   --preset telemt|mtproxyl
+#                        install a proxy engine too: telemt, or MTProxyL (which brings its own telemt)
 #   --port <n>           the port the engine listens on, when it is not read from its config
 #
 # The token is never an argument: arguments show in `ps`.
@@ -22,6 +23,13 @@ TELEMT_VERSION=3.5.16
 TELEMT_SHA256_X86_64=e6f46b2f3becf29bfd555cec8a059e429f7c082c1af402499b3a7940cf8ebd34
 TELEMT_SHA256_AARCH64=1e1bc87f05923b9673cbbaf34a3e50f7fdcf7d496cd24efcdb34c278ed18a659
 
+# MTProxyL (github.com/Liafanx/MTProxyL) is installed by its own installer, pinned to one commit
+# and to the sha256 of that commit's install.sh. That installer downloads its libraries from the
+# same commit, so they are pinned by the commit hash. To move to a newer MTProxyL, read its
+# installer again, then change both lines.
+MTPROXYL_COMMIT=6bedcea9801e06f8c246b882b6bab45e080ecdf3
+MTPROXYL_INSTALLER_SHA256=26008d2baceb7d89e60904e1d8a26572a02857497d382cb3ac97eeed15ca1418
+
 STATE_DIR=/var/lib/mtpool
 CONFIG_DIR=/etc/mtpool
 
@@ -31,7 +39,7 @@ die() {
 }
 
 usage() {
-    echo "usage: install.sh --name <name> [--token-file <path>] [--preset telemt] [--port <n>]" >&2
+    echo "usage: install.sh --name <name> [--token-file <path>] [--preset telemt|mtproxyl] [--port <n>]" >&2
     echo "the enroll token comes from MTPOOL_TOKEN or --token-file, never an argument" >&2
     exit 2
 }
@@ -77,8 +85,7 @@ main() {
     esac
     [ "${#name}" -le 63 ] || die "--name is longer than 63 characters"
     case "$preset" in
-    '' | telemt) ;;
-    mtproxyl) die "--preset mtproxyl is not implemented in this version" ;;
+    '' | telemt | mtproxyl) ;;
     *) die "unknown preset: $preset" ;;
     esac
     if [ -n "$engine_port" ]; then
@@ -241,11 +248,41 @@ __MTPOOL_TELEMT_UNIT__
 TELEMT_UNIT
     }
 
-    if [ "$preset" = telemt ]; then
+    # MTProxyL's official installer, run without questions: one manager, the pool's port and
+    # FakeTLS domain, and the same pinned telemt build the telemt preset installs. Its extras
+    # (Zapret2, system tuning) are off: the pool does not need them.
+    install_mtproxyl() {
+        [ -n "$POOL_TLS_DOMAIN" ] || die "the pool has no tls_domain set; set it in the panel first"
+        if [ -e /opt/mtproxyl ]; then
+            die "/opt/mtproxyl exists: MTProxyL is already installed; run the installer without --preset"
+        fi
+        command -v bash >/dev/null 2>&1 || die "MTProxyL's installer needs bash"
+        case "$arch" in
+        x86_64) sum=$TELEMT_SHA256_X86_64 ;;
+        aarch64) sum=$TELEMT_SHA256_AARCH64 ;;
+        esac
+        file="telemt-$arch-linux-gnu.tar.gz"
+        echo "installing MTProxyL (commit $MTPROXYL_COMMIT)"
+        fetch "https://raw.githubusercontent.com/Liafanx/MTProxyL/$MTPROXYL_COMMIT/install.sh" \
+            "$work/mtproxyl-install.sh" || die "cannot download the MTProxyL installer"
+        echo "$MTPROXYL_INSTALLER_SHA256  $work/mtproxyl-install.sh" | sha256sum -c - >/dev/null ||
+            die "checksum of the MTProxyL installer does not match"
+        bash "$work/mtproxyl-install.sh" --branch "$MTPROXYL_COMMIT" -- \
+            --mode manager --proxy-mode mtproto --port "$POOL_PORT" --sni "$POOL_TLS_DOMAIN" \
+            --engine binary \
+            --engine-url "https://github.com/telemt/telemt/releases/download/$TELEMT_VERSION/$file" \
+            --engine-sha256 "$sum" \
+            --zapret2 no --meko no </dev/null || die "the MTProxyL installer failed"
+    }
+
+    case "$preset" in
+    telemt)
         install_telemt
         systemctl daemon-reload
         systemctl enable --now telemt
-    fi
+        ;;
+    mtproxyl) install_mtproxyl ;;
+    esac
 
     if [ -n "$engine_port" ]; then
         found_port=$engine_port

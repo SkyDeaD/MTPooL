@@ -211,6 +211,15 @@ main() {
 
     # --- start -----------------------------------------------------------------------------------
 
+    # A first install is one where the database does not exist yet. It is decided before any unit
+    # starts, because starting the registrar creates the database.
+    db=
+    if [ -r /etc/mtpool/registrar.env ]; then
+        db=$(sed -n 's/^MTPOOL_DB_PATH=//p' /etc/mtpool/registrar.env | tail -n 1 | tr -d "\"'")
+    fi
+    [ -n "$db" ] || db=/var/lib/mtpool/registrar.db
+    if [ -e "$db" ]; then first=no; else first=yes; fi
+
     systemctl daemon-reload
     units="mtpool-registrar.socket mtpool-backup.timer"
     [ "$caddy" = no ] || units="$units caddy"
@@ -218,10 +227,16 @@ main() {
     systemctl enable --now $units
     [ "$caddy" = no ] || systemctl reload-or-restart caddy
 
-    # The token is issued by the registrar's own command and shown here once.
-    token=$(runuser -u mtpool -- sh -c \
-        'set -a; [ ! -r /etc/mtpool/registrar.env ] || . /etc/mtpool/registrar.env; exec /usr/local/bin/mtpool-registrar admin reset-token') ||
-        die "cannot issue the admin token; run: runuser -u mtpool -- mtpool-registrar admin reset-token"
+    reset_command="runuser -u mtpool -- mtpool-registrar admin reset-token"
+    if [ "$first" = yes ]; then
+        # The token is issued by the registrar's own command and shown here once.
+        token=$(runuser -u mtpool -- sh -c \
+            'set -a; [ ! -r /etc/mtpool/registrar.env ] || . /etc/mtpool/registrar.env; exec /usr/local/bin/mtpool-registrar admin reset-token') ||
+            die "cannot issue the admin token; run: $reset_command"
+    else
+        # An upgrade: the running service gets the new binary, the admin keeps the token.
+        systemctl try-restart mtpool-registrar.service
+    fi
     if [ "$caddy" = yes ]; then
         panel="https://$domain/"
     else
@@ -230,7 +245,12 @@ main() {
     echo
     echo "MTPooL is installed."
     echo "Panel: $panel"
-    echo "Admin token (shown once, keep it): $token"
+    if [ "$first" = yes ]; then
+        echo "Admin token (shown once, keep it): $token"
+    else
+        echo "The database already exists: this is an upgrade, the admin token is unchanged."
+        echo "To issue a new one: $reset_command"
+    fi
 }
 
 main "$@"
