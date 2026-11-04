@@ -86,7 +86,7 @@ sudo runuser -u mtpool -- mtpool-registrar admin reset-token
 | `domains` | пусто | домены пула; без повторов, без пустых имён |
 | `proxy_port` | 443 | порт прокси на нодах; нода с другим портом в пул не входит |
 | `tls_domain` | пусто | SNI, которым нода маскирует трафик |
-| `proxy_users` | пусто | пользователи прокси: `name` и `secret_hex` (32 hex-символа) |
+| `proxy_users` | пусто | пользователи прокси: `name` (до 64 латинских букв, цифр, `-` и `_`) и `secret_hex` (32 hex-символа). В панели: **Настройки → Прокси** |
 | `masters_per_domain` | 1 | мастеров на домен, от 1 до 8 |
 | `rotation_ttl_sec` | 1800 | как часто менять мастера; 0 выключает ротацию, максимум 43200 |
 | `dns_ttl` | 60 | TTL записей, от 60 до 86400; меньшие значения отклоняются |
@@ -104,12 +104,14 @@ sudo runuser -u mtpool -- mtpool-registrar admin reset-token
 curl -s -X PATCH https://pool.example.com/api/v1/admin/settings \
   -H "Authorization: Bearer $MTPOOL_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"domains":["mt1.example.com","mt2.example.com"],"tls_domain":"tls.example.com"}'
+  -d '{"domains":["mt.example.com"],"tls_domain":"tls.example.com"}'
 ```
 
 Ответ — весь документ настроек и карта `secrets` (задан секрет или нет). Секрет задаётся так: `{"secrets":{"cloudflare_api_token":"<токен>"}}`; `null` вместо значения стирает секрет.
 
 ### Автомасштабирование доменов (СРМД)
+
+Для СРМД достаточно одного домена в `domains`, например `mt.example.com`. Остальные пул создаёт сам: при 6 здоровых нодах появится `mt1.example.com`, при 11 — `mt2.example.com` (по умолчанию 5 нод на домен и 1 мастер). Домены с номерами вручную вписывать не нужно.
 
 По умолчанию выключено (`srmd.enabled: false`). Описание — в [lifecycle.md](lifecycle.md#срмд-автомасштабирование-доменов). Одна ловушка с именами описана в [operations.md](operations.md#имена-новых-доменов-срмд).
 

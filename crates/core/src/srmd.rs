@@ -474,6 +474,34 @@ mod tests {
     }
 
     #[test]
+    fn one_written_domain_grows_by_number_as_nodes_come() {
+        let s = settings(true, &["mt.example.com"]);
+        let mut state = SrmdState::default();
+        // Five nodes fit the one domain, nothing is created.
+        let out = ticks(&mut state, &["mt.example.com"], 5, &s, 20);
+        assert!(out.iter().all(Vec::is_empty));
+        let out = ticks(&mut state, &["mt.example.com"], 6, &s, 20);
+        assert_eq!(out[19], vec![create("mt1.example.com")]);
+        let out = ticks(
+            &mut state,
+            &["mt.example.com", "mt1.example.com"],
+            11,
+            &s,
+            20,
+        );
+        assert_eq!(out[19], vec![create("mt2.example.com")]);
+    }
+
+    #[test]
+    fn no_written_domain_starts_from_the_base_name() {
+        let mut s = settings(true, &[]);
+        s.srmd.base_domain = Some("mt.example.com".into());
+        let mut state = SrmdState::default();
+        let out = ticks(&mut state, &[], 1, &s, 20);
+        assert_eq!(out[19], vec![create("mt1.example.com")]);
+    }
+
+    #[test]
     fn no_usable_base_means_no_create() {
         for domains in [&[][..], &["localhost"], &[".example.com"], &["host."]] {
             let s = settings(true, domains);
