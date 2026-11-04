@@ -253,6 +253,38 @@ pub fn stage(source: &Path, staged: &Path, want_sha256: &str) -> Result<(), Stri
     Ok(())
 }
 
+/// How long a just-written build may stay busy before it counts as not runnable.
+const BUSY_WAIT: Duration = Duration::from_secs(5);
+
+/// Starts `<path> version`, waiting while the file is busy.
+///
+/// A file that is open for writing anywhere cannot be run (ETXTBSY), and closing our own handle
+/// is not enough: a thread of this process that forks while the file is being written gives its
+/// child a copy of the handle, and the child holds it until its exec. That lasts a moment and
+/// says nothing about the build.
+fn spawn_version(path: &Path, busy_wait: Duration) -> io::Result<std::process::Child> {
+    use std::process::{Command, Stdio};
+    let started = std::time::Instant::now();
+    loop {
+        let spawned = Command::new(path)
+            .arg("version")
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn();
+        match spawned {
+            Err(e)
+                if e.kind() == io::ErrorKind::ExecutableFileBusy
+                    && started.elapsed() < busy_wait =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            other => return other,
+        }
+    }
+}
+
 /// The key id in the output of `mtpool-registrar version` or `mtpool-agent version`: `1.2.3 (signing key E7620F1842B4E81F)`.
 pub fn key_id_of_version_line(line: &str) -> Option<String> {
     let rest = line.split_once("(signing key ")?.1;
@@ -263,15 +295,7 @@ pub fn key_id_of_version_line(line: &str) -> Option<String> {
 /// Runs `path version` and reads the id of the signing key built into it off the output.
 pub fn binary_key_id(path: &Path) -> Result<Option<String>, String> {
     use std::io::Read;
-    use std::process::{Command, Stdio};
-    let mut child = Command::new(path)
-        .arg("version")
-        .env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    let mut child = spawn_version(path, BUSY_WAIT).map_err(|e| e.to_string())?;
     let started = std::time::Instant::now();
     let status = loop {
         match child.try_wait().map_err(|e| e.to_string())? {
@@ -292,4 +316,49 @@ pub fn binary_key_id(path: &Path) -> Result<Option<String>, String> {
         let _ = stdout.by_ref().take(4096).read_to_string(&mut out);
     }
     Ok(key_id_of_version_line(&out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A build that answers `version`, plus a handle that still has it open for writing.
+    fn build_being_written(dir: &Path) -> (PathBuf, std::fs::File) {
+        let path = dir.join("build");
+        std::fs::write(
+            &path,
+            "#!/bin/sh\necho '1.2.3 (signing key E7620F1842B4E81F)'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let writer = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        (path, writer)
+    }
+
+    #[test]
+    fn a_build_that_is_busy_for_a_moment_still_answers() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, writer) = build_being_written(dir.path());
+        let closer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            drop(writer);
+        });
+
+        let got = binary_key_id(&path);
+
+        closer.join().unwrap();
+        assert_eq!(got, Ok(Some("E7620F1842B4E81F".to_owned())));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_build_that_stays_busy_is_not_waited_for_forever() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, _writer) = build_being_written(dir.path());
+
+        let got = spawn_version(&path, Duration::from_millis(50));
+
+        assert_eq!(got.unwrap_err().kind(), io::ErrorKind::ExecutableFileBusy);
+    }
 }
