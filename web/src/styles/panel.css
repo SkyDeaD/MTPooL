@@ -83,9 +83,10 @@
 .ev .w { font-weight: 500; }
 .ev .d { grid-column: 2; color: var(--fg2); font-size: 13px; overflow-wrap: anywhere; }
 .ev .ts { color: var(--fg3); font-size: 12.5px; white-space: nowrap; }
+.sub a { text-decoration: underline; text-underline-offset: 2px; }
 .tabs { display: flex; gap: 4px; margin-bottom: 14px; flex-wrap: wrap; }
 .tabs [role='tab'] { height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--r2); background: var(--surf); color: var(--fg2); cursor: pointer; font: inherit; font-size: 13.5px; }
-.tabs [role='tab'][aria-selected='true'] { background: var(--acc-t); color: var(--acc); border-color: transparent; font-weight: 500; }
+.tabs [role='tab'][aria-selected='true'] { background: var(--acc-t); color: var(--fg); border-color: transparent; font-weight: 500; }
 
 /* Rounds table on the node page */
 table.rounds td, table.rounds th { vertical-align: top; }

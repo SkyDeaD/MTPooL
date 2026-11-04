@@ -287,6 +287,8 @@
 /* Tables. Wrap in .tw so a wide table scrolls inside its tile instead of being cut. */
 .tw {
   overflow-x: auto;
+  /* The containing block of the hidden header labels, so they are cut with the table and do not widen the page. */
+  position: relative;
 }
 
 table.tb {
