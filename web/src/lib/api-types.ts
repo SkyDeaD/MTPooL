@@ -902,6 +902,11 @@ export interface components {
             full_ip: string;
             /** @description RFC 3339, UTC: the last heartbeat; absent if none came. */
             last_heartbeat?: string | null;
+            /**
+             * @description RFC 3339, UTC: the last confirmed measurement; absent if none came since the node's last
+             *     new check began.
+             */
+            last_report_at?: string | null;
             /** Format: int64 */
             owner_id: number;
             /** @description Absent when the owner is gone. */
@@ -1148,7 +1153,10 @@ export interface components {
             node_id: string;
             /** @description The bearer token of the node. Shown here once; only its hash is kept. */
             node_token: string;
-            /** @description Another node on the same address that this one displaced. */
+            /**
+             * @description The node that gave way to this one: another one on the same address or, if none, a silent
+             *     node of the same owner that was holding the last place.
+             */
             replaced?: string | null;
             /** @description The address was blocked: a decisive check decides whether the node may stay. */
             reverify: boolean;
@@ -1471,6 +1479,11 @@ export interface components {
             /** Format: int32 */
             port: number;
             /**
+             * @description Why the node entered quarantine: `tcp`, `metrics`, `globalping`, `port`, `heartbeat_stale`,
+             *     `report_stale` (no confirmed measurement for too long). Absent in other states.
+             */
+            quarantine_reasons?: string[];
+            /**
              * Format: int32
              * @description Place in the queue for a master slot, from 1: only for a healthy node that is not a
              *     master.
@@ -1759,6 +1772,8 @@ export interface components {
             /** @description `admin`, `enroll`, `node`, `bot` or `metrics`. */
             kind: string;
             last_used_at?: string | null;
+            /** @description The node of a `node` token. The token goes with the node's record. */
+            node_id?: string | null;
             /** Format: int64 */
             owner_id?: number | null;
             prefix: string;
@@ -2119,7 +2134,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every node, banned, dead and pruned ones too, with the whole address and the owner */
+            /** @description Every node with a record, with the whole address and the owner. A banned node has none; a dead or pruned one keeps it for 24 hours */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2298,7 +2313,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The ban is lifted */
+            /** @description The ban is lifted. A banned node has no record, so the id may also be one the ban log names; the agent enrolls again by itself */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2316,7 +2331,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No such node */
+            /** @description No such node and no open ban under this id */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -3097,6 +3112,8 @@ export interface operations {
             query?: {
                 /** @description Only the tokens of this owner */
                 owner?: number;
+                /** @description Only the tokens of this kind: `admin`, `enroll`, `node`, `bot` or `metrics` */
+                kind?: string;
                 /** @description 1 to 200, default 50 */
                 limit?: number;
                 /** @description Only tokens with a smaller id */

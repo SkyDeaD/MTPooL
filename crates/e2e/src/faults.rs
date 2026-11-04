@@ -27,18 +27,6 @@ impl Node<'_> {
         self.exec("systemctl stop telemt").await.map(|_| ())
     }
 
-    /// Makes the agent forget the node it was and enroll again: what it does by itself after
-    /// fifteen minutes of being turned away. Its enroll token is kept. Does not wait for the
-    /// registrar's answer.
-    pub async fn forget_enrollment(&self) -> Result<()> {
-        self.exec(
-            "rm -f /var/lib/mtpool/node_id /var/lib/mtpool/node_token \
-             && systemctl restart mtpool-agent",
-        )
-        .await
-        .map(|_| ())
-    }
-
     /// What the agent has logged since it was last started.
     pub async fn agent_log(&self) -> Result<String> {
         self.exec("journalctl -u mtpool-agent --no-pager -n 80 2>&1 || true")
