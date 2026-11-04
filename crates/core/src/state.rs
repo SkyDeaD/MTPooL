@@ -28,6 +28,10 @@ pub struct PoolState {
     pub assignments: Assignments,
     pub dns: BTreeMap<String, DnsState>,
     pub srmd: SrmdState,
+    /// No enrollment evicts a silent node before this time. Heartbeats are written in batches, so
+    /// after a restart the last ones are missing and a live node would look silent. Not stored:
+    /// the state owner sets it on start.
+    pub evictions_from: Option<Ts>,
 }
 
 impl PoolState {
@@ -110,6 +114,8 @@ pub struct EnrollRequest {
     pub ip: Ipv4Addr,
     pub port: u16,
     pub engine: EngineKind,
+    /// How many nodes the owner may have; `None`: any number.
+    pub limit: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,12 +337,18 @@ pub enum Reply {
     Enrolled {
         node: NodeId,
         generation: Generation,
-        /// Another node on the same IP that this one displaced.
+        /// The node that gave way: another one on the same IP or, if none, a silent node of the
+        /// owner that was holding the last place.
         replaced: Option<NodeId>,
         /// The IP was blocked: a decisive round decides.
         reverify: bool,
     },
     /// 429 with `Retry-After`.
+    /// The owner is at its limit and has no silent node to give way.
+    OwnerLimit {
+        limit: i64,
+        current: usize,
+    },
     EnrollRejected {
         retry_after_sec: u32,
         reason: RejectReason,

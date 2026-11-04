@@ -4652,7 +4652,7 @@
               "string",
               "null"
             ],
-            "description": "Another node on the same address that this one displaced."
+            "description": "The node that gave way to this one: another one on the same address or, if none, a silent\nnode of the same owner that was holding the last place."
           },
           "reverify": {
             "type": "boolean",

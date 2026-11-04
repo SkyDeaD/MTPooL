@@ -36,6 +36,7 @@ pub fn enroll(name: &str, ip: [u8; 4]) -> Command {
         ip: Ipv4Addr::from(ip),
         port: 443,
         engine: EngineKind::Telemt,
+        limit: None,
     })
 }
 

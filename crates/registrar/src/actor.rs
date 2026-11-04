@@ -22,9 +22,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use mtpool_core::{
-    Command, Effect, EnrollRequest, NodeState, PoolState, Reply, ReplyId, Ts, apply,
-};
+use mtpool_core::{Command, Effect, PoolState, Reply, ReplyId, Ts, apply};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 
@@ -92,24 +90,9 @@ impl Default for ActorOptions {
 /// A read of the live state, run by the actor between commands.
 type Inspection = Box<dyn FnOnce(&PoolState) + Send>;
 
-/// The answer to `ActorHandle::enroll`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EnrollOutcome {
-    /// `core` decided: the reply of `Command::Enroll`.
-    Reply(Reply),
-    /// The owner has `limit` nodes or more in the pool already (`current` of them); `core` was
-    /// not asked.
-    OwnerLimit { limit: i64, current: usize },
-}
-
 enum Msg {
     Command(Command),
     Call(Command, oneshot::Sender<Reply>),
-    Enroll {
-        request: EnrollRequest,
-        limit: Option<i64>,
-        to: oneshot::Sender<EnrollOutcome>,
-    },
     Inspect(Inspection),
     Stop(oneshot::Sender<()>),
 }
@@ -140,22 +123,6 @@ impl ActorHandle {
             .send(Msg::Command(command))
             .await
             .map_err(|_| ActorStopped)
-    }
-
-    /// Enrolls a node unless its owner is at `limit` (`None`: no limit). The nodes counted are
-    /// the owner's `Pending`, `Healthy` and `Quarantine` ones; counting and enrolling happen in
-    /// one step of the actor, so two requests cannot both take the last place.
-    pub async fn enroll(
-        &self,
-        request: EnrollRequest,
-        limit: Option<i64>,
-    ) -> Result<EnrollOutcome, ActorStopped> {
-        let (to, rx) = oneshot::channel();
-        self.tx
-            .send(Msg::Enroll { request, limit, to })
-            .await
-            .map_err(|_| ActorStopped)?;
-        rx.await.map_err(|_| ActorStopped)
     }
 
     /// Runs `read` on the live state, after the commands queued before it and before the ones
@@ -221,15 +188,18 @@ impl Actor {
     }
 
     pub fn spawn_with(
-        state: PoolState,
+        mut state: PoolState,
         store: Store,
         drivers: Vec<Arc<dyn EffectDriver>>,
         options: ActorOptions,
     ) -> ActorHandle {
         let (tx, rx) = mpsc::channel(QUEUE_CAPACITY);
         let snapshots = SnapshotStore::new(Snapshot::build(&state));
-        let grace_until =
-            Instant::now() + Duration::from_secs(u64::from(state.settings.heartbeat_ttl_sec));
+        let grace = u64::from(state.settings.heartbeat_ttl_sec);
+        let grace_until = Instant::now() + Duration::from_secs(grace);
+        state.evictions_from = Some(Ts((options.clock)()
+            .0
+            .saturating_add(i64::try_from(grace * 1000).unwrap_or(i64::MAX))));
         let actor = Actor {
             state,
             store,
@@ -313,46 +283,9 @@ impl Actor {
             Msg::Call(command, to) => {
                 self.process(command, Some(to), replies);
             }
-            Msg::Enroll { request, limit, to } => self.enroll(request, limit, to, replies),
             Msg::Inspect(read) => read(&self.state),
             Msg::Stop(ack) => stop.push(ack),
         }
-    }
-
-    fn enroll(
-        &mut self,
-        request: EnrollRequest,
-        limit: Option<i64>,
-        to: oneshot::Sender<EnrollOutcome>,
-        replies: &mut Vec<(oneshot::Sender<Reply>, Reply)>,
-    ) {
-        if let Some(limit) = limit {
-            let current = self
-                .state
-                .nodes
-                .values()
-                .filter(|n| {
-                    n.owner == request.owner
-                        && matches!(
-                            n.state,
-                            NodeState::Pending | NodeState::Healthy | NodeState::Quarantine
-                        )
-                })
-                .count();
-            if i64::try_from(current).unwrap_or(i64::MAX) >= limit {
-                let _ = to.send(EnrollOutcome::OwnerLimit { limit, current });
-                return;
-            }
-        }
-        // The answer goes out with the others of this batch, after the snapshot; a small task
-        // carries it on as an `EnrollOutcome`.
-        let (reply_to, reply) = oneshot::channel();
-        self.process(Command::Enroll(request), Some(reply_to), replies);
-        tokio::spawn(async move {
-            if let Ok(reply) = reply.await {
-                let _ = to.send(EnrollOutcome::Reply(reply));
-            }
-        });
     }
 
     fn process(
@@ -476,6 +409,7 @@ mod tests {
                 ip: Ipv4Addr::LOCALHOST,
                 port: 443,
                 engine: EngineKind::Telemt,
+                limit: None,
             }),
             Command::Heartbeat(HeartbeatRequest {
                 reply: ReplyId(0),

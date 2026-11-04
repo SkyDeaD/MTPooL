@@ -14,7 +14,7 @@ use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use common::*;
 use mtpool_core::{
-    Command, GpStatus, NodeRecord, NodeState, OwnerId, PoolState, ProxyUser, SensorKind,
+    Command, GpStatus, IpBlock, NodeRecord, NodeState, OwnerId, PoolState, ProxyUser, SensorKind,
     SensorVote, Settings, Tombstone, Ts, Vote,
 };
 use mtpool_protocol::problem::Problem;
@@ -494,6 +494,112 @@ async fn wait_until_gone(env: &Env, name: &str) {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("{name} still has a record");
+}
+
+/// A node of `me` that last spoke `silent_sec` seconds ago.
+fn silent_node(name: &str, ip: [u8; 4], me: OwnerId, silent_sec: i64) -> NodeRecord {
+    let mut n = node_at(name, ip, NodeState::Healthy);
+    n.owner = me;
+    n.health.last_heartbeat = Ts(NOW - silent_sec * 1000);
+    n
+}
+
+#[tokio::test]
+async fn a_full_limit_gives_way_only_after_the_silence_of_a_node() {
+    let me = OwnerId(1);
+    let env = env(pool(vec![
+        silent_node("old-00001", [45, 33, 1, 5], me, 0),
+        silent_node("new-00002", [45, 33, 1, 6], me, 0),
+    ]));
+    assert_eq!(owner(&env, "me", 2), me);
+    let enrolling = enroll_token(&env, me);
+
+    let live = enroll(&env, &enrolling, "203.0.113.41", "third").await;
+    assert_problem(&live, StatusCode::FORBIDDEN, "owner_limit");
+
+    // Both silent now, past the TTL and the restart grace of the same length.
+    env.clock.fetch_add(61_000, Ordering::SeqCst);
+    let after = enroll(&env, &enrolling, "203.0.113.41", "third").await;
+    assert_eq!(after.status, StatusCode::OK, "{}", after.body);
+    let body = after.json();
+    assert_eq!(body["replaced"], "new-00002", "ties go by the id: {body}");
+    assert_eq!(
+        node_of(&env, "new-00002").await.unwrap().state,
+        NodeState::Dead
+    );
+    assert_eq!(
+        node_of(&env, "old-00001").await.unwrap().state,
+        NodeState::Healthy
+    );
+}
+
+#[tokio::test]
+async fn silence_from_before_a_restart_evicts_nobody_until_the_heartbeats_had_time() {
+    let me = OwnerId(1);
+    let env = env(pool(vec![silent_node(
+        "old-00001",
+        [45, 33, 1, 5],
+        me,
+        300,
+    )]));
+    assert_eq!(owner(&env, "me", 1), me);
+    let enrolling = enroll_token(&env, me);
+
+    let early = enroll(&env, &enrolling, "203.0.113.42", "next").await;
+    assert_problem(&early, StatusCode::FORBIDDEN, "owner_limit");
+
+    env.clock.fetch_add(60_000, Ordering::SeqCst);
+    let due = enroll(&env, &enrolling, "203.0.113.42", "next").await;
+    assert_eq!(due.status, StatusCode::OK, "{}", due.body);
+}
+
+#[tokio::test]
+async fn the_same_address_at_a_full_limit_is_a_replacement() {
+    let me = OwnerId(1);
+    let env = env(pool(vec![silent_node("old-00001", [45, 33, 1, 5], me, 0)]));
+    assert_eq!(owner(&env, "me", 1), me);
+    let enrolling = enroll_token(&env, me);
+
+    let resp = enroll(&env, &enrolling, ALPHA_IP, "fresh").await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.json()["replaced"], "old-00001");
+}
+
+#[tokio::test]
+async fn a_blocked_address_at_a_full_limit_is_refused_and_evicts_nobody() {
+    let me = OwnerId(1);
+    let mut state = pool(vec![silent_node("old-00001", [45, 33, 1, 5], me, 300)]);
+    state.blocks.push(IpBlock {
+        ip: std::net::Ipv4Addr::new(203, 0, 113, 43),
+        node_id: node_id("gone-00002"),
+        blocked_at: Ts(NOW),
+        next_reverify_at: Some(Ts(NOW + 900_000)),
+        owner: Some(me),
+    });
+    let env = env(state);
+    assert_eq!(owner(&env, "me", 1), me);
+    let enrolling = enroll_token(&env, me);
+    env.clock.fetch_add(60_000, Ordering::SeqCst);
+
+    let paused = enroll(&env, &enrolling, "203.0.113.43", "next").await;
+    assert_eq!(
+        paused.status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "{}",
+        paused.body
+    );
+    assert_eq!(
+        node_of(&env, "old-00001").await.unwrap().state,
+        NodeState::Healthy
+    );
+
+    env.clock.fetch_add(900_000, Ordering::SeqCst);
+    let due = enroll(&env, &enrolling, "203.0.113.43", "next").await;
+    assert_problem(&due, StatusCode::FORBIDDEN, "owner_limit");
+    assert_eq!(
+        node_of(&env, "old-00001").await.unwrap().state,
+        NodeState::Healthy
+    );
 }
 
 #[tokio::test]

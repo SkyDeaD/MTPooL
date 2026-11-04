@@ -59,6 +59,7 @@ pub(super) fn load_state(conn: &Connection, now: Ts) -> Result<PoolState, StoreE
         assignments,
         dns,
         srmd,
+        evictions_from: None,
     })
 }
 

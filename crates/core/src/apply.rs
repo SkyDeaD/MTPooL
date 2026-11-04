@@ -15,9 +15,9 @@ use serde_json::{Value, json};
 use crate::dns::{DnsState, RecordValue, backoff};
 use crate::health::{GpStatus, younger_than};
 use crate::lifecycle::{
-    EnrollDecision, EnrollInput, IpBlock, LifecycleEvent, NodeRecord, RoundResult, Tombstone,
-    apply_round, decide_enroll, needs_sensors, next_round_at, record_expired, record_prune,
-    reset_tombstones, tick_node, unban, unban_by_node,
+    EnrollDecision, EnrollInput, IpBlock, LifecycleEvent, NodeRecord, RoundResult, SlotDecision,
+    SlotRequest, Tombstone, apply_round, decide_enroll, decide_slot, needs_sensors, next_round_at,
+    record_expired, record_prune, reset_tombstones, tick_node, unban, unban_by_node,
 };
 use crate::selection::{Assignments, select};
 use crate::settings::Settings;
@@ -231,8 +231,7 @@ fn terminate_reason(state: NodeState) -> Option<TerminateReason> {
 }
 
 fn kill(node: &mut NodeRecord, now: Ts) {
-    node.state = NodeState::Dead;
-    node.state_since = now;
+    node.enter_final(NodeState::Dead, now);
 }
 
 fn votes_json(votes: &[(SensorKind, Vote)]) -> Value {
@@ -443,6 +442,36 @@ fn enroll(state: &mut PoolState, r: EnrollRequest, now: Ts, out: &mut Out) -> An
     // Another node on this IP gives way: one live record per IP. The same id enrolling again
     // is not a displaced node, its record is replaced below.
     let displaced = old_on_ip.filter(|old| *old != r.node_id);
+    let slot = decide_slot(
+        &SlotRequest {
+            node_id: &r.node_id,
+            owner: r.owner,
+            limit: r.limit,
+            displaced: displaced.as_ref(),
+            may_evict: !reverify && state.evictions_from.is_none_or(|from| from <= now),
+        },
+        state.nodes.values(),
+        now,
+        &state.settings,
+    );
+    let evicted = match slot {
+        SlotDecision::Free => None,
+        SlotDecision::Evict(silent) => Some(silent),
+        SlotDecision::Full { limit, current } => {
+            return (r.reply, Reply::OwnerLimit { limit, current });
+        }
+    };
+    if let Some(old) = evicted.as_ref().and_then(|id| state.nodes.get_mut(id)) {
+        kill(old, now);
+        persist(out, PersistOp::UpsertNode(old.clone()));
+        emit_node(
+            out,
+            now,
+            EventKind::NodeDead,
+            old,
+            json!({ "replaced_by": r.node_id, "reason": "silent" }),
+        );
+    }
     if let Some(old) = displaced.as_ref().and_then(|id| state.nodes.get_mut(id)) {
         kill(old, now);
         persist(out, PersistOp::UpsertNode(old.clone()));
@@ -454,6 +483,7 @@ fn enroll(state: &mut PoolState, r: EnrollRequest, now: Ts, out: &mut Out) -> An
             json!({ "replaced_by": r.node_id }),
         );
     }
+    let replaced = displaced.or(evicted);
 
     let make = if reverify {
         NodeRecord::new_reverify
@@ -488,7 +518,7 @@ fn enroll(state: &mut PoolState, r: EnrollRequest, now: Ts, out: &mut Out) -> An
         now,
         EventKind::NodeRegistered,
         &record,
-        json!({ "reverify": reverify, "replaced": displaced }),
+        json!({ "reverify": reverify, "replaced": replaced }),
     );
     // A reverify node starts its decisive round with the first measurement of the agent, which
     // the agent makes right after registering (see `report`); the tick is the fallback.
@@ -498,7 +528,7 @@ fn enroll(state: &mut PoolState, r: EnrollRequest, now: Ts, out: &mut Out) -> An
         Reply::Enrolled {
             node: r.node_id,
             generation,
-            replaced: displaced,
+            replaced,
             reverify,
         },
     )
@@ -1294,6 +1324,7 @@ mod tests {
                 ip: addr,
                 port: 443,
                 engine: EngineKind::Telemt,
+                limit: None,
             }))
         }
 
@@ -2419,7 +2450,7 @@ mod tests {
         assert!(matches!(effects.last(), Some(Effect::Reply(..))));
     }
 
-    fn event_of<'a>(effects: &'a [Effect], kind: EventKind) -> &'a Event {
+    fn event_of(effects: &[Effect], kind: EventKind) -> &Event {
         effects
             .iter()
             .find_map(|e| match e {
@@ -2433,6 +2464,240 @@ mod tests {
         persists(effects)
             .iter()
             .any(|op| matches!(op, PersistOp::DeleteNode(n) if *n == id(name)))
+    }
+
+    // ----- the owner limit ------------------------------------------------------------------
+
+    impl Pool {
+        fn enroll_limited(&mut self, name: &str, addr: Ipv4Addr, limit: i64) -> Vec<Effect> {
+            let reply = self.rid();
+            self.run(Command::Enroll(EnrollRequest {
+                reply,
+                node_id: id(name),
+                owner: OwnerId(1),
+                ip: addr,
+                port: 443,
+                engine: EngineKind::Telemt,
+                limit: Some(limit),
+            }))
+        }
+
+        /// Two live nodes of the owner, of which `n1` went silent first and `n2` after it.
+        fn two_silent(&mut self) {
+            self.enroll("n1", ip(1));
+            self.advance(SEC);
+            self.enroll("n2", ip(2));
+            self.advance(61 * SEC);
+        }
+    }
+
+    #[test]
+    fn a_full_limit_with_a_silent_node_lets_the_new_one_in_and_ends_the_longest_silent() {
+        let mut p = Pool::new();
+        p.two_silent();
+        let effects = p.enroll_limited("n3", ip(3), 2);
+
+        assert_eq!(p.state_of("n1"), NodeState::Dead);
+        assert_eq!(p.state_of("n2"), NodeState::Pending);
+        assert_eq!(p.state_of("n3"), NodeState::Pending);
+        assert_eq!(
+            event_of(&effects, EventKind::NodeDead).detail,
+            json!({ "replaced_by": id("n3"), "reason": "silent" })
+        );
+        assert_eq!(event_of(&effects, EventKind::NodeDead).node, Some(id("n1")));
+        assert!(
+            persists(&effects)
+                .iter()
+                .any(|op| matches!(op, PersistOp::UpsertNode(r) if r.id == id("n1") && r.state == NodeState::Dead))
+        );
+        assert!(matches!(
+            reply(&effects),
+            Reply::Enrolled { replaced: Some(old), .. } if *old == id("n1")
+        ));
+    }
+
+    #[test]
+    fn a_full_limit_of_live_nodes_refuses_and_changes_nothing() {
+        let mut p = Pool::new();
+        p.enroll("n1", ip(1));
+        p.advance(SEC);
+        p.enroll("n2", ip(2));
+        p.advance(58 * SEC);
+        let before = p.state.clone();
+        let effects = p.enroll_limited("n3", ip(3), 2);
+
+        assert_eq!(
+            *reply(&effects),
+            Reply::OwnerLimit {
+                limit: 2,
+                current: 2
+            }
+        );
+        assert_eq!(p.state, before);
+        assert!(persists(&effects).is_empty());
+        assert!(kinds(&effects).is_empty());
+    }
+
+    #[test]
+    fn a_node_is_silent_only_from_the_end_of_the_heartbeat_ttl() {
+        let mut p = Pool::new();
+        p.enroll("n1", ip(1));
+        p.advance(59 * SEC);
+        let early = p.enroll_limited("n2", ip(2), 1);
+        assert!(matches!(reply(&early), Reply::OwnerLimit { .. }));
+        p.advance(SEC);
+        let due = p.enroll_limited("n2", ip(2), 1);
+        assert!(matches!(reply(&due), Reply::Enrolled { .. }));
+    }
+
+    #[test]
+    fn a_heartbeat_keeps_a_node_from_being_silent() {
+        let mut p = Pool::new();
+        p.two_silent();
+        p.beat("n1");
+        let effects = p.enroll_limited("n3", ip(3), 2);
+        assert_eq!(p.state_of("n1"), NodeState::Pending);
+        assert_eq!(p.state_of("n2"), NodeState::Dead);
+        assert_eq!(event_of(&effects, EventKind::NodeDead).node, Some(id("n2")));
+    }
+
+    #[test]
+    fn the_same_ip_at_a_full_limit_is_a_replacement_and_ends_nobody_else() {
+        let mut p = Pool::new();
+        p.two_silent();
+        let effects = p.enroll_limited("n3", ip(2), 2);
+
+        assert_eq!(p.state_of("n1"), NodeState::Pending, "n1 keeps its place");
+        assert_eq!(p.state_of("n2"), NodeState::Dead);
+        assert_eq!(p.state_of("n3"), NodeState::Pending);
+        assert_eq!(
+            event_of(&effects, EventKind::NodeDead).detail,
+            json!({ "replaced_by": id("n3") }),
+            "the node gave way to its address, not for being silent"
+        );
+    }
+
+    #[test]
+    fn the_same_ip_at_a_full_limit_needs_no_silent_node() {
+        let mut p = Pool::new();
+        p.enroll("n1", ip(1));
+        let effects = p.enroll_limited("n2", ip(1), 1);
+        assert_eq!(p.state_of("n1"), NodeState::Dead);
+        assert!(matches!(
+            reply(&effects),
+            Reply::Enrolled { replaced: Some(old), .. } if *old == id("n1")
+        ));
+    }
+
+    #[test]
+    fn taking_the_address_of_another_owner_still_needs_a_place_of_ones_own() {
+        let mut p = Pool::new();
+        p.enroll("n1", ip(1));
+        p.state.nodes.get_mut(&id("n1")).unwrap().owner = OwnerId(2);
+        let effects = p.enroll_limited("n2", ip(1), 0);
+        assert!(matches!(reply(&effects), Reply::OwnerLimit { .. }));
+        assert_eq!(
+            p.state_of("n1"),
+            NodeState::Pending,
+            "a refused enrollment takes nothing from anybody"
+        );
+    }
+
+    #[test]
+    fn a_blocked_address_at_a_full_limit_evicts_nobody() {
+        let mut p = Pool::new();
+        p.two_silent();
+        let block = |at: Option<Ts>, p: &mut Pool| {
+            p.state.blocks = vec![IpBlock {
+                ip: ip(9),
+                node_id: id("old"),
+                blocked_at: Ts(0),
+                next_reverify_at: at,
+                owner: None,
+            }];
+        };
+
+        // Within the pause: the pause is the answer, whatever the limit.
+        block(Some(Ts(p.now.0 + 900 * SEC)), &mut p);
+        let paused = p.enroll_limited("n3", ip(9), 2);
+        assert!(matches!(reply(&paused), Reply::EnrollRejected { .. }));
+
+        // The pause is over: a decisive round would need a place, and a node that may turn out
+        // blocked again does not get one at the cost of another.
+        block(None, &mut p);
+        let due = p.enroll_limited("n3", ip(9), 2);
+        assert!(matches!(reply(&due), Reply::OwnerLimit { .. }));
+
+        assert_eq!(p.state_of("n1"), NodeState::Pending);
+        assert_eq!(p.state_of("n2"), NodeState::Pending);
+    }
+
+    #[test]
+    fn a_blocked_address_with_a_free_place_goes_to_its_round() {
+        let mut p = Pool::new();
+        p.state.blocks.push(IpBlock {
+            ip: ip(9),
+            node_id: id("old"),
+            blocked_at: Ts(0),
+            next_reverify_at: None,
+            owner: None,
+        });
+        let effects = p.enroll_limited("n1", ip(9), 1);
+        assert!(matches!(
+            reply(&effects),
+            Reply::Enrolled { reverify: true, .. }
+        ));
+    }
+
+    #[test]
+    fn a_limit_lowered_below_the_nodes_evicts_nobody() {
+        let mut p = Pool::new();
+        p.two_silent();
+        let effects = p.enroll_limited("n3", ip(3), 1);
+        assert_eq!(
+            *reply(&effects),
+            Reply::OwnerLimit {
+                limit: 1,
+                current: 2
+            }
+        );
+        assert_eq!(p.state_of("n1"), NodeState::Pending);
+    }
+
+    #[test]
+    fn a_silent_node_of_another_owner_does_not_make_room() {
+        let mut p = Pool::new();
+        p.two_silent();
+        p.state.nodes.get_mut(&id("n1")).unwrap().owner = OwnerId(2);
+        p.state.nodes.get_mut(&id("n2")).unwrap().owner = OwnerId(2);
+        let effects = p.enroll_limited("n3", ip(3), 0);
+        assert!(matches!(reply(&effects), Reply::OwnerLimit { .. }));
+    }
+
+    #[test]
+    fn nobody_is_evicted_while_the_heartbeats_after_a_restart_are_still_coming() {
+        let mut p = Pool::new();
+        p.two_silent();
+        p.state.evictions_from = Some(Ts(p.now.0 + SEC));
+        let early = p.enroll_limited("n3", ip(3), 2);
+        assert!(matches!(reply(&early), Reply::OwnerLimit { .. }));
+        assert_eq!(p.state_of("n1"), NodeState::Pending);
+
+        p.advance(SEC);
+        let due = p.enroll_limited("n3", ip(3), 2);
+        assert!(matches!(reply(&due), Reply::Enrolled { .. }));
+    }
+
+    #[test]
+    fn a_node_without_a_limit_enrolls_as_before() {
+        let mut p = Pool::new();
+        p.two_silent();
+        let effects = p.enroll("n3", ip(3));
+        assert!(matches!(
+            reply(&effects),
+            Reply::Enrolled { replaced: None, .. }
+        ));
+        assert_eq!(p.state_of("n1"), NodeState::Pending);
     }
 
     #[test]

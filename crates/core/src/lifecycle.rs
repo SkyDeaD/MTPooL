@@ -175,7 +175,7 @@ impl NodeRecord {
         self.suspected = false;
     }
 
-    fn enter_final(&mut self, state: NodeState, now: Ts) {
+    pub(crate) fn enter_final(&mut self, state: NodeState, now: Ts) {
         self.state = state;
         self.state_since = now;
     }
@@ -351,6 +351,62 @@ pub fn decide_enroll(
             old: old.id.clone(),
         },
         None => EnrollDecision::Accept,
+    }
+}
+
+/// What an enrollment that passed `decide_enroll` asks of the owner's limit.
+pub struct SlotRequest<'a> {
+    pub node_id: &'a NodeId,
+    pub owner: OwnerId,
+    pub limit: Option<i64>,
+    /// The node of the same address that gives way anyway: its place is free.
+    pub displaced: Option<&'a NodeId>,
+    /// Whether a silent node may give way to this one.
+    pub may_evict: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlotDecision {
+    Free,
+    /// The limit is full: this node is the one silent the longest and gives way.
+    Evict(NodeId),
+    Full {
+        limit: i64,
+        current: usize,
+    },
+}
+
+/// Counts the owner's live nodes against the limit. Only a limit that is exactly full evicts: with
+/// the limit lowered below the nodes the owner has, one more would stay over it.
+pub fn decide_slot<'a>(
+    req: &SlotRequest<'_>,
+    nodes: impl Iterator<Item = &'a NodeRecord>,
+    now: Ts,
+    s: &Settings,
+) -> SlotDecision {
+    let Some(limit) = req.limit else {
+        return SlotDecision::Free;
+    };
+    let counted: Vec<&NodeRecord> = nodes
+        .filter(|n| {
+            n.owner == req.owner
+                && is_live_state(n.state)
+                && n.id != *req.node_id
+                && Some(&n.id) != req.displaced
+        })
+        .collect();
+    let current = counted.len();
+    let used = i64::try_from(current).unwrap_or(i64::MAX);
+    if used < limit {
+        return SlotDecision::Free;
+    }
+    let silent = counted
+        .iter()
+        .filter(|n| !younger_than(n.health.last_heartbeat, now, s.heartbeat_ttl_sec))
+        .min_by_key(|n| (n.health.last_heartbeat, n.id.clone()));
+    match silent {
+        Some(n) if req.may_evict && used == limit => SlotDecision::Evict(n.id.clone()),
+        _ => SlotDecision::Full { limit, current },
     }
 }
 

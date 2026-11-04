@@ -146,6 +146,7 @@ mod tests {
             ip: Ipv4Addr::new(95, 216, 0, 1),
             port: 443,
             engine: EngineKind::Telemt,
+            limit: None,
         });
         apply(&mut state, enroll, NOW);
         let generation = state.nodes[&node].generation;

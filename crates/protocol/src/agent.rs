@@ -30,7 +30,8 @@ pub struct EnrollResponse {
     /// The bearer token of the node. Shown here once; only its hash is kept.
     pub node_token: String,
     pub generation: u64,
-    /// Another node on the same address that this one displaced.
+    /// The node that gave way to this one: another one on the same address or, if none, a silent
+    /// node of the same owner that was holding the last place.
     pub replaced: Option<String>,
     /// The address was blocked: a decisive check decides whether the node may stay.
     pub reverify: bool,

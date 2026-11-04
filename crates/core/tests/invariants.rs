@@ -227,6 +227,7 @@ impl Driver {
                 ip: ip(*i),
                 port: if *odd_port { 8443 } else { 443 },
                 engine: EngineKind::Telemt,
+                limit: None,
             })],
             Op::Heartbeat { node, move_to } => {
                 let id = self.pick(*node);

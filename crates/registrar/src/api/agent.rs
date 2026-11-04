@@ -43,7 +43,6 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use super::ApiError;
-use crate::actor::EnrollOutcome;
 use crate::auth::middleware::{ClientIp, EnrollAuth, NodeAuth};
 use crate::auth::tokens::{self, NewToken, TokenKind};
 use crate::server::AppState;
@@ -541,14 +540,15 @@ pub async fn enroll(
         ip,
         port: request.port,
         engine: engine_kind(request.engine),
+        limit: Some(limit),
     };
-    let outcome = app
+    let reply = app
         .actor
-        .enroll(command, Some(limit))
+        .call(Command::Enroll(command))
         .await
         .map_err(|_| actor_stopped())?;
-    match outcome {
-        EnrollOutcome::OwnerLimit { limit, current } => {
+    match reply {
+        Reply::OwnerLimit { limit, current } => {
             tracing::info!(
                 owner = owner.0,
                 limit,
@@ -562,10 +562,10 @@ pub async fn enroll(
                 "The owner of this token has as many nodes as it may have.",
             ))
         }
-        EnrollOutcome::Reply(Reply::EnrollRejected {
+        Reply::EnrollRejected {
             retry_after_sec,
             reason,
-        }) => Err(ApiError::new(
+        } => Err(ApiError::new(
             StatusCode::TOO_MANY_REQUESTS,
             "enroll_paused",
             "Enrollment paused",
@@ -573,12 +573,12 @@ pub async fn enroll(
         )
         .retry_after(u64::from(retry_after_sec))
         .into()),
-        EnrollOutcome::Reply(Reply::Enrolled {
+        Reply::Enrolled {
             node,
             generation,
             replaced,
             reverify,
-        }) => {
+        } => {
             let store = app.store.clone();
             let for_node = node.clone();
             let issued = blocking(move || {
@@ -622,7 +622,7 @@ pub async fn enroll(
                 }
             }
         }
-        EnrollOutcome::Reply(other) => {
+        other => {
             tracing::error!(reply = ?other, "agent API: unexpected reply to an enrollment");
             Err(ApiError::internal().into())
         }
