@@ -26,7 +26,7 @@ pub struct Snapshot {
     pub links_json: String,
     /// Changes whenever any of the three documents changes: 16 hex digits of FNV-1a.
     pub etag: String,
-    /// The nodes by id, as in `nodes_json` (without `last_round`).
+    /// Every node by id, banned ones too, which `nodes_json` leaves out (without `last_round`).
     pub node_docs: BTreeMap<String, PublicNode>,
     /// The Telegram link of each `ProxyLink::id`, for the QR codes.
     pub link_index: BTreeMap<String, String>,
@@ -168,7 +168,13 @@ impl Snapshot {
             }
         }
 
-        let nodes_json = render(&nodes);
+        // A banned node is not part of the pool any more: it stays in the ban history, and its
+        // page opens from there, but the list does not show it.
+        let listed: Vec<&PublicNode> = nodes
+            .iter()
+            .filter(|n| !matches!(n.state, NodeState::Banned))
+            .collect();
+        let nodes_json = render(&listed);
         let domains_json = render(&domains);
         let links_json = render(&links);
         let etag = etag_of(&[&nodes_json, &domains_json, &links_json]);

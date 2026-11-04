@@ -309,6 +309,32 @@ fn seed_history(env: &Env) {
 // ---------------------------------------------------------------------------------------------
 
 #[tokio::test]
+async fn a_banned_node_leaves_the_list_and_keeps_its_page() {
+    let mut state = pool();
+    state
+        .nodes
+        .get_mut(&node_id("alpha-00001"))
+        .expect("alpha")
+        .state = mtpool_core::NodeState::Banned;
+    let env = env(state);
+
+    let list = get(&env, "/api/v1/nodes").await;
+    let ids: Vec<String> = list
+        .json()
+        .as_array()
+        .expect("an array")
+        .iter()
+        .map(|n| n["id"].as_str().expect("an id").to_owned())
+        .collect();
+    assert_eq!(ids, ["beta-00002"]);
+
+    // A ban in the history still leads somewhere.
+    let page = get(&env, "/api/v1/nodes/alpha-00001").await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    assert_eq!(page.json()["state"], "banned");
+}
+
+#[tokio::test]
 async fn nodes_mask_ip_and_hide_measurement_id() {
     use SensorKind::{Globalping, RedFlag};
     let env = env(pool());

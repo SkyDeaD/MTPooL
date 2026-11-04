@@ -400,18 +400,17 @@ impl Stand {
             .map_err(|e| StandError(format!("GET {path}: not JSON ({e}): {text}")))
     }
 
-    /// Waits until the node is in `state` in the public list.
+    /// Waits until the public API says the node is in `state`.
     pub async fn wait_state(&self, node_id: &str, state: &str, within: Duration) -> Result<()> {
         let deadline = Instant::now() + within;
         let mut last;
         loop {
-            match self.nodes().await {
-                Ok(nodes) => {
-                    let ours = nodes.iter().find(|n| n["id"] == node_id);
-                    if ours.is_some_and(|n| n["state"] == state) {
+            match self.node_state(node_id).await {
+                Ok(seen) => {
+                    if seen.as_deref() == Some(state) {
                         return Ok(());
                     }
-                    last = format!("{ours:#?}");
+                    last = format!("{seen:?}");
                 }
                 Err(error) => last = error.to_string(),
             }

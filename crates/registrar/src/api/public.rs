@@ -79,7 +79,7 @@ fn unknown(what: &str) -> ApiError {
     path = "/api/v1/nodes",
     tag = "public",
     responses(
-        (status = 200, description = "All nodes of the pool", body = Vec<PublicNode>,
+        (status = 200, description = "The nodes of the pool, without banned ones: those are in /api/v1/bans", body = Vec<PublicNode>,
             headers(("ETag" = String, description = "Changes with the pool; send it back in If-None-Match"))),
         (status = 304, description = "The client's copy is current"),
         (status = 429, description = "Too many requests", body = Problem, content_type = "application/problem+json",

@@ -16,7 +16,8 @@ use serde_json::Value;
 
 fn node_state(handle: &ActorHandle, node: &str) -> String {
     let snapshot = handle.snapshots().load();
-    let nodes: Value = serde_json::from_str(&snapshot.nodes_json).expect("nodes_json is JSON");
+    let nodes: Value = serde_json::to_value(snapshot.node_docs.values().collect::<Vec<_>>())
+        .expect("nodes are JSON");
     nodes
         .as_array()
         .expect("array")

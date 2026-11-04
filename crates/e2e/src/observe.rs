@@ -51,12 +51,26 @@ impl Stand {
 
     /// The state of one node in the public list, or `None` when the list does not have it.
     pub async fn node_state(&self, node_id: &str) -> Result<Option<String>> {
-        Ok(self
-            .nodes()
-            .await?
-            .iter()
-            .find(|n| n["id"] == node_id)
-            .and_then(|n| n["state"].as_str().map(str::to_owned)))
+        // The node's own page: the list leaves banned nodes out.
+        let response = self
+            .http
+            .get(format!(
+                "{}/api/v1/nodes/{node_id}",
+                self.registrar_url.get()
+            ))
+            .send()
+            .await
+            .map_err(|e| StandError(format!("GET the node: {}", e.without_url())))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let page: Value = response
+            .error_for_status()
+            .map_err(|e| StandError(format!("GET the node: {}", e.without_url())))?
+            .json()
+            .await
+            .map_err(|e| StandError(format!("GET the node: {}", e.without_url())))?;
+        Ok(page["state"].as_str().map(str::to_owned))
     }
 
     /// The dashboard numbers (`/api/v1/stats/summary`).
