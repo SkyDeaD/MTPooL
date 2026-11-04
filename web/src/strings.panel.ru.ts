@@ -95,7 +95,7 @@ export const panelMessages = {
   'panel.node.owner': 'Владелец',
   'panel.node.agent': 'Версия агента',
   'panel.node.heartbeat': 'Последний сигнал',
-  'panel.node.failed': 'Не прошла',
+  'panel.node.failed': 'Проверки',
   'panel.node.hint': 'Решение о бане принимается только при двух голосах «Заблокирована» от разных сенсоров. Воздержавшийся или недоступный сенсор не считается голосом.',
   'panel.rounds.title': 'Раунды проверок',
   'panel.rounds.sub': 'новые сверху, не больше 20',

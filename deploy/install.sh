@@ -2,7 +2,7 @@
 # MTPooL node installer. The registrar serves it at /install.sh with its own address, its public
 # signing key and the pool's settings written over the markers below.
 #
-#   curl -fsSL https://<pool>/install.sh | MTPOOL_TOKEN=<token> sh -s -- --name <name>
+#   curl -fsSL https://<pool>/install.sh | sudo env MTPOOL_TOKEN=<token> sh -s -- --name <name>
 #
 # Options:
 #   --name <name>        the name of this node (required)

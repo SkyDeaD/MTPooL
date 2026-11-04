@@ -1,6 +1,6 @@
 // The command that connects a node, as the spec gives it: the pool serves `install.sh` itself.
 export function installCommand(origin: string = window.location.origin): string {
-  return `curl -fsSL ${origin}/install.sh | MTPOOL_TOKEN=<токен> sh -s -- --name <имя>`;
+  return `curl -fsSL ${origin}/install.sh | sudo env MTPOOL_TOKEN=<токен> sh -s -- --name <имя>`;
 }
 
 /** Copies text; false if the browser refuses. */
