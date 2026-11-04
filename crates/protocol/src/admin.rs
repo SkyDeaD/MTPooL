@@ -46,6 +46,9 @@ pub struct TokenMeta {
     pub kind: String,
     pub prefix: String,
     pub owner_id: Option<i64>,
+    /// The node of a `node` token. The token goes with the node's record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
     pub scope: String,
     /// RFC 3339, UTC.
     pub created_at: String,

@@ -1687,6 +1687,15 @@
             }
           },
           {
+            "name": "kind",
+            "in": "query",
+            "description": "Only the tokens of this kind: `admin`, `enroll`, `node`, `bot` or `metrics`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "description": "1 to 200, default 50",
@@ -6275,6 +6284,13 @@
               "string",
               "null"
             ]
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The node of a `node` token. The token goes with the node's record."
           },
           "owner_id": {
             "type": [

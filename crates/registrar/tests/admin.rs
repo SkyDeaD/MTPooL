@@ -612,6 +612,54 @@ async fn stream_requires_an_admin_token() {
 }
 
 #[tokio::test]
+async fn token_list_names_the_node_and_filters_by_kind() {
+    let env = env(pool(vec![alpha()]));
+    let admin = admin_token(&env);
+    let a = owner(&env, "a", 5);
+    token(&env, TokenKind::Enroll, Some(a));
+    mtpool_registrar::auth::tokens::issue(
+        &env.store,
+        mtpool_registrar::auth::tokens::NewToken {
+            kind: TokenKind::Node,
+            owner: None,
+            node: Some(alpha().id),
+            expires_at: None,
+            scope: String::new(),
+        },
+    )
+    .unwrap();
+
+    let all = get(&env, "/api/v1/admin/tokens", &admin).await.json();
+    assert_eq!(all.as_array().unwrap().len(), 3, "{all}");
+    assert_eq!(all[0]["kind"], "node");
+    assert_eq!(all[0]["node_id"], "alpha-00001");
+    assert!(all[1].get("node_id").is_none(), "{all}");
+
+    let nodes = get(&env, "/api/v1/admin/tokens?kind=node", &admin)
+        .await
+        .json();
+    assert_eq!(nodes.as_array().unwrap().len(), 1, "{nodes}");
+    assert_eq!(nodes[0]["node_id"], "alpha-00001");
+
+    let scoped = get(
+        &env,
+        &format!("/api/v1/admin/tokens?kind=enroll&owner={}", a.0),
+        &admin,
+    )
+    .await
+    .json();
+    assert_eq!(scoped.as_array().unwrap().len(), 1, "{scoped}");
+
+    let none = get(&env, "/api/v1/admin/tokens?kind=bot", &admin)
+        .await
+        .json();
+    assert_eq!(none, json!([]));
+
+    let bad = get(&env, "/api/v1/admin/tokens?kind=nope", &admin).await;
+    assert_problem(&bad, StatusCode::BAD_REQUEST, "bad_request");
+}
+
+#[tokio::test]
 async fn a_quarantined_node_says_why_and_when_it_was_last_measured() {
     let mut sick = alpha();
     sick.state = NodeState::Quarantine;

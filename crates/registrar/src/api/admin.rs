@@ -683,6 +683,7 @@ fn token_meta(r: &rusqlite::Row<'_>) -> rusqlite::Result<TokenMeta> {
         expires_at: time(6)?,
         revoked_at: time(7)?,
         last_used_at: time(8)?,
+        node_id: r.get(9)?,
     })
 }
 
@@ -693,6 +694,7 @@ fn token_meta(r: &rusqlite::Row<'_>) -> rusqlite::Result<TokenMeta> {
     security(("bearer" = [])),
     params(
         ("owner" = Option<i64>, Query, description = "Only the tokens of this owner"),
+        ("kind" = Option<String>, Query, description = "Only the tokens of this kind: `admin`, `enroll`, `node`, `bot` or `metrics`"),
         ("limit" = Option<i64>, Query, description = "1 to 200, default 50"),
         ("before" = Option<i64>, Query, description = "Only tokens with a smaller id"),
     ),
@@ -715,14 +717,25 @@ pub async fn list_tokens(
                 .map_err(|_| ApiError::bad_request("owner must be an owner id."))?,
         ),
     };
+    let kind = match query.get("kind") {
+        None => None,
+        Some(text) => Some(
+            TokenKind::parse(text)
+                .map(|_| text.clone())
+                .ok_or_else(|| {
+                    ApiError::bad_request("kind must be admin, enroll, node, bot or metrics.")
+                })?,
+        ),
+    };
     let rows = read(&app, move |conn| {
         conn.prepare_cached(
             "SELECT id, kind, prefix, owner_id, scope, created_at, expires_at, revoked_at, \
-             last_used_at FROM tokens \
+             last_used_at, node_id FROM tokens \
              WHERE (?1 IS NULL OR owner_id = ?1) AND (?2 IS NULL OR id < ?2) \
+             AND (?4 IS NULL OR kind = ?4) \
              ORDER BY id DESC LIMIT ?3",
         )?
-        .query_map(params![owner, before, limit], token_meta)?
+        .query_map(params![owner, before, limit, kind], token_meta)?
         .collect::<rusqlite::Result<Vec<TokenMeta>>>()
     })
     .await?;
