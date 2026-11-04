@@ -40,6 +40,30 @@ jobs:
       - run: npm run build
       - run: npm run check:budget
 
+  browser:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      # The checks start a real registrar (built here) that serves web/dist, and the stand-ins of
+      # the outside services.
+      - name: Browser checks
+        run: npx playwright test
+      - name: Speed on a slow phone
+        run: npm run perf
+
   deny:
     runs-on: ubuntu-24.04
     steps:
