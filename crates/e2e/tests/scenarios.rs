@@ -74,7 +74,13 @@ async fn all_sensors_down_no_ban_then_pruned() {
     let (_node, id) = enroll_healthy(&stand, 1, "node-one").await;
     settings(
         &stand,
-        json!({"report_max_age_sec": 15, "quarantine_max_sec": 120}),
+        // The agent's last good report must not vote for Globalping here: it stays good for ten
+        // minutes by default, and this round is about sensors that are down.
+        json!({
+            "report_max_age_sec": 15,
+            "quarantine_max_sec": 120,
+            "globalping": {"vote_report_max_age_sec": 1},
+        }),
     )
     .await;
 
