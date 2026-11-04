@@ -909,6 +909,7 @@ async fn node_action(
 #[utoipa::path(
     post,
     path = "/api/v1/admin/nodes/{id}/retire",
+    operation_id = "admin_retire_node",
     tag = "admin",
     security(("bearer" = [])),
     params(("id" = String, Path, description = "The node id")),
@@ -932,6 +933,7 @@ pub async fn retire_node(
 #[utoipa::path(
     post,
     path = "/api/v1/admin/nodes/{id}/recheck",
+    operation_id = "admin_recheck_node",
     tag = "admin",
     security(("bearer" = [])),
     params(("id" = String, Path, description = "The node id")),
@@ -982,6 +984,7 @@ pub async fn unban_node(
 #[utoipa::path(
     get,
     path = "/api/v1/admin/domains",
+    operation_id = "admin_list_domains",
     tag = "admin",
     security(("bearer" = [])),
     responses(

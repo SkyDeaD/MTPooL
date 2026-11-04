@@ -85,7 +85,7 @@
         "tags": [
           "admin"
         ],
-        "operationId": "list_domains",
+        "operationId": "admin_list_domains",
         "responses": {
           "200": {
             "description": "The proxy domains",
@@ -340,7 +340,7 @@
         "tags": [
           "admin"
         ],
-        "operationId": "recheck_node",
+        "operationId": "admin_recheck_node",
         "parameters": [
           {
             "name": "id",
@@ -417,7 +417,7 @@
         "tags": [
           "admin"
         ],
-        "operationId": "retire_node",
+        "operationId": "admin_retire_node",
         "parameters": [
           {
             "name": "id",
@@ -2447,7 +2447,7 @@
         "tags": [
           "bot"
         ],
-        "operationId": "list_nodes",
+        "operationId": "list_my_nodes",
         "responses": {
           "200": {
             "description": "The owner's nodes, with full addresses",
@@ -2495,7 +2495,7 @@
         "tags": [
           "bot"
         ],
-        "operationId": "recheck_node",
+        "operationId": "recheck_my_node",
         "parameters": [
           {
             "name": "id",
@@ -2602,7 +2602,7 @@
         "tags": [
           "bot"
         ],
-        "operationId": "retire_node",
+        "operationId": "retire_my_node",
         "parameters": [
           {
             "name": "id",

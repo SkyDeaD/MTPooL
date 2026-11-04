@@ -18,3 +18,4 @@ web/dist/
 *.db-*
 deploy/minisign.pub
 e2e/keys/
+web/.ssr/

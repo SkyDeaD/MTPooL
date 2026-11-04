@@ -804,6 +804,18 @@ async fn empty_pool_returns_empty_lists_not_500() {
     }
 }
 
+#[test]
+fn operation_ids_are_unique() {
+    let doc: Value = serde_json::from_str(mtpool_registrar::api::openapi_pretty()).expect("JSON");
+    let mut seen = std::collections::BTreeSet::new();
+    for (path, item) in doc["paths"].as_object().expect("paths") {
+        for (method, operation) in item.as_object().expect("a path item") {
+            let id = operation["operationId"].as_str().expect("an operation id");
+            assert!(seen.insert(id.to_owned()), "{method} {path} repeats {id}");
+        }
+    }
+}
+
 #[tokio::test]
 async fn openapi_json_matches_committed_file() {
     let generated = mtpool_registrar::api::openapi_pretty();

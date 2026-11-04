@@ -1,0 +1,29 @@
+{
+  "name": "mtpool-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "vite",
+    "gen:api": "openapi-typescript ../docs/openapi.json -o src/lib/api-types.ts",
+    "test": "vitest run",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "build:client": "vite build",
+    "build:ssr": "vite build --ssr src/public/entry-server.ts --outDir .ssr",
+    "build": "rm -rf dist .ssr && npm run build:client && npm run build:ssr && node scripts/prerender.ts && node scripts/compress.ts",
+    "check:budget": "node scripts/check-budget.ts"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@types/node": "26.6.6",
+    "openapi-typescript": "7.13.0",
+    "svelte": "5.57.3",
+    "svelte-check": "4.7.8",
+    "typescript": "5.9.3",
+    "vite": "8.3.5",
+    "vitest": "5.1.0"
+  }
+}

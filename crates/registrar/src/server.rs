@@ -194,7 +194,7 @@ pub fn router(state: AppState) -> Router {
         .merge(admin)
         .merge(rollouts)
         .merge(metrics)
-        .fallback(api::not_found)
+        .fallback(crate::assets::fallback)
         .method_not_allowed_fallback(api::method_not_allowed)
         .with_state(state)
         // Outermost: the limit also covers routes that do not exist.

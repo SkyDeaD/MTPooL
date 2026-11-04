@@ -166,6 +166,7 @@ async fn own_node(app: &AppState, auth: &BotAuth, id: &str) -> Result<NodeId, Fa
 #[utoipa::path(
     get,
     path = "/api/v1/me/nodes",
+    operation_id = "list_my_nodes",
     tag = "bot",
     security(("bearer" = [])),
     responses(
@@ -216,6 +217,7 @@ pub async fn list_nodes(State(app): State<AppState>, auth: BotAuth) -> Result<Re
 #[utoipa::path(
     post,
     path = "/api/v1/me/nodes/{id}/retire",
+    operation_id = "retire_my_node",
     tag = "bot",
     security(("bearer" = [])),
     params(("id" = String, Path, description = "The node id")),
@@ -271,6 +273,7 @@ fn unclaim_recheck(app: &AppState, node: &NodeId, before: Option<Ts>) {
 #[utoipa::path(
     post,
     path = "/api/v1/me/nodes/{id}/recheck",
+    operation_id = "recheck_my_node",
     tag = "bot",
     security(("bearer" = [])),
     params(("id" = String, Path, description = "The node id")),
