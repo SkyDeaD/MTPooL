@@ -751,11 +751,10 @@ impl Settled {
 /// The counters of the other users of the engine: both directions or nothing. Like the pool's,
 /// they mean nothing from an engine that is not serving.
 fn other_traffic(metrics: &MetricsReport) -> Option<TrafficCounters> {
-    Some(TrafficCounters {
+    metrics.ok.then_some(TrafficCounters {
         from_client: metrics.other_from_client_total?,
         to_client: metrics.other_to_client_total?,
     })
-    .filter(|_| metrics.ok)
 }
 
 /// Claims the measurement id: `false` when it was used before, by any node.
