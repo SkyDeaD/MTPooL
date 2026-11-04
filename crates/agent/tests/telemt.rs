@@ -60,14 +60,13 @@ fn owner_config() -> String {
     format!("{TOML}owner = \"{OWNER}\" # the owner's own user, not the pool's\n")
 }
 
-fn desired(users: &[(&str, &str)], sni: &str, port: u16) -> DesiredConfig {
+fn desired(users: &[(&str, &str)], sni: &str) -> DesiredConfig {
     DesiredConfig {
         users: users
             .iter()
             .map(|(name, secret)| ((*name).to_owned(), (*secret).to_owned()))
             .collect(),
         sni: sni.to_owned(),
-        port,
     }
 }
 
@@ -88,9 +87,21 @@ impl<H: HttpGet + 'static> Rig<H> {
             .unwrap()
             .map(|bytes| String::from_utf8(bytes).unwrap())
     }
+    /// The names the pool remembers: the state file of an older agent is a bare list, a newer
+    /// one an object with the list under `users`.
     fn pool_users(&self) -> Option<Vec<String>> {
-        self.file(POOL_USERS)
-            .map(|text| serde_json::from_str(&text).unwrap())
+        let value: Value = serde_json::from_str(&self.file(POOL_USERS)?).unwrap();
+        let list = if value.is_array() {
+            value
+        } else {
+            value["users"].clone()
+        };
+        Some(serde_json::from_value(list).unwrap())
+    }
+    /// The TLS domain the pool remembers it added.
+    fn pool_sni(&self) -> Option<String> {
+        let value: Value = serde_json::from_str(&self.file(POOL_USERS)?).unwrap();
+        value["sni"].as_str().map(str::to_owned)
     }
     /// The `systemctl` calls as `verb unit` strings.
     fn systemctl(&self) -> Vec<String> {
@@ -816,18 +827,15 @@ async fn apply_preserves_comments_and_foreign_users() {
         .apply_config(&desired(
             &[("alice", ALICE), ("bob", BOB)],
             "cdn.example.org",
-            9443,
         ))
         .await
         .unwrap();
     assert_eq!(outcome, ApplyOutcome::Applied);
 
     let new = rig.config_text();
-    // Everything but the two changed values is untouched, comments and layout included.
+    // Nothing the owner wrote is touched: every line is still there, comments and layout
+    // included, and the pool's domain is a line of its own.
     for line in old.lines() {
-        if line.starts_with("port = ") || line.starts_with("tls_domain = ") {
-            continue;
-        }
         assert!(new.lines().any(|l| l == line), "lost: {line}");
     }
     assert!(new.contains("# telemt 3.5.16 test config for recording fixtures"));
@@ -835,8 +843,9 @@ async fn apply_preserves_comments_and_foreign_users() {
         "owner = \"{OWNER}\" # the owner's own user, not the pool's"
     )));
     let parsed = TelemtToml::parse(&new).unwrap();
-    assert_eq!(parsed.port(), 9443);
-    assert_eq!(parsed.tls_domain().as_deref(), Some("cdn.example.org"));
+    assert_eq!(parsed.port(), 8443);
+    assert_eq!(parsed.tls_domain().as_deref(), Some("example.com"));
+    assert_eq!(parsed.tls_domains(), ["example.com", "cdn.example.org"]);
     let users = parsed.users();
     for expected in [("alice", ALICE), ("bob", BOB), ("owner", OWNER)] {
         assert!(
@@ -873,7 +882,7 @@ async fn apply_removes_revoked_pool_user_keeps_owner_user() {
     let new_alice = "dddddddddddddddddddddddddddddddd";
     let outcome = rig
         .engine
-        .apply_config(&desired(&[("alice", new_alice)], "example.com", 8443))
+        .apply_config(&desired(&[("alice", new_alice)], "example.com"))
         .await
         .unwrap();
     assert_eq!(outcome, ApplyOutcome::Applied);
@@ -894,7 +903,7 @@ async fn a_user_the_pool_never_wrote_is_never_removed() {
     let rig = rig(&owner_config(), None);
     script_restart(&rig.runner);
     rig.engine
-        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .apply_config(&desired(&[("alice", ALICE)], "example.com"))
         .await
         .unwrap();
     let names: Vec<String> = TelemtToml::parse(&rig.config_text())
@@ -910,17 +919,19 @@ async fn a_user_the_pool_never_wrote_is_never_removed() {
 async fn apply_noop_when_unchanged_no_restart() {
     let config = format!(
         "{}alice = \"{ALICE}\"\n",
-        owner_config().replace("port = 8443", "port = 9443")
-    )
-    .replace(
-        "tls_domain = \"example.com\"",
-        "tls_domain = \"cdn.example.org\"",
+        owner_config().replace(
+            "tls_domain = \"example.com\"\n",
+            "tls_domain = \"example.com\"\ntls_domains = [\"cdn.example.org\"]\n",
+        )
     );
-    let rig = rig(&config, Some(r#"["alice"]"#));
+    let rig = rig(
+        &config,
+        Some(r#"{"users":["alice"],"sni":"cdn.example.org"}"#),
+    );
 
     let outcome = rig
         .engine
-        .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org", 9443))
+        .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org"))
         .await
         .unwrap();
     assert_eq!(outcome, ApplyOutcome::Unchanged);
@@ -939,7 +950,7 @@ async fn apply_unchanged_still_remembers_the_pool_users() {
     let rig = rig(&config, None);
     let outcome = rig
         .engine
-        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .apply_config(&desired(&[("alice", ALICE)], "example.com"))
         .await
         .unwrap();
     assert_eq!(outcome, ApplyOutcome::Unchanged);
@@ -973,7 +984,7 @@ async fn apply_rollback_when_metrics_not_ready_60s() {
     let old = owner_config();
     let rig = rig_with(Some(&old), Some(r#"["alice"]"#), |fs| BrokenWith {
         fs: fs.clone(),
-        marker: "port = 9443",
+        marker: "tls_domains",
         requests: 0.into(),
     });
     // stop, start (new), then the same again for the old file.
@@ -984,7 +995,7 @@ async fn apply_rollback_when_metrics_not_ready_60s() {
     let started = tokio::time::Instant::now();
     let outcome = rig
         .engine
-        .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org", 9443))
+        .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org"))
         .await
         .unwrap();
     let waited = started.elapsed();
@@ -1031,7 +1042,7 @@ async fn apply_waits_for_the_metrics_and_succeeds_when_they_come() {
     let started = tokio::time::Instant::now();
     let outcome = rig
         .engine
-        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .apply_config(&desired(&[("alice", ALICE)], "example.com"))
         .await
         .unwrap();
     assert_eq!(outcome, ApplyOutcome::Applied);
@@ -1053,7 +1064,7 @@ async fn apply_rolls_back_when_the_engine_does_not_start() {
 
     let outcome = rig
         .engine
-        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .apply_config(&desired(&[("alice", ALICE)], "example.com"))
         .await
         .unwrap();
     let ApplyOutcome::RolledBack(reason) = outcome else {
@@ -1074,7 +1085,7 @@ async fn apply_reports_a_rollback_that_fails_too() {
     }
     let error = rig
         .engine
-        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .apply_config(&desired(&[("alice", ALICE)], "example.com"))
         .await
         .unwrap_err();
     assert!(
@@ -1090,7 +1101,7 @@ async fn apply_does_not_touch_the_file_when_the_engine_cannot_be_stopped() {
     rig.runner.push_output(5, b""); // systemctl stop fails
     let error = rig
         .engine
-        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .apply_config(&desired(&[("alice", ALICE)], "example.com"))
         .await
         .unwrap_err();
     assert!(matches!(error, EngineError::Host(_)), "{error:?}");
@@ -1108,7 +1119,7 @@ async fn apply_refuses_a_configuration_without_any_user() {
     let rig = rig(config, Some(r#"["alice"]"#));
     let error = rig
         .engine
-        .apply_config(&desired(&[], "example.com", 8443))
+        .apply_config(&desired(&[], "example.com"))
         .await
         .unwrap_err();
     assert!(matches!(error, EngineError::Config(_)), "{error:?}");
@@ -1120,11 +1131,10 @@ async fn apply_refuses_a_configuration_without_any_user() {
 async fn apply_refuses_what_is_not_a_secret_or_a_domain() {
     let rig = rig(&owner_config(), None);
     for bad in [
-        desired(&[("alice", "not-hex")], "example.com", 8443),
-        desired(&[("a b", ALICE)], "example.com", 8443),
-        desired(&[("", ALICE)], "example.com", 8443),
-        desired(&[("alice", ALICE)], "", 8443),
-        desired(&[("alice", ALICE)], "example.com", 0),
+        desired(&[("alice", "not-hex")], "example.com"),
+        desired(&[("a b", ALICE)], "example.com"),
+        desired(&[("", ALICE)], "example.com"),
+        desired(&[("alice", ALICE)], ""),
     ] {
         let error = rig.engine.apply_config(&bad).await.unwrap_err();
         assert!(
@@ -1136,42 +1146,11 @@ async fn apply_refuses_what_is_not_a_secret_or_a_domain() {
 }
 
 #[tokio::test]
-async fn apply_creates_the_missing_tables_and_updates_listener_ports() {
-    let config = concat!(
-        // No middle proxy: no writers to wait for, so the recorded metrics count as serving.
-        "[general]\nuse_middle_proxy = false\n\n",
-        "[server]\nmetrics_port = 9090\n\n",
-        "[[server.listeners]]\nip = \"0.0.0.0\"\nport = 8443\n\n",
-        "[[server.listeners]]\nip = \"::\"\n",
-    );
-    let rig = rig(config, None);
-    script_restart(&rig.runner);
-    let outcome = rig
-        .engine
-        .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org", 9443))
-        .await
-        .unwrap();
-    assert_eq!(outcome, ApplyOutcome::Applied);
-    let new = rig.config_text();
-    let parsed: toml_edit::DocumentMut = new.parse().unwrap();
-    assert_eq!(parsed["server"]["port"].as_integer(), Some(9443));
-    assert_eq!(
-        parsed["censorship"]["tls_domain"].as_str(),
-        Some("cdn.example.org")
-    );
-    assert_eq!(parsed["access"]["users"]["alice"].as_str(), Some(ALICE));
-    let listeners = parsed["server"]["listeners"].as_array_of_tables().unwrap();
-    assert_eq!(listeners.get(0).unwrap()["port"].as_integer(), Some(9443));
-    // A listener without a port keeps following `[server] port`.
-    assert!(listeners.get(1).unwrap().get("port").is_none());
-}
-
-#[tokio::test]
 async fn apply_without_a_config_file_is_an_error_and_starts_nothing() {
     let rig = rig_with(None, None, |_| ScriptedHttp::new());
     let error = rig
         .engine
-        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .apply_config(&desired(&[("alice", ALICE)], "example.com"))
         .await
         .unwrap_err();
     assert!(matches!(error, EngineError::Config(_)), "{error:?}");
@@ -1185,7 +1164,7 @@ async fn apply_with_a_broken_state_file_keeps_nothing_it_cannot_prove() {
     let rig = rig(&config, Some("not json"));
     script_restart(&rig.runner);
     rig.engine
-        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .apply_config(&desired(&[("alice", ALICE)], "example.com"))
         .await
         .unwrap();
     let names: Vec<String> = TelemtToml::parse(&rig.config_text())
@@ -1213,7 +1192,7 @@ async fn apply_is_ready_when_the_metrics_answer_even_without_me_writers() {
     script_restart(&rig.runner);
     let outcome = rig
         .engine
-        .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org", 9443))
+        .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org"))
         .await
         .unwrap();
     assert_eq!(outcome, ApplyOutcome::Applied);
@@ -1241,7 +1220,7 @@ async fn apply_adds_a_metrics_listener_when_the_file_names_none() {
     script_restart(&rig.runner);
     let outcome = rig
         .engine
-        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .apply_config(&desired(&[("alice", ALICE)], "example.com"))
         .await
         .unwrap();
     assert_eq!(outcome, ApplyOutcome::Applied);
@@ -1258,7 +1237,7 @@ async fn apply_adds_a_metrics_listener_when_the_file_names_none() {
     // The second time there is nothing to change.
     let again = rig
         .engine
-        .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+        .apply_config(&desired(&[("alice", ALICE)], "example.com"))
         .await
         .unwrap();
     assert_eq!(again, ApplyOutcome::Unchanged);
@@ -1281,12 +1260,388 @@ async fn apply_leaves_the_metrics_keys_the_owner_set() {
         });
         script_restart(&rig.runner);
         rig.engine
-            .apply_config(&desired(&[("alice", ALICE)], "example.com", 8443))
+            .apply_config(&desired(&[("alice", ALICE)], "example.com"))
             .await
             .unwrap();
         let new = rig.config_text();
         assert!(new.contains(keys), "{new}");
         assert_eq!(new.matches("metrics_").count(), 1, "{new}");
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The owner's configuration is added to, not overwritten
+// ---------------------------------------------------------------------------------------------
+
+/// The recorded config with `extra` lines right after `tls_domain` in `[censorship]`.
+fn censorship_with(extra: &str) -> String {
+    let config = owner_config().replace(
+        "tls_domain = \"example.com\"\n",
+        &format!("tls_domain = \"example.com\"\n{extra}"),
+    );
+    assert!(extra.is_empty() || config != owner_config());
+    config
+}
+
+/// Applies alice with `sni` to `config` (and `state`), the engine starting fine, and returns the
+/// rig with the outcome.
+async fn apply_alice(
+    config: &str,
+    state: Option<&str>,
+    sni: &str,
+) -> (Rig<ScriptedHttp>, ApplyOutcome) {
+    let rig = rig(config, state);
+    script_restart(&rig.runner);
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], sni))
+        .await
+        .unwrap();
+    (rig, outcome)
+}
+
+fn parsed(text: &str) -> toml_edit::DocumentMut {
+    text.parse().unwrap()
+}
+
+fn strings(item: &toml_edit::Item) -> Vec<&str> {
+    item.as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect()
+}
+
+fn keys(item: &toml_edit::Item) -> Vec<&str> {
+    item.as_table_like()
+        .unwrap()
+        .iter()
+        .map(|(k, _)| k)
+        .collect()
+}
+
+#[tokio::test]
+async fn owner_config_ends_with_two_users_and_two_domains() {
+    let (rig, outcome) = apply_alice(&owner_config(), None, "cdn.example.org").await;
+    assert_eq!(outcome, ApplyOutcome::Applied);
+    let doc = parsed(&rig.config_text());
+    // The owner's user, domain and port are what they were.
+    assert_eq!(doc["access"]["users"]["owner"].as_str(), Some(OWNER));
+    assert!(doc["access"]["users"]["probe"].as_str().is_some());
+    assert_eq!(
+        doc["censorship"]["tls_domain"].as_str(),
+        Some("example.com")
+    );
+    assert_eq!(doc["server"]["port"].as_integer(), Some(8443));
+    // The pool's user and domain are next to them.
+    assert_eq!(doc["access"]["users"]["alice"].as_str(), Some(ALICE));
+    assert_eq!(
+        strings(&doc["censorship"]["tls_domains"]),
+        ["cdn.example.org"]
+    );
+    assert_eq!(rig.pool_sni().as_deref(), Some("cdn.example.org"));
+    // The owner's native link still works: the port the node reports is its own.
+    assert_eq!(rig.engine.port(), Some(8443));
+}
+
+#[tokio::test]
+async fn tls_domain_is_written_only_when_absent() {
+    // Present: whatever it says stays.
+    let (rig, _) = apply_alice(&owner_config(), None, "cdn.example.org").await;
+    assert_eq!(
+        parsed(&rig.config_text())["censorship"]["tls_domain"].as_str(),
+        Some("example.com")
+    );
+
+    // Absent: the pool's domain is the one, and it needs no second entry.
+    let without = owner_config().replace("tls_domain = \"example.com\"\n", "");
+    assert_ne!(without, owner_config());
+    let (rig, outcome) = apply_alice(&without, None, "cdn.example.org").await;
+    assert_eq!(outcome, ApplyOutcome::Applied);
+    let doc = parsed(&rig.config_text());
+    assert_eq!(
+        doc["censorship"]["tls_domain"].as_str(),
+        Some("cdn.example.org")
+    );
+    assert!(doc["censorship"].get("tls_domains").is_none());
+
+    // No `[censorship]` table at all: it is made.
+    let bare = "[server]\nport = 8443\nmetrics_port = 9090\n\n[access.users]\nprobe = \"00112233445566778899aabbccddeeff\"\n";
+    let (rig, _) = apply_alice(bare, None, "cdn.example.org").await;
+    let doc = parsed(&rig.config_text());
+    assert_eq!(
+        doc["censorship"]["tls_domain"].as_str(),
+        Some("cdn.example.org")
+    );
+    assert_eq!(doc["server"]["port"].as_integer(), Some(8443));
+}
+
+#[tokio::test]
+async fn sni_equal_to_the_primary_domain_adds_nothing() {
+    let (rig, outcome) = apply_alice(&owner_config(), None, "example.com").await;
+    assert_eq!(outcome, ApplyOutcome::Applied);
+    let doc = parsed(&rig.config_text());
+    assert!(doc["censorship"].get("tls_domains").is_none());
+    assert_eq!(
+        doc["censorship"]["tls_domain"].as_str(),
+        Some("example.com")
+    );
+    assert_eq!(doc["access"]["users"]["alice"].as_str(), Some(ALICE));
+
+    // Already listed by the owner as well: still one entry.
+    let listed = censorship_with("tls_domains = [\"example.com\"]\n");
+    let (rig, _) = apply_alice(&listed, None, "example.com").await;
+    assert_eq!(
+        strings(&parsed(&rig.config_text())["censorship"]["tls_domains"]),
+        ["example.com"]
+    );
+}
+
+#[tokio::test]
+async fn owner_extra_domains_stay_and_only_the_previous_pool_sni_goes() {
+    let config = format!(
+        "{}alice = \"{ALICE}\"\n",
+        censorship_with(concat!(
+            "tls_domains = [\n",
+            "    \"one.example.net\", # the owner's\n",
+            "    \"old.example.org\",\n",
+            "    \"two.example.net\",\n",
+            "]\n",
+        ))
+    );
+    let state = r#"{"users":["alice"],"sni":"old.example.org"}"#;
+    let (rig, outcome) = apply_alice(&config, Some(state), "new.example.org").await;
+    assert_eq!(outcome, ApplyOutcome::Applied);
+    let new = rig.config_text();
+    let doc = parsed(&new);
+    assert_eq!(
+        strings(&doc["censorship"]["tls_domains"]),
+        ["one.example.net", "two.example.net", "new.example.org"]
+    );
+    assert!(new.contains("\"one.example.net\", # the owner's"), "{new}");
+    assert_eq!(rig.pool_sni().as_deref(), Some("new.example.org"));
+
+    // The pool's domain did not change: nothing to do.
+    let again = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "new.example.org"))
+        .await
+        .unwrap();
+    assert_eq!(again, ApplyOutcome::Unchanged);
+
+    // Nothing is known of an earlier domain (state of an older agent): nothing is removed.
+    let (rig, _) = apply_alice(&config, Some(r#"["alice"]"#), "new.example.org").await;
+    assert_eq!(
+        strings(&parsed(&rig.config_text())["censorship"]["tls_domains"]),
+        [
+            "one.example.net",
+            "old.example.org",
+            "two.example.net",
+            "new.example.org"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn exclusive_mask_needs_an_explicit_mask_true() {
+    let table = "[censorship.exclusive_mask]\n\"owner.example.net\" = \"owner.example.net:443\"\n";
+    for (mask, expected) in [
+        ("", false),
+        ("mask = false\n", false),
+        ("mask = true\n", true),
+    ] {
+        let config = format!("{}{table}", censorship_with(mask));
+        let (rig, _) = apply_alice(&config, None, "cdn.example.org").await;
+        let doc = parsed(&rig.config_text());
+        let masks = doc["censorship"]["exclusive_mask"].as_table_like().unwrap();
+        assert_eq!(masks.contains_key("cdn.example.org"), expected, "{mask:?}");
+        if expected {
+            assert_eq!(
+                masks.get("cdn.example.org").and_then(|v| v.as_str()),
+                Some("cdn.example.org:443")
+            );
+        }
+    }
+    // No table yet: it is made when the mask is on, and not when it is not.
+    let (rig, _) = apply_alice(&censorship_with("mask = true\n"), None, "cdn.example.org").await;
+    assert_eq!(
+        parsed(&rig.config_text())["censorship"]["exclusive_mask"]["cdn.example.org"].as_str(),
+        Some("cdn.example.org:443")
+    );
+    let (rig, _) = apply_alice(&owner_config(), None, "cdn.example.org").await;
+    assert!(
+        parsed(&rig.config_text())["censorship"]
+            .get("exclusive_mask")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn owner_mask_entries_stay() {
+    let config = format!(
+        "{}[censorship.exclusive_mask]\n# the owner's\n\"owner.example.net\" = \"owner.example.net:8443\"\n",
+        censorship_with("mask = true\n")
+    );
+    let (rig, _) = apply_alice(&config, None, "cdn.example.org").await;
+    let new = rig.config_text();
+    assert!(
+        new.contains("# the owner's\n\"owner.example.net\" = \"owner.example.net:8443\"\n"),
+        "{new}"
+    );
+    let doc = parsed(&new);
+    assert_eq!(
+        doc["censorship"]["exclusive_mask"]["cdn.example.org"].as_str(),
+        Some("cdn.example.org:443")
+    );
+    // An entry of the owner's under the pool's own name is not replaced either.
+    let theirs = format!(
+        "{}[censorship.exclusive_mask]\n\"cdn.example.org\" = \"elsewhere.example.net:443\"\n",
+        censorship_with("mask = true\n")
+    );
+    let (rig, _) = apply_alice(&theirs, None, "cdn.example.org").await;
+    assert_eq!(
+        parsed(&rig.config_text())["censorship"]["exclusive_mask"]["cdn.example.org"].as_str(),
+        Some("elsewhere.example.net:443")
+    );
+}
+
+#[tokio::test]
+async fn previous_pool_mask_entry_goes_on_sni_change() {
+    let table = concat!(
+        "[censorship.exclusive_mask]\n",
+        "\"owner.example.net\" = \"owner.example.net:443\"\n",
+        "\"old.example.org\" = \"old.example.org:443\"\n",
+    );
+    let state = r#"{"users":["alice"],"sni":"old.example.org"}"#;
+    let with_alice = |mask: &str| format!("{}alice = \"{ALICE}\"\n{table}", censorship_with(mask));
+    // The mask is on: the old entry is swapped for the new one, the owner's stays.
+    let (rig, _) = apply_alice(&with_alice("mask = true\n"), Some(state), "new.example.org").await;
+    let doc = parsed(&rig.config_text());
+    assert_eq!(
+        keys(&doc["censorship"]["exclusive_mask"]),
+        ["owner.example.net", "new.example.org"]
+    );
+
+    // The mask has been turned off since: the old entry still goes, no new one comes.
+    let (rig, _) = apply_alice(
+        &with_alice("mask = false\n"),
+        Some(state),
+        "new.example.org",
+    )
+    .await;
+    let doc = parsed(&rig.config_text());
+    assert_eq!(
+        keys(&doc["censorship"]["exclusive_mask"]),
+        ["owner.example.net"]
+    );
+
+    // An entry of that name that is not the pool's shape is the owner's and stays.
+    let theirs = with_alice("mask = true\n").replace("old.example.org:443", "else.example.net:443");
+    let (rig, _) = apply_alice(&theirs, Some(state), "new.example.org").await;
+    let doc = parsed(&rig.config_text());
+    assert_eq!(
+        doc["censorship"]["exclusive_mask"]["old.example.org"].as_str(),
+        Some("else.example.net:443")
+    );
+}
+
+#[tokio::test]
+async fn engine_port_is_never_written() {
+    // The port differs from the pool's in `[server]`.
+    let (rig, _) = apply_alice(&owner_config(), None, "cdn.example.org").await;
+    let doc = parsed(&rig.config_text());
+    assert_eq!(doc["server"]["port"].as_integer(), Some(8443));
+
+    // In a listener, which keeps its own port; the one without keeps having none.
+    let config = concat!(
+        // No middle proxy: no writers to wait for, so the recorded metrics count as serving.
+        "[general]\nuse_middle_proxy = false\n\n",
+        "[server]\nmetrics_port = 9090\n\n",
+        "[[server.listeners]]\nip = \"0.0.0.0\"\nport = 8443\n\n",
+        "[[server.listeners]]\nip = \"::\"\n",
+    );
+    let (rig, outcome) = apply_alice(config, None, "cdn.example.org").await;
+    assert_eq!(outcome, ApplyOutcome::Applied);
+    let new = rig.config_text();
+    let doc = parsed(&new);
+    assert!(doc["server"].get("port").is_none(), "{new}");
+    let listeners = doc["server"]["listeners"].as_array_of_tables().unwrap();
+    assert_eq!(listeners.get(0).unwrap()["port"].as_integer(), Some(8443));
+    assert!(listeners.get(1).unwrap().get("port").is_none());
+    // The missing tables are made, the pool's user is in.
+    assert_eq!(doc["access"]["users"]["alice"].as_str(), Some(ALICE));
+    assert_eq!(
+        doc["censorship"]["tls_domain"].as_str(),
+        Some("cdn.example.org")
+    );
+
+    // Absent everywhere: telemt's default stays the default.
+    let bare = "[server]\nmetrics_port = 9090\n";
+    let (rig, _) = apply_alice(bare, None, "cdn.example.org").await;
+    assert!(parsed(&rig.config_text())["server"].get("port").is_none());
+}
+
+#[tokio::test]
+async fn second_apply_changes_nothing_and_does_not_restart() {
+    let config = censorship_with("mask = true\n");
+    let (rig, first) = apply_alice(&config, None, "cdn.example.org").await;
+    assert_eq!(first, ApplyOutcome::Applied);
+    let written = rig.config_text();
+    let calls = rig.runner.calls().len();
+    let requests = rig.http.requests().len();
+
+    let second = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org"))
+        .await
+        .unwrap();
+    assert_eq!(second, ApplyOutcome::Unchanged);
+    assert_eq!(rig.config_text(), written, "byte for byte");
+    assert_eq!(rig.runner.calls().len(), calls, "no restart");
+    assert_eq!(rig.http.requests().len(), requests);
+}
+
+#[tokio::test]
+async fn state_file_of_an_older_agent_still_loads() {
+    // The old file is a bare list of names, with no domain in it.
+    let config = format!("{}alice = \"{ALICE}\"\nbob = \"{BOB}\"\n", owner_config());
+    let (rig, outcome) = apply_alice(&config, Some(r#"["alice","bob"]"#), "cdn.example.org").await;
+    assert_eq!(outcome, ApplyOutcome::Applied);
+    let names: Vec<String> = TelemtToml::parse(&rig.config_text())
+        .unwrap()
+        .users()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    // The names were read: bob, the pool's and revoked, is gone, the owner's stay.
+    assert!(!names.contains(&"bob".to_owned()), "{names:?}");
+    assert!(names.contains(&"owner".to_owned()), "{names:?}");
+    // From now on the file has both.
+    assert_eq!(rig.pool_users(), Some(vec!["alice".to_owned()]));
+    assert_eq!(rig.pool_sni().as_deref(), Some("cdn.example.org"));
+}
+
+#[tokio::test]
+async fn tls_domains_of_a_wrong_type_is_an_error_and_writes_nothing() {
+    for wrong in [
+        "tls_domains = \"one.example.net\"\n",
+        "tls_domains = [\"a\", 1]\n",
+    ] {
+        let config = censorship_with(wrong);
+        let rig = rig(&config, None);
+        let error = rig
+            .engine
+            .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, EngineError::Config(_)),
+            "{wrong}: {error:?}"
+        );
+        assert!(rig.runner.calls().is_empty());
+        assert_eq!(rig.config_text(), config);
+        assert_eq!(rig.file(BACKUP), None);
+        assert_eq!(rig.pool_users(), None);
     }
 }
 
@@ -1319,7 +1674,9 @@ async fn the_config_sink_applies_what_the_registrar_sent() {
         .apply(&agent_config(&[("alice", ALICE)], "cdn.example.org", 9443))
         .await;
     let parsed = TelemtToml::parse(&rig.config_text()).unwrap();
-    assert_eq!(parsed.port(), 9443);
+    // The port is the owner's; the pool's domain and user are added.
+    assert_eq!(parsed.port(), 8443);
+    assert_eq!(parsed.tls_domains(), ["example.com", "cdn.example.org"]);
     assert!(parsed.users().iter().any(|(name, _)| name == "alice"));
     // A failure is logged, not raised: the lifecycle goes on and asks again next round.
     let broken = rig_with(None, None, |_| ScriptedHttp::new());
@@ -1335,6 +1692,6 @@ fn desired_config_comes_from_the_agent_config() {
     let config = agent_config(&[("alice", ALICE), ("bob", BOB)], "cdn.example.org", 9443);
     assert_eq!(
         DesiredConfig::from(&config),
-        desired(&[("alice", ALICE), ("bob", BOB)], "cdn.example.org", 9443)
+        desired(&[("alice", ALICE), ("bob", BOB)], "cdn.example.org")
     );
 }

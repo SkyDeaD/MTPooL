@@ -40,10 +40,16 @@ const SUPEREXPERT_KEY: &str = "SUPEREXPERT_ENABLED";
 /// One change made through the CLI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Step {
-    AddSecret { name: String, secret: String },
-    RemoveSecret { name: String },
+    AddSecret {
+        name: String,
+        secret: String,
+    },
+    RemoveSecret {
+        name: String,
+    },
     SetDomains(Vec<String>),
-    SetMask(Vec<String>),
+    /// Pairs of domain and target.
+    SetMask(Vec<(String, String)>),
 }
 
 impl Step {
@@ -68,11 +74,11 @@ impl Step {
                 args.push("--no-apply".to_owned());
                 args
             }
-            Step::SetMask(domains) => {
+            Step::SetMask(pairs) => {
                 let mut args = own(&["expert", "set", "--raw", "censorship.exclusive_mask"]);
-                for domain in domains {
+                for (domain, target) in pairs {
                     args.push(domain.clone());
-                    args.push(format!("{domain}:443"));
+                    args.push(target.clone());
                 }
                 args.push("--no-apply".to_owned());
                 args
@@ -206,8 +212,14 @@ impl<R: CommandRunner + 'static, H: HttpGet + 'static> MtProxyLEngine<R, H> {
     }
 
     /// The steps that take the engine from what `config` has to what `desired` asks, and what
-    /// undoes each. Only the users the pool wrote before (`managed`) are ever removed.
-    fn plan(config: &TelemtToml, desired: &DesiredConfig, managed: &[String]) -> Vec<Planned> {
+    /// undoes each. Only the users and the domain the pool wrote before (`pool`) are ever
+    /// removed; the owner's extra domains and mask pairs are carried along as they are.
+    fn plan(
+        config: &TelemtToml,
+        desired: &DesiredConfig,
+        pool: &telemt::PoolState,
+    ) -> Result<Vec<Planned>> {
+        let managed = &pool.users;
         let have = config.users();
         let secret_of = |name: &str| have.iter().find(|(n, _)| n == name).map(|(_, s)| s.clone());
         let mut steps = Vec::new();
@@ -255,19 +267,48 @@ impl<R: CommandRunner + 'static, H: HttpGet + 'static> MtProxyLEngine<R, H> {
             }
         }
 
-        let domains = config.tls_domains();
-        if !domains.contains(&desired.sni) {
-            let one = vec![desired.sni.clone()];
+        let sni = desired.sni.as_str();
+        let previous = pool.sni.as_deref().filter(|previous| *previous != sni);
+
+        // The extras are what the CLI sets; the primary `tls_domain` is not among them.
+        let extras = config.extra_tls_domains()?;
+        let mut wanted: Vec<String> = extras
+            .iter()
+            .filter(|domain| Some(domain.as_str()) != previous)
+            .cloned()
+            .collect();
+        let listed = config.tls_domain().as_deref() == Some(sni) || wanted.iter().any(|d| d == sni);
+        if !listed {
+            wanted.push(sni.to_owned());
+        }
+        if wanted != extras {
             steps.push(Planned {
-                step: Step::SetDomains(one.clone()),
-                undo: (!domains.is_empty()).then(|| Step::SetDomains(domains.clone())),
-            });
-            steps.push(Planned {
-                step: Step::SetMask(one),
-                undo: (!domains.is_empty()).then_some(Step::SetMask(domains)),
+                step: Step::SetDomains(wanted),
+                // Nothing recorded says the CLI takes an empty list. An extra domain left behind
+                // by a failed apply does no harm; a rollback that fails is reported as broken.
+                undo: (!extras.is_empty()).then_some(Step::SetDomains(extras)),
             });
         }
-        steps
+
+        let pairs = config.exclusive_mask()?;
+        let pool_target = |domain: &str| format!("{domain}:443");
+        let mut wanted: Vec<(String, String)> = pairs
+            .iter()
+            .filter(|(domain, target)| {
+                !(Some(domain.as_str()) == previous && *target == pool_target(domain))
+            })
+            .cloned()
+            .collect();
+        if !wanted.iter().any(|(domain, _)| domain == sni) {
+            wanted.push((sni.to_owned(), pool_target(sni)));
+        }
+        if wanted != pairs {
+            steps.push(Planned {
+                step: Step::SetMask(wanted),
+                undo: (!pairs.is_empty()).then_some(Step::SetMask(pairs)),
+            });
+        }
+        Ok(steps)
     }
 
     /// Reads `SUPEREXPERT_ENABLED`; `Some(true)` if it is on in any of the forms the manager
@@ -415,14 +456,15 @@ impl<R: CommandRunner + 'static, H: HttpGet + 'static> Engine for MtProxyLEngine
         self.reader.health().await
     }
 
-    /// The port is not applied: the CLI has no way to set it.
+    /// Neither the port nor the primary domain is applied: the pool never writes the first, and
+    /// the CLI has no way to set the second.
     async fn apply_config(&self, desired: &DesiredConfig) -> Result<ApplyOutcome> {
         telemt::validate(desired)?;
         let (_, config) = self.reader.load()?;
-        let managed = self.reader.pool_users();
-        let names: Vec<String> = desired.users.iter().map(|(name, _)| name.clone()).collect();
+        let before = self.reader.pool_state();
+        let after = telemt::pool_state_of(desired);
 
-        let steps = Self::plan(&config, desired, &managed);
+        let steps = Self::plan(&config, desired, &before)?;
         // The users the engine is left with: its own, without the ones removed, plus the new.
         let removed = |name: &str| {
             steps
@@ -446,8 +488,8 @@ impl<R: CommandRunner + 'static, H: HttpGet + 'static> Engine for MtProxyLEngine
         }
 
         if steps.is_empty() {
-            if managed != names {
-                self.reader.remember_pool_users(&names);
+            if before != after {
+                self.reader.remember_pool_state(&after);
             }
             return Ok(ApplyOutcome::Unchanged);
         }
@@ -456,7 +498,7 @@ impl<R: CommandRunner + 'static, H: HttpGet + 'static> Engine for MtProxyLEngine
         let mut undo = Vec::new();
         match self.forward(&steps, &mut undo).await {
             Ok(()) => {
-                self.reader.remember_pool_users(&names);
+                self.reader.remember_pool_state(&after);
                 Ok(ApplyOutcome::Applied)
             }
             Err(reason) => match self.back(&undo).await {

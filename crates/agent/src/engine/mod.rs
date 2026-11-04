@@ -1,8 +1,8 @@
 //! The proxy engine on the node. [`Engine`] is what the agent needs from it: its metrics, its
-//! health and a way to apply the pool's users, domain and port. [`telemt::TelemtEngine`] is the
-//! adapter for telemt, [`meko::MekoEngine`] runs it on a MEKO host, [`mtproxyl::MtProxyLEngine`]
-//! drives MTProxyL through its command line, and [`detect::detect_engine`] says which of them
-//! the host has.
+//! health and a way to add the pool's users and domain to its configuration.
+//! [`telemt::TelemtEngine`] is the adapter for telemt, [`meko::MekoEngine`] runs it on a MEKO
+//! host, [`mtproxyl::MtProxyLEngine`] drives MTProxyL through its command line, and
+//! [`detect::detect_engine`] says which of them the host has.
 
 use async_trait::async_trait;
 use mtpool_protocol::agent::{AgentConfig, Dc2Report, MetricsReport};
@@ -50,7 +50,8 @@ pub struct DesiredConfig {
     pub users: Vec<(String, String)>,
     /// The TLS domain the proxy pretends to be.
     pub sni: String,
-    pub port: u16,
+    // There is no port: the engine's is its owner's, the node reports it, and the pool takes
+    // the node in only if it matches.
 }
 
 impl From<&AgentConfig> for DesiredConfig {
@@ -62,7 +63,6 @@ impl From<&AgentConfig> for DesiredConfig {
                 .map(|user| (user.name.clone(), user.secret_hex.clone()))
                 .collect(),
             sni: config.sni.clone(),
-            port: config.port,
         }
     }
 }

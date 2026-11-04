@@ -19,6 +19,9 @@ listen = "127.0.0.1:9091"
 [censorship]
 tls_domain = "example.com"
 
+[censorship.exclusive_mask]
+"example.com" = "example.com:443"
+
 [access.users]
 alice = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 owner = "cccccccccccccccccccccccccccccccc"

@@ -1,7 +1,9 @@
 //! The telemt adapter. telemt keeps its settings in `/etc/telemt/telemt.toml`, serves Prometheus
 //! text on `/metrics` and (if the file says so) a JSON control API on the loopback. The pool's
-//! users, the TLS domain and the port are written into that file; telemt reads them when it
-//! starts, so a change is a restart that is rolled back if telemt does not come up.
+//! users and the TLS domain are added to that file, next to the owner's own; telemt reads them
+//! when it starts, so a change is a restart that is rolled back if telemt does not come up. The
+//! owner's user, domain and port are never changed: the port is the engine's, and the node
+//! reports it.
 //!
 //! Everything the adapter does on the host goes through [`CommandRunner`] (`systemctl`), [`Fs`]
 //! (the files) and [`HttpGet`] (the loopback), so tests script all three.
@@ -26,8 +28,8 @@ use crate::state_files::Fs;
 
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/telemt/telemt.toml";
 pub const DEFAULT_UNIT: &str = "telemt.service";
-/// The file in the state directory with the names of the users the pool wrote into the engine's
-/// configuration. Only those are ever removed from it.
+/// The file in the state directory with what the pool wrote into the engine's configuration: the
+/// names of its users and its TLS domain. Only those are ever removed from it.
 pub const POOL_USERS_FILE: &str = "pool_users.json";
 
 /// How long a restarted telemt has to answer its metrics.
@@ -140,6 +142,36 @@ impl TelemtToml {
         domains
     }
 
+    /// The entries of `[censorship] tls_domains`, the owner's extra domains. An error if the key
+    /// is not an array of strings.
+    pub fn extra_tls_domains(&self) -> Result<Vec<String>> {
+        match self.value_of(&["censorship"], "tls_domains") {
+            None => Ok(Vec::new()),
+            Some(item) => strings_of(item).ok_or_else(wrong_tls_domains),
+        }
+    }
+
+    /// `[censorship.exclusive_mask]`: domain and target, in the order of the file. An error if it
+    /// is not a table of strings.
+    pub fn exclusive_mask(&self) -> Result<Vec<(String, String)>> {
+        let Some(item) = self.value_of(&["censorship"], "exclusive_mask") else {
+            return Ok(Vec::new());
+        };
+        item.as_table_like()
+            .and_then(|table| {
+                table
+                    .iter()
+                    .map(|(key, value)| Some((key.to_owned(), value.as_str()?.to_owned())))
+                    .collect()
+            })
+            .ok_or_else(|| {
+                EngineError::Config(
+                    "`censorship.exclusive_mask` in telemt.toml is not a table of strings"
+                        .to_owned(),
+                )
+            })
+    }
+
     /// `[access.users]`: name and secret, in the order of the file.
     pub fn users(&self) -> Vec<(String, String)> {
         self.table(&["access", "users"])
@@ -194,6 +226,66 @@ impl TelemtToml {
         self.value_of(&["general"], "use_middle_proxy")
             .and_then(Item::as_bool)
             .unwrap_or(true)
+    }
+}
+
+fn strings_of(item: &Item) -> Option<Vec<String>> {
+    item.as_array()?
+        .iter()
+        .map(|value| value.as_str().map(str::to_owned))
+        .collect()
+}
+
+fn wrong_tls_domains() -> EngineError {
+    EngineError::Config(
+        "`censorship.tls_domains` in telemt.toml is not an array of strings".to_owned(),
+    )
+}
+
+/// What the pool remembers of its own writes: the names of its users and the TLS domain it added.
+/// Only these are ever taken out of the engine's configuration again.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct PoolState {
+    pub users: Vec<String>,
+    /// The pool's TLS domain of the last applied configuration. An agent that wrote the file
+    /// before this existed left none: nothing is known of an earlier domain then.
+    pub sni: Option<String>,
+}
+
+impl PoolState {
+    /// The state file is `{"users": [...], "sni": "..."}`; an older agent wrote a bare list of
+    /// names. Anything else is nothing known.
+    fn parse(bytes: &[u8]) -> Option<PoolState> {
+        let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+        let names = |list: &serde_json::Value| -> Option<Vec<String>> {
+            list.as_array()?
+                .iter()
+                .map(|name| name.as_str().map(str::to_owned))
+                .collect()
+        };
+        match &value {
+            serde_json::Value::Array(_) => Some(PoolState {
+                users: names(&value)?,
+                sni: None,
+            }),
+            serde_json::Value::Object(map) => Some(PoolState {
+                users: names(map.get("users")?)?,
+                sni: map
+                    .get("sni")
+                    .and_then(|sni| sni.as_str())
+                    .map(str::to_owned),
+            }),
+            _ => None,
+        }
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut object = serde_json::Map::new();
+        object.insert("users".to_owned(), serde_json::json!(self.users));
+        if let Some(sni) = &self.sni {
+            object.insert("sni".to_owned(), serde_json::json!(sni));
+        }
+        serde_json::to_vec(&object).expect("a map of strings is json")
     }
 }
 
@@ -306,27 +398,26 @@ impl<R: CommandRunner, H: HttpGet> TelemtEngine<R, H> {
         self.state_dir.join(POOL_USERS_FILE)
     }
 
-    /// The names the pool wrote before. A list that cannot be read is an empty one: the pool
-    /// then removes nothing, it does not guess.
-    pub(crate) fn pool_users(&self) -> Vec<String> {
+    /// What the pool wrote before. A file that cannot be read is an empty state: the pool then
+    /// removes nothing, it does not guess.
+    pub(crate) fn pool_state(&self) -> PoolState {
         let path = self.pool_users_path();
         match self.fs.read(&path) {
-            Ok(Some(bytes)) => serde_json::from_slice(&bytes).unwrap_or_else(|_| {
-                tracing::warn!("{} is not a list of names; ignoring it", path.display());
-                Vec::new()
+            Ok(Some(bytes)) => PoolState::parse(&bytes).unwrap_or_else(|| {
+                tracing::warn!("{} is not a pool state; ignoring it", path.display());
+                PoolState::default()
             }),
-            Ok(None) => Vec::new(),
+            Ok(None) => PoolState::default(),
             Err(error) => {
                 tracing::warn!("cannot read {}: {error}", path.display());
-                Vec::new()
+                PoolState::default()
             }
         }
     }
 
-    pub(crate) fn remember_pool_users(&self, names: &[String]) {
+    pub(crate) fn remember_pool_state(&self, state: &PoolState) {
         let path = self.pool_users_path();
-        let bytes = serde_json::to_vec(names).expect("a list of strings is json");
-        if let Err(error) = self.fs.write_private(&path, &bytes) {
+        if let Err(error) = self.fs.write_private(&path, &state.to_bytes()) {
             tracing::warn!("cannot write {}: {error}", path.display());
         }
     }
@@ -501,13 +592,13 @@ impl<R: CommandRunner + 'static, H: HttpGet + 'static> Engine for TelemtEngine<R
     async fn apply_config(&self, desired: &DesiredConfig) -> Result<ApplyOutcome> {
         validate(desired)?;
         let (old_text, _) = self.load()?;
-        let managed = self.pool_users();
-        let new_text = edit(&old_text, desired, &managed)?;
-        let names: Vec<String> = desired.users.iter().map(|(name, _)| name.clone()).collect();
+        let before = self.pool_state();
+        let new_text = edit(&old_text, desired, &before)?;
+        let after = pool_state_of(desired);
 
         if new_text == old_text {
-            if managed != names {
-                self.remember_pool_users(&names);
+            if before != after {
+                self.remember_pool_state(&after);
             }
             return Ok(ApplyOutcome::Unchanged);
         }
@@ -518,7 +609,7 @@ impl<R: CommandRunner + 'static, H: HttpGet + 'static> Engine for TelemtEngine<R
         let failure = self.write_and_start(old, &new_text).await.err();
         match failure {
             None => {
-                self.remember_pool_users(&names);
+                self.remember_pool_state(&after);
                 Ok(ApplyOutcome::Applied)
             }
             Some(reason) => match self.roll_back(old).await {
@@ -561,7 +652,6 @@ impl<R: CommandRunner + 'static, H: HttpGet + 'static> ConfigSink for TelemtEngi
             Ok(ApplyOutcome::Unchanged) => tracing::debug!("telemt already serves this config"),
             Ok(ApplyOutcome::Applied) => tracing::info!(
                 users = config.users.len(),
-                port = config.port,
                 "telemt restarted with the new config"
             ),
             Ok(ApplyOutcome::RolledBack(reason)) => {
@@ -579,9 +669,6 @@ impl<R: CommandRunner + 'static, H: HttpGet + 'static> ConfigSink for TelemtEngi
 /// What the pool sends is checked before a byte of the engine's file changes.
 pub(crate) fn validate(desired: &DesiredConfig) -> Result<()> {
     let bad = |what: String| Err(EngineError::Config(what));
-    if desired.port == 0 {
-        return bad("the port is 0".to_owned());
-    }
     let domain_ok = !desired.sni.is_empty()
         && desired.sni.len() <= 253
         && desired
@@ -607,6 +694,49 @@ pub(crate) fn validate(desired: &DesiredConfig) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Takes `domain` out of `array`. A comment written after the comma of the element before it
+/// is part of this element's decor; it is handed to the next element so it is not lost.
+fn remove_keeping_comments(array: &mut toml_edit::Array, domain: &str) {
+    let mut index = 0;
+    while index < array.len() {
+        if array.get(index).and_then(Value::as_str) != Some(domain) {
+            index += 1;
+            continue;
+        }
+        let prefix = array
+            .get(index)
+            .and_then(|value| value.decor().prefix())
+            .and_then(|prefix| prefix.as_str())
+            .unwrap_or("")
+            .to_owned();
+        array.remove(index);
+        if prefix.contains('#')
+            && let Some(next) = array.get_mut(index)
+        {
+            let own = next
+                .decor()
+                .prefix()
+                .and_then(|prefix| prefix.as_str())
+                .unwrap_or("")
+                .to_owned();
+            let merged = if own.contains('#') {
+                format!("{prefix}{}", own.trim_start())
+            } else {
+                prefix
+            };
+            next.decor_mut().set_prefix(merged);
+        }
+    }
+}
+
+/// What the pool will have written once `desired` is applied.
+pub(crate) fn pool_state_of(desired: &DesiredConfig) -> PoolState {
+    PoolState {
+        users: desired.users.iter().map(|(name, _)| name.clone()).collect(),
+        sni: Some(desired.sni.clone()),
+    }
 }
 
 /// The table `key` of `parent`, made if it is not there. `implicit` leaves out its own header
@@ -638,11 +768,11 @@ fn set_value(table: &mut dyn TableLike, key: &str, value: Value) {
     }
 }
 
-/// The new text of the file: the pool's users, the TLS domain and the port set, the pool's
-/// revoked users removed. Everything else, comments and users of the owner included, is kept as
-/// it was. A value that is already right is not touched, so a file that needs nothing comes out
-/// identical.
-fn edit(old: &str, desired: &DesiredConfig, managed: &[String]) -> Result<String> {
+/// The new text of the file: the pool's users and TLS domain added, the pool's revoked users and
+/// its previous domain taken out. Everything else, comments and the owner's users, domain, mask
+/// entries and port included, is kept as it was. A value that is already right is not touched,
+/// so a file that needs nothing comes out identical.
+fn edit(old: &str, desired: &DesiredConfig, pool: &PoolState) -> Result<String> {
     let mut doc: DocumentMut = old.parse().map_err(|e: toml_edit::TomlError| {
         EngineError::Config(format!(
             "telemt.toml is not valid TOML: {} (at bytes {:?})",
@@ -651,28 +781,12 @@ fn edit(old: &str, desired: &DesiredConfig, managed: &[String]) -> Result<String
         ))
     })?;
     let root: &mut dyn TableLike = doc.as_table_mut();
+    let sni = desired.sni.as_str();
+    // The domain the pool used last time and does not use now.
+    let previous = pool.sni.as_deref().filter(|previous| *previous != sni);
 
+    // The port is the engine's: it is never written here, in `[server]` or in a listener.
     let server = table_of(root, "server", false)?;
-    let port = i64::from(desired.port);
-    let current = server.get("port").and_then(Item::as_integer);
-    if current != Some(port) && !(current.is_none() && desired.port == DEFAULT_PORT) {
-        set_value(server, "port", Value::from(port));
-    }
-    // A listener with a port of its own keeps it in step; one without follows `[server] port`.
-    if let Some(listeners) = server
-        .get_mut("listeners")
-        .and_then(Item::as_array_of_tables_mut)
-    {
-        for listener in listeners.iter_mut() {
-            if listener
-                .get("port")
-                .is_some_and(|p| p.as_integer() != Some(port))
-            {
-                set_value(listener, "port", Value::from(port));
-            }
-        }
-    }
-
     // telemt starts no metrics listener unless the file names one, and the agent needs it.
     if !server.contains_key("metrics_listen") && !server.contains_key("metrics_port") {
         let listen = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_METRICS_PORT);
@@ -680,13 +794,56 @@ fn edit(old: &str, desired: &DesiredConfig, managed: &[String]) -> Result<String
     }
 
     let censorship = table_of(root, "censorship", false)?;
-    if censorship.get("tls_domain").and_then(Item::as_str) != Some(desired.sni.as_str()) {
-        set_value(censorship, "tls_domain", Value::from(desired.sni.as_str()));
+    // The owner's domain is the one their link is built on: only a file without one gets ours.
+    if !censorship.contains_key("tls_domain") {
+        set_value(censorship, "tls_domain", Value::from(sni));
+    }
+    let primary = censorship
+        .get("tls_domain")
+        .and_then(Item::as_str)
+        .map(str::to_owned);
+    let needs_listing = primary.as_deref() != Some(sni);
+    match censorship.get_mut("tls_domains") {
+        Some(item) => {
+            if strings_of(item).is_none() {
+                return Err(wrong_tls_domains());
+            }
+            let array = item.as_array_mut().expect("checked to be an array");
+            if let Some(previous) = previous {
+                remove_keeping_comments(array, previous);
+            }
+            if needs_listing && !array.iter().any(|domain| domain.as_str() == Some(sni)) {
+                array.push(sni);
+            }
+        }
+        None if needs_listing => {
+            let mut array = toml_edit::Array::new();
+            array.push(sni);
+            censorship.insert("tls_domains", Item::Value(Value::Array(array)));
+        }
+        None => {}
+    }
+
+    // The pool's mask entry follows its domain; it only has one while the owner's mask is on.
+    let pool_target = |domain: &str| format!("{domain}:443");
+    if let Some(previous) = previous
+        && let Some(masks) = censorship
+            .get_mut("exclusive_mask")
+            .and_then(Item::as_table_like_mut)
+        && masks.get(previous).and_then(Item::as_str) == Some(pool_target(previous).as_str())
+    {
+        masks.remove(previous);
+    }
+    if censorship.get("mask").and_then(Item::as_bool) == Some(true) {
+        let masks = table_of(censorship, "exclusive_mask", false)?;
+        if !masks.contains_key(sni) {
+            set_value(masks, sni, Value::from(pool_target(sni)));
+        }
     }
 
     let access = table_of(root, "access", true)?;
     let users = table_of(access, "users", false)?;
-    for name in managed {
+    for name in &pool.users {
         if !desired.users.iter().any(|(wanted, _)| wanted == name) {
             users.remove(name);
         }

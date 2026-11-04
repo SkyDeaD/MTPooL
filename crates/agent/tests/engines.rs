@@ -53,7 +53,6 @@ fn desired(users: &[(&str, &str)], sni: &str) -> DesiredConfig {
             .map(|(name, secret)| ((*name).to_owned(), (*secret).to_owned()))
             .collect(),
         sni: sni.to_owned(),
-        port: 443,
     }
 }
 
@@ -189,8 +188,22 @@ impl<H: HttpGet + 'static> Rig<H> {
             })
             .collect()
     }
+    /// The names the pool remembers: a bare list (an older agent) or an object with `users`.
     fn pool_users(&self) -> Option<Vec<String>> {
-        text_of(&self.fs, POOL_USERS).map(|text| serde_json::from_str(&text).unwrap())
+        let value: serde_json::Value =
+            serde_json::from_str(&text_of(&self.fs, POOL_USERS)?).unwrap();
+        let list = if value.is_array() {
+            value
+        } else {
+            value["users"].clone()
+        };
+        Some(serde_json::from_value(list).unwrap())
+    }
+    /// The TLS domain the pool remembers it added.
+    fn pool_sni(&self) -> Option<String> {
+        let value: serde_json::Value =
+            serde_json::from_str(&text_of(&self.fs, POOL_USERS)?).unwrap();
+        value["sni"].as_str().map(str::to_owned)
     }
     fn settings(&self) -> String {
         text_of(&self.fs, SETTINGS_PATH).unwrap()
@@ -276,7 +289,8 @@ async fn mtproxyl_apply_uses_cli_sequence() {
         [
             format!("secret add bob {BOB}"),
             "expert set censorship tls_domains cdn.example.org --no-apply".to_owned(),
-            "expert set --raw censorship.exclusive_mask cdn.example.org cdn.example.org:443 --no-apply"
+            // The owner's pair stays, the pool's follows it.
+            "expert set --raw censorship.exclusive_mask example.com example.com:443 cdn.example.org cdn.example.org:443 --no-apply"
                 .to_owned(),
             "expert apply".to_owned(),
             "restart".to_owned(),
@@ -320,9 +334,9 @@ async fn mtproxyl_never_uses_plain_systemctl_restart() {
 #[tokio::test(start_paused = true)]
 async fn mtproxyl_rollback_on_failed_restart() {
     let rig = rig(CONFIG_TOML, Some(r#"["alice"]"#));
-    // Five steps forward, the restart (the fifth) fails; then the undo: three commands, the
-    // apply and the restart.
-    for code in [0, 0, 0, 0, 1, 0, 0, 0, 0, 0] {
+    // Five steps forward, the restart (the fifth) fails; then the undo: two commands, the apply
+    // and the restart.
+    for code in [0, 0, 0, 0, 1, 0, 0, 0, 0] {
         rig.runner.push_output(code, b"");
     }
 
@@ -345,14 +359,15 @@ async fn mtproxyl_rollback_on_failed_restart() {
         [
             format!("secret add bob {BOB}"),
             "expert set censorship tls_domains cdn.example.org --no-apply".to_owned(),
-            "expert set --raw censorship.exclusive_mask cdn.example.org cdn.example.org:443 --no-apply"
+            // The owner's pair stays, the pool's follows it.
+            "expert set --raw censorship.exclusive_mask example.com example.com:443 cdn.example.org cdn.example.org:443 --no-apply"
                 .to_owned(),
             "expert apply".to_owned(),
             "restart".to_owned(),
-            // The same way back: the mask and the domain as they were, bob removed.
+            // The same way back: the mask as it was, bob removed. There were no extras, so the
+            // domain stays: nothing recorded says the CLI takes an empty list.
             "expert set --raw censorship.exclusive_mask example.com example.com:443 --no-apply"
                 .to_owned(),
-            "expert set censorship tls_domains example.com --no-apply".to_owned(),
             "secret remove bob".to_owned(),
             "expert apply".to_owned(),
             "restart".to_owned(),
@@ -389,16 +404,16 @@ async fn mtproxyl_rolls_back_when_the_metrics_do_not_answer() {
         "waited {waited:?}"
     );
     let all = rig.cli();
-    assert_eq!(all.len(), 10);
+    assert_eq!(all.len(), 9);
     assert_eq!(&all[3..5], ["expert apply", "restart"]);
-    assert_eq!(&all[8..], ["expert apply", "restart"]);
+    assert_eq!(&all[7..], ["expert apply", "restart"]);
 }
 
 #[tokio::test(start_paused = true)]
 async fn mtproxyl_reports_a_rollback_that_fails_too() {
     let rig = rig(CONFIG_TOML, None);
     // The restart fails, the undo's commands go through, the restart after them fails again.
-    for code in [0, 0, 0, 0, 1, 0, 0, 0, 0, 1] {
+    for code in [0, 0, 0, 0, 1, 0, 0, 0, 1] {
         rig.runner.push_output(code, b"");
     }
     let error = rig
@@ -522,10 +537,15 @@ async fn mtproxyl_unchanged_touches_nothing() {
 
 #[tokio::test]
 async fn mtproxyl_a_domain_in_the_tls_domains_list_counts() {
-    let config = CONFIG_TOML.replace(
-        "tls_domain = \"example.com\"",
-        "tls_domain = \"example.com\"\ntls_domains = [\"cdn.example.org\"]",
-    );
+    let config = CONFIG_TOML
+        .replace(
+            "tls_domain = \"example.com\"",
+            "tls_domain = \"example.com\"\ntls_domains = [\"cdn.example.org\"]",
+        )
+        .replace(
+            "\"example.com\" = \"example.com:443\"",
+            "\"example.com\" = \"example.com:443\"\n\"cdn.example.org\" = \"cdn.example.org:443\"",
+        );
     let rig = rig(&config, None);
     let outcome = rig
         .engine
@@ -534,6 +554,129 @@ async fn mtproxyl_a_domain_in_the_tls_domains_list_counts() {
         .unwrap();
     assert_eq!(outcome, ApplyOutcome::Unchanged);
     assert!(rig.runner.calls().is_empty());
+}
+
+/// The fixture with the owner's extra domains and mask pairs added to what it has.
+fn with_owner_extras(extras: &[&str], pairs: &[&str]) -> String {
+    let list = extras
+        .iter()
+        .map(|d| format!("\"{d}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let masks: String = pairs
+        .iter()
+        .map(|d| format!("\n\"{d}\" = \"{d}:443\""))
+        .collect();
+    let mut config = CONFIG_TOML.to_owned();
+    if !extras.is_empty() {
+        config = config.replace(
+            "tls_domain = \"example.com\"",
+            &format!("tls_domain = \"example.com\"\ntls_domains = [{list}]"),
+        );
+    }
+    config.replace(
+        "\"example.com\" = \"example.com:443\"",
+        &format!("\"example.com\" = \"example.com:443\"{masks}"),
+    )
+}
+
+#[tokio::test]
+async fn keeps_owner_extra_domains() {
+    // The owner's extra domain stays, the pool's previous one goes, the new one is added; the
+    // primary `tls_domain` is not among them. The owner's mask pairs stay as well.
+    let config = with_owner_extras(
+        &["owner.example", "old.example"],
+        &["owner.example", "old.example"],
+    );
+    let rig = rig(&config, Some(r#"{"users":["alice"],"sni":"old.example"}"#));
+    push_ok(&rig.runner, 4);
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org"))
+        .await
+        .unwrap();
+    assert_eq!(outcome, ApplyOutcome::Applied);
+    assert_eq!(
+        rig.cli(),
+        [
+            "expert set censorship tls_domains owner.example cdn.example.org --no-apply",
+            "expert set --raw censorship.exclusive_mask example.com example.com:443 owner.example owner.example:443 cdn.example.org cdn.example.org:443 --no-apply",
+            "expert apply",
+            "restart",
+        ]
+    );
+    assert_eq!(rig.pool_sni().as_deref(), Some("cdn.example.org"));
+}
+
+#[tokio::test]
+async fn undo_restores_the_extras() {
+    let config = with_owner_extras(&["owner.example"], &["owner.example"]);
+    let rig = rig(&config, Some(r#"{"users":["alice"]}"#));
+    // The domains, the mask, the apply, then the restart fails; the undo runs the two settings
+    // back, the apply and the restart.
+    for code in [0, 0, 0, 1, 0, 0, 0, 0] {
+        rig.runner.push_output(code, b"");
+    }
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org"))
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome, ApplyOutcome::RolledBack(_)),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        rig.cli(),
+        [
+            "expert set censorship tls_domains owner.example cdn.example.org --no-apply",
+            "expert set --raw censorship.exclusive_mask example.com example.com:443 owner.example owner.example:443 cdn.example.org cdn.example.org:443 --no-apply",
+            "expert apply",
+            "restart",
+            // The mask and the extras as they were, the owner's included.
+            "expert set --raw censorship.exclusive_mask example.com example.com:443 owner.example owner.example:443 --no-apply",
+            "expert set censorship tls_domains owner.example --no-apply",
+            "expert apply",
+            "restart",
+        ]
+    );
+    // What failed is not remembered.
+    assert_eq!(rig.pool_sni(), None);
+}
+
+#[tokio::test]
+async fn mask_carries_owner_pairs() {
+    let config = with_owner_extras(&[], &["owner.example"]);
+    let rig = rig(&config, None);
+    push_ok(&rig.runner, 4);
+    rig.engine
+        .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org"))
+        .await
+        .unwrap();
+    let cli = rig.cli();
+    assert_eq!(
+        cli[1],
+        "expert set --raw censorship.exclusive_mask example.com example.com:443 owner.example owner.example:443 cdn.example.org cdn.example.org:443 --no-apply"
+    );
+}
+
+#[tokio::test]
+async fn no_steps_when_already_right() {
+    let config = with_owner_extras(&["cdn.example.org"], &["cdn.example.org"]);
+    let rig = rig(
+        &config,
+        Some(r#"{"users":["alice"],"sni":"cdn.example.org"}"#),
+    );
+    for _ in 0..2 {
+        let outcome = rig
+            .engine
+            .apply_config(&desired(&[("alice", ALICE)], "cdn.example.org"))
+            .await
+            .unwrap();
+        assert_eq!(outcome, ApplyOutcome::Unchanged);
+    }
+    assert!(rig.runner.calls().is_empty());
+    assert_eq!(rig.pool_sni().as_deref(), Some("cdn.example.org"));
 }
 
 #[tokio::test]
