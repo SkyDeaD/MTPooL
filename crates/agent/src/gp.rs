@@ -132,6 +132,11 @@ impl GpLoop {
         self.state().result.take()
     }
 
+    /// Whether a finished measurement waits to be reported.
+    pub fn has_measurement(&self) -> bool {
+        matches!(self.state().result, Some(GpReport::Measured { .. }))
+    }
+
     /// Does the measurement that is due at `now`, if any, and keeps its result.
     pub async fn tick(&self, now: Instant) {
         let (job, epoch) = {

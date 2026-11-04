@@ -64,18 +64,49 @@ impl ConfigSink for RecordingSink {
 
 /// Builds a fixed report every time and counts the builds.
 #[derive(Clone, Default)]
-pub struct CountingReports(pub Arc<Mutex<u32>>);
+pub struct CountingReports(
+    pub Arc<Mutex<u32>>,
+    pub Arc<Mutex<bool>>,
+    pub Arc<Mutex<bool>>,
+);
 
 impl CountingReports {
     pub fn built(&self) -> u32 {
         *self.0.lock().unwrap()
+    }
+
+    /// The checks find the proxy sick from now on.
+    pub fn make_sick(&self) {
+        *self.2.lock().unwrap() = true;
+    }
+
+    /// A measurement has finished: the next report carries it.
+    pub fn finish_measurement(&self) {
+        *self.1.lock().unwrap() = true;
     }
 }
 
 impl ReportSource for CountingReports {
     async fn build(&self) -> Option<ReportRequest> {
         *self.0.lock().unwrap() += 1;
+        *self.1.lock().unwrap() = false;
         Some(sample_report())
+    }
+
+    async fn watch(&self, _now: tokio::time::Instant) -> mtpool_agent::lifecycle::Watch {
+        let sick = *self.2.lock().unwrap();
+        mtpool_agent::lifecycle::Watch {
+            ip_changed: false,
+            health: if sick {
+                mtpool_agent::lifecycle::Health::Silent
+            } else {
+                mtpool_agent::lifecycle::Health::Good
+            },
+        }
+    }
+
+    fn has_measurement(&self) -> bool {
+        *self.1.lock().unwrap()
     }
 }
 

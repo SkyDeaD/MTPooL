@@ -181,6 +181,11 @@ pub trait ReportSource: Send + Sync {
 
     /// The node has just enrolled (for the first time or again).
     fn enrolled(&self) {}
+
+    /// A finished measurement waits for a report. The registrar needs its id to read the result.
+    fn has_measurement(&self) -> bool {
+        false
+    }
 }
 
 /// Reports nothing.
@@ -243,6 +248,10 @@ impl Job {
     /// A refusal that is not worth a backoff: try again at the usual time.
     fn skipped(&mut self, now: Instant, interval_sec: u32) {
         self.next_at = Some(now + seconds(interval_sec));
+    }
+    /// Due at once. The backoff stays as it is.
+    fn hurry(&mut self) {
+        self.next_at = None;
     }
     fn restart(&mut self) {
         *self = Job::default();
@@ -570,6 +579,12 @@ impl<E: EngineProbe, S: ReportSource, K: ConfigSink> Lifecycle<E, S, K> {
                 Outcome::Failed { .. } => self.sync.failed(now, &mut *self.jitter),
                 Outcome::Leave(step) => return step,
             }
+        }
+
+        // The verdict of a finished measurement is waiting in the registrar: no need to sit on it
+        // until the report's next minute.
+        if !self.quiet && self.hooks.reports.has_measurement() {
+            self.report.hurry();
         }
 
         if self.report.due(now) && self.quiet {

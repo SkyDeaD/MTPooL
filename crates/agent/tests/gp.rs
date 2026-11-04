@@ -173,6 +173,30 @@ async fn first_measure_runs_immediately_after_enroll() {
 }
 
 #[tokio::test]
+async fn only_a_finished_measurement_waits_to_be_reported() {
+    let server = MockServer::start().await;
+    mount_create(&server, 202, CREATE).await;
+    mount_get(&server, 200, FINISHED).await;
+    let ports = FakePorts::new(true);
+    let gp = gp(&server, &ports);
+    assert!(!gp.has_measurement());
+
+    gp.tick(Instant::now()).await;
+    assert!(gp.has_measurement());
+    assert!(matches!(gp.take_result(), Some(GpReport::Measured { .. })));
+    assert!(!gp.has_measurement(), "an id is reported once");
+
+    // A failure has no id for the registrar to read: it keeps to the usual report.
+    let server = MockServer::start().await;
+    mount_create(&server, 429, "{}").await;
+    let gp = self::gp(&server, &ports);
+    gp.tick(Instant::now()).await;
+    assert_eq!(gp.take_result(), Some(no_data("rate_limited")));
+    gp.tick(Instant::now()).await;
+    assert!(!gp.has_measurement());
+}
+
+#[tokio::test]
 async fn gp_429_reported_as_no_data() {
     let server = MockServer::start().await;
     // The body of a 429 was not recorded: the status alone says it.

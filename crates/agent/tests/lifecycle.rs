@@ -602,6 +602,64 @@ async fn intervals_updated_from_config() {
 }
 
 #[tokio::test]
+async fn a_finished_measurement_goes_out_with_the_next_heartbeat() {
+    let h = Harness::new().await;
+    h.enrolled();
+    h.ok("POST", HEARTBEAT).await;
+    h.mock(
+        "GET",
+        CONFIG,
+        ResponseTemplate::new(200).set_body_json(agent_config(15, 60)),
+        false,
+    )
+    .await;
+    h.ok("POST", REPORT).await;
+    let mut lifecycle = h.lifecycle();
+    let t0 = Instant::now();
+    lifecycle.step(t0).await;
+    lifecycle.step(t0 + secs(15)).await;
+    assert_eq!(
+        h.reports.built(),
+        1,
+        "nothing new: the report keeps its minute"
+    );
+
+    h.reports.finish_measurement();
+    lifecycle.step(t0 + secs(30)).await;
+    assert_eq!(h.reports.built(), 2, "the pool hears about it at once");
+
+    // The minute starts over from that report.
+    lifecycle.step(t0 + secs(75)).await;
+    assert_eq!(h.reports.built(), 2);
+    lifecycle.step(t0 + secs(90)).await;
+    assert_eq!(h.reports.built(), 3);
+}
+
+#[tokio::test]
+async fn a_finished_measurement_waits_while_the_proxy_is_sick() {
+    let h = Harness::new().await;
+    h.enrolled();
+    h.mock(
+        "GET",
+        CONFIG,
+        ResponseTemplate::new(200).set_body_json(agent_config(15, 60)),
+        false,
+    )
+    .await;
+    h.reports.make_sick();
+    let mut lifecycle = h.lifecycle();
+    let t0 = Instant::now();
+    lifecycle.step(t0).await;
+    h.reports.finish_measurement();
+    lifecycle.step(t0 + secs(15)).await;
+    assert_eq!(
+        h.reports.built(),
+        0,
+        "nothing is said while the proxy is sick"
+    );
+}
+
+#[tokio::test]
 async fn the_report_goes_out_with_the_node_token() {
     let h = Harness::new().await;
     h.enrolled();
