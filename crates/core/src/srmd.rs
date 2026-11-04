@@ -499,6 +499,23 @@ mod tests {
         let mut state = SrmdState::default();
         let out = ticks(&mut state, &[], 1, &s, 20);
         assert_eq!(out[19], vec![create("mt1.example.com")]);
+        let out = ticks(&mut state, &["mt1.example.com"], 6, &s, 20);
+        assert_eq!(out[19], vec![create("mt2.example.com")]);
+        // The nodes leave: the first domain stays and the other folds onto it.
+        let out = ticks(
+            &mut state,
+            &["mt1.example.com", "mt2.example.com"],
+            1,
+            &s,
+            20,
+        );
+        assert_eq!(
+            out[19],
+            vec![SrmdAction::Fold {
+                domain: "mt2.example.com".into(),
+                target: "mt1.example.com".into(),
+            }]
+        );
     }
 
     #[test]

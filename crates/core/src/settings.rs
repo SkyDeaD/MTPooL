@@ -622,6 +622,8 @@ mod tests {
 
     #[test]
     fn domains_must_be_non_empty_and_unique() {
+        // An empty list is fine: SRMD fills it from the base name.
+        assert!(Settings::default().validate().is_ok());
         let d = |v: &[&str]| Settings {
             domains: v.iter().map(|s| s.to_string()).collect(),
             ..Default::default()

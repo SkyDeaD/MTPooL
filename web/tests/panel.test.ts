@@ -445,6 +445,11 @@ describe('destructive actions', () => {
 describe('settings limits follow the server', () => {
   const field = (key: string) => FIELDS.get(key)!;
 
+  it('the domain list may be empty, SRMD then fills it from the base name', () => {
+    expect(parse(field('domains'), '  ')).toEqual({ ok: true, value: [] });
+    expect(parse(field('domains'), 'a.example\nb.example')).toEqual({ ok: true, value: ['a.example', 'b.example'] });
+  });
+
   it('masters_per_domain_stops_at_8', () => {
     expect(parse(field('masters_per_domain'), '8').ok).toBe(true);
     expect(parse(field('masters_per_domain'), '9').ok).toBe(false);

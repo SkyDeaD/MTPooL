@@ -76,3 +76,21 @@ test('settings: a proxy user is added with a generated secret and removed again'
   await expect(row).toHaveCount(0);
   await expect(block.getByRole('row').filter({ hasText: 'main' })).toBeVisible();
 });
+
+test('settings: SRMD says so when it has nothing to build a domain name from', async ({ page }) => {
+  const note = page.getByRole('status').filter({ hasText: 'не из чего создать домен' });
+  const answer = (over: Record<string, unknown>) =>
+    page.route('**/api/v1/admin/settings', async (route) => {
+      const real = await route.fetch();
+      const doc = await real.json();
+      await route.fulfill({ response: real, json: { ...doc, domains: [], srmd: { ...doc.srmd, enabled: true, ...over } } });
+    });
+  await answer({ base_domain: null });
+  await openPanel(page, '#/srmd');
+  await expect(note).toBeVisible();
+  await page.unroute('**/api/v1/admin/settings');
+  await answer({ base_domain: 'mt.example.com' });
+  await page.reload();
+  await expect(page.locator('[data-key="srmd.base_domain"]')).toHaveValue('mt.example.com');
+  await expect(note).toHaveCount(0);
+});
