@@ -272,3 +272,127 @@ pub struct StatsSeries {
     pub buckets: Vec<StatsBucket>,
     pub history_ok: bool,
 }
+
+/// The windows the client history can be asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+pub enum ClientsRange {
+    #[serde(rename = "10m")]
+    TenMinutes,
+    #[serde(rename = "1h")]
+    Hour,
+    #[serde(rename = "24h")]
+    Day,
+    #[serde(rename = "7d")]
+    Week,
+}
+
+impl ClientsRange {
+    pub fn parse(text: &str) -> Option<ClientsRange> {
+        match text {
+            "10m" => Some(ClientsRange::TenMinutes),
+            "1h" => Some(ClientsRange::Hour),
+            "24h" => Some(ClientsRange::Day),
+            "7d" => Some(ClientsRange::Week),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ClientsRange::TenMinutes => "10m",
+            ClientsRange::Hour => "1h",
+            ClientsRange::Day => "24h",
+            ClientsRange::Week => "7d",
+        }
+    }
+
+    pub fn seconds(self) -> i64 {
+        match self {
+            ClientsRange::TenMinutes => 10 * 60,
+            ClientsRange::Hour => 3600,
+            ClientsRange::Day => 24 * 3600,
+            ClientsRange::Week => 7 * 24 * 3600,
+        }
+    }
+
+    /// The length of one point of the series.
+    pub fn step_sec(self) -> i64 {
+        match self {
+            ClientsRange::TenMinutes | ClientsRange::Hour => 30,
+            ClientsRange::Day => 300,
+            ClientsRange::Week => 1800,
+        }
+    }
+}
+
+/// One point of the client history: the mean over one step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ClientsPoint {
+    /// RFC 3339, UTC: the start of the step.
+    pub at: String,
+    /// Clients of the whole pool.
+    pub total: u64,
+    /// Clients of each domain that had a number in the step.
+    pub domains: BTreeMap<String, u64>,
+}
+
+/// What an event mark on the chart stands for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientsMarkKind {
+    /// The masters of a domain changed.
+    MasterChange,
+    /// A domain was folded into another one.
+    Fold,
+    /// A node was banned.
+    Ban,
+}
+
+/// An event on the time axis of the chart. No node, no address: only when and what.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ClientsMark {
+    /// RFC 3339, UTC.
+    pub at: String,
+    pub kind: ClientsMarkKind,
+}
+
+/// The client history over a range.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ClientsSeries {
+    pub range: ClientsRange,
+    pub step_sec: i64,
+    /// Oldest first. A step without samples has no point: a gap is not filled.
+    pub points: Vec<ClientsPoint>,
+    /// Oldest first.
+    pub marks: Vec<ClientsMark>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn range_steps_are_30_300_1800() {
+        let steps: Vec<(&str, i64)> = ["10m", "1h", "24h", "7d"]
+            .into_iter()
+            .map(|text| {
+                let range = ClientsRange::parse(text).unwrap();
+                (range.as_str(), range.step_sec())
+            })
+            .collect();
+        assert_eq!(steps, [("10m", 30), ("1h", 30), ("24h", 300), ("7d", 1800)]);
+        assert_eq!(ClientsRange::parse("30d"), None);
+        assert_eq!(ClientsRange::parse(""), None);
+    }
+
+    #[test]
+    fn mark_kinds_are_snake_case() {
+        let json = serde_json::to_string(&[
+            ClientsMarkKind::MasterChange,
+            ClientsMarkKind::Fold,
+            ClientsMarkKind::Ban,
+        ])
+        .unwrap();
+        assert_eq!(json, r#"["master_change","fold","ban"]"#);
+    }
+}

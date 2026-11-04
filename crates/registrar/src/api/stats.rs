@@ -1,4 +1,11 @@
-//! Statistics: ban and traffic figures over 24 hours, 7 days or 30 days.
+//! Statistics: ban and traffic figures over 24 hours, 7 days or 30 days, and the client
+//! history over 10 minutes to 7 days.
+//!
+//! | Route                    | Answer                                            |
+//! |--------------------------|---------------------------------------------------|
+//! | `GET /api/v1/stats/summary` | totals, bans by reason, the latest bans        |
+//! | `GET /api/v1/stats/series`  | the figures per bucket                         |
+//! | `GET /api/v1/stats/clients` | clients over time, per domain, with event marks |
 //!
 //! Computed from the database, cached for ten seconds per route and range, each with its own
 //! `ETag`.
@@ -11,7 +18,8 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use mtpool_protocol::problem::Problem;
 use mtpool_protocol::public::{
-    RecentBan, StatsBucket, StatsPoint, StatsRange, StatsSeries, StatsSummary, Vote,
+    ClientsMark, ClientsMarkKind, ClientsPoint, ClientsRange, ClientsSeries, RecentBan,
+    StatsBucket, StatsPoint, StatsRange, StatsSeries, StatsSummary, Vote,
 };
 use mtpool_protocol::rfc3339;
 use rusqlite::Connection;
@@ -43,6 +51,7 @@ struct Entry {
 #[derive(Debug, Clone, Default)]
 pub struct StatsCache {
     entries: Arc<Mutex<HashMap<(Route, StatsRange), Entry>>>,
+    clients: Arc<Mutex<HashMap<ClientsRange, Entry>>>,
 }
 
 impl StatsCache {
@@ -62,6 +71,20 @@ impl StatsCache {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert((route, range), entry);
+    }
+
+    fn fresh_clients(&self, range: ClientsRange, now: i64) -> Option<Entry> {
+        let entries = self.clients.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = entries.get(&range)?;
+        let age = now - entry.computed_at;
+        (0..CACHE_MS).contains(&age).then(|| entry.clone())
+    }
+
+    fn put_clients(&self, range: ClientsRange, entry: Entry) {
+        self.clients
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(range, entry);
     }
 }
 
@@ -339,4 +362,146 @@ pub async fn series(
     query: RawQuery,
 ) -> Result<Response, ApiError> {
     answer(&app, &headers, Route::Series, parse_range(query)?).await
+}
+
+fn parse_clients_range(query: RawQuery) -> Result<ClientsRange, ApiError> {
+    let query = query_map(query)?;
+    match query.get("range") {
+        None => Ok(ClientsRange::Day),
+        Some(text) => ClientsRange::parse(text)
+            .ok_or_else(|| ApiError::bad_request("range must be 10m, 1h, 24h or 7d.")),
+    }
+}
+
+/// The events that become marks on the chart, and what each stands for:
+///
+/// - `master_changed` is a change of masters (`master_change`);
+/// - `node_banned` is a ban (`ban`);
+/// - `srmd_action` whose detail says `fold` is a domain folded into another (`fold`).
+///
+/// Everything else in the log (registrations, quarantines, DNS, rounds, the other SRMD actions,
+/// lifted bans, re-check failures) is not a mark.
+const MARKS: &str = "SELECT at, CASE kind
+            WHEN 'master_changed' THEN 'master_change'
+            WHEN 'node_banned' THEN 'ban'
+            ELSE 'fold' END
+     FROM events
+     WHERE at >= ?1 AND at <= ?2
+       AND (kind IN ('master_changed', 'node_banned')
+            OR (kind = 'srmd_action' AND json_extract(detail, '$.action') = 'fold'))
+     ORDER BY at, id";
+
+fn mark_kind(text: &str) -> Option<ClientsMarkKind> {
+    match text {
+        "master_change" => Some(ClientsMarkKind::MasterChange),
+        "ban" => Some(ClientsMarkKind::Ban),
+        "fold" => Some(ClientsMarkKind::Fold),
+        _ => None,
+    }
+}
+
+/// The mean of every step that has samples, oldest first. A step without samples is left out.
+fn compute_clients(
+    conn: &Connection,
+    range: ClientsRange,
+    now_ms: i64,
+) -> rusqlite::Result<ClientsSeries> {
+    let step = range.step_sec();
+    let step_ms = step * 1000;
+    let from_ms = (now_ms - range.seconds() * 1000).div_euclid(step_ms) * step_ms;
+
+    // (sum, count) per step and domain; the pool total has the empty domain.
+    let mut sums = BTreeMap::<i64, BTreeMap<String, (i64, i64)>>::new();
+    let mut statement = conn.prepare_cached(
+        "SELECT (at - ?1) / ?2, domain, SUM(clients), COUNT(*)
+         FROM client_samples WHERE at >= ?1 AND at <= ?3 GROUP BY 1, 2",
+    )?;
+    let rows = statement.query_map([from_ms, step_ms, now_ms], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, i64>(3)?,
+        ))
+    })?;
+    for row in rows {
+        let (index, domain, sum, n) = row?;
+        sums.entry(index).or_default().insert(domain, (sum, n));
+    }
+    let average = |(sum, n): (i64, i64)| mean(sum, n).and_then(|v| u64::try_from(v).ok());
+    let points = sums
+        .into_iter()
+        .filter_map(|(index, mut domains)| {
+            // A step is a point only when the total was sampled in it.
+            let total = average(domains.remove("")?)?;
+            Some(ClientsPoint {
+                at: rfc3339(from_ms + index * step_ms),
+                total,
+                domains: domains
+                    .into_iter()
+                    .filter_map(|(domain, acc)| Some((domain, average(acc)?)))
+                    .collect(),
+            })
+        })
+        .collect();
+
+    let mut statement = conn.prepare_cached(MARKS)?;
+    let marks = statement
+        .query_map([from_ms, now_ms], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .into_iter()
+        .filter_map(|(at, kind)| {
+            Some(ClientsMark {
+                at: rfc3339(at),
+                kind: mark_kind(&kind)?,
+            })
+        })
+        .collect();
+
+    Ok(ClientsSeries {
+        range,
+        step_sec: step,
+        points,
+        marks,
+    })
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/stats/clients",
+    tag = "public",
+    params(("range" = Option<ClientsRange>, Query, description = "The window: 10m, 1h, 24h (default) or 7d")),
+    responses(
+        (status = 200, description = "Clients of the pool and of each domain over time, with the moments of master changes, folds and bans", body = ClientsSeries,
+            headers(("ETag" = String, description = "Changes with the figures; send it back in If-None-Match"))),
+        (status = 304, description = "The client's copy is current"),
+        (status = 400, description = "Unknown range", body = Problem, content_type = "application/problem+json"),
+        (status = 429, description = "Too many requests", body = Problem, content_type = "application/problem+json",
+            headers(("Retry-After" = u64, description = "Seconds until the limit window ends"))),
+    )
+)]
+pub async fn clients(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    query: RawQuery,
+) -> Result<Response, ApiError> {
+    let range = parse_clients_range(query)?;
+    let now = (app.clock)().0;
+    if let Some(hit) = app.stats.fresh_clients(range, now) {
+        return Ok(tagged(&headers, &hit.tag, "application/json", hit.body));
+    }
+    let series = read(&app, move |conn| compute_clients(conn, range, now)).await?;
+    let body = serde_json::to_string(&series).expect("client history serializes");
+    let tag = etag_of(&[&body]);
+    app.stats.put_clients(
+        range,
+        Entry {
+            computed_at: now,
+            tag: tag.clone(),
+            body: body.clone(),
+        },
+    );
+    Ok(tagged(&headers, &tag, "application/json", body))
 }

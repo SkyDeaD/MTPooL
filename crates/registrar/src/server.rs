@@ -348,6 +348,11 @@ pub async fn run_with(
             WebhookSender::new(store.clone(), Arc::new(SystemResolver), system_clock())
                 .run(actor.clone()),
         ),
+        tokio::spawn(crate::clients::run(
+            actor.clone(),
+            store.clone(),
+            system_clock(),
+        )),
     ];
     // The poller only fetches and checks files; it has no say over the state owner.
     workers.extend(crate::update::spawn_poller(store.clone()));

@@ -1584,6 +1584,27 @@ mod tests {
     }
 
     #[test]
+    fn domain_clients_are_kept_while_srmd_is_off() {
+        let mut p = Pool::new();
+        assert!(!p.state.settings.srmd.enabled);
+        p.make_healthy("n1", ip(1));
+        let reply = p.rid();
+        let generation = p.generation("n1");
+        p.run(Command::Report(ReportRequest {
+            reply,
+            node: id("n1"),
+            generation,
+            metrics_ok: true,
+            globalping: Vote::Clear,
+            traffic: None,
+            clients: Some(12),
+        }));
+        p.advance(SEC);
+        p.run(Command::Tick);
+        assert_eq!(p.state.srmd.domain_clients.get(DOMAIN), Some(&12));
+    }
+
+    #[test]
     fn heartbeat_from_a_new_ip_starts_a_new_check() {
         let mut p = Pool::new();
         p.make_healthy("n1", ip(1));

@@ -3153,6 +3153,78 @@
         }
       }
     },
+    "/api/v1/stats/clients": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "clients",
+        "parameters": [
+          {
+            "name": "range",
+            "in": "query",
+            "description": "The window: 10m, 1h, 24h (default) or 7d",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ClientsRange"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Clients of the pool and of each domain over time, with the moments of master changes, folds and bans",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Changes with the figures; send it back in If-None-Match"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientsSeries"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The client's copy is current"
+          },
+          "400": {
+            "description": "Unknown range",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the limit window ends"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/stats/series": {
       "get": {
         "tags": [
@@ -3649,6 +3721,108 @@
           },
           "vote": {
             "$ref": "#/components/schemas/Vote"
+          }
+        }
+      },
+      "ClientsMark": {
+        "type": "object",
+        "description": "An event on the time axis of the chart. No node, no address: only when and what.",
+        "required": [
+          "at",
+          "kind"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ClientsMarkKind"
+          }
+        }
+      },
+      "ClientsMarkKind": {
+        "type": "string",
+        "description": "What an event mark on the chart stands for.",
+        "enum": [
+          "master_change",
+          "fold",
+          "ban"
+        ]
+      },
+      "ClientsPoint": {
+        "type": "object",
+        "description": "One point of the client history: the mean over one step.",
+        "required": [
+          "at",
+          "total",
+          "domains"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "RFC 3339, UTC: the start of the step."
+          },
+          "domains": {
+            "type": "object",
+            "description": "Clients of each domain that had a number in the step.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Clients of the whole pool.",
+            "minimum": 0
+          }
+        }
+      },
+      "ClientsRange": {
+        "type": "string",
+        "description": "The windows the client history can be asked for.",
+        "enum": [
+          "10m",
+          "1h",
+          "24h",
+          "7d"
+        ]
+      },
+      "ClientsSeries": {
+        "type": "object",
+        "description": "The client history over a range.",
+        "required": [
+          "range",
+          "step_sec",
+          "points",
+          "marks"
+        ],
+        "properties": {
+          "marks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClientsMark"
+            },
+            "description": "Oldest first."
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClientsPoint"
+            },
+            "description": "Oldest first. A step without samples has no point: a gap is not filled."
+          },
+          "range": {
+            "$ref": "#/components/schemas/ClientsRange"
+          },
+          "step_sec": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },

@@ -14,14 +14,14 @@ use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use common::*;
 use mtpool_core::{
-    Assignments, DnsState, Generation, PersistOp, PoolState, RecordValue, RoundVerdict, SensorKind,
-    SensorVote, Settings, Slot, Ts, Vote, build_proxy_link,
+    Assignments, DnsState, Event, EventKind, Generation, PersistOp, PoolState, RecordValue,
+    RoundVerdict, SensorKind, SensorVote, Settings, Slot, Ts, Vote, build_proxy_link,
 };
 use mtpool_protocol::problem::Problem;
 use mtpool_protocol::rfc3339;
 use mtpool_registrar::actor::{Actor, ActorHandle, ActorOptions, Clock};
 use mtpool_registrar::server::{AppState, router};
-use mtpool_registrar::store::Store;
+use mtpool_registrar::store::{HistoryOp, Store};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -490,7 +490,7 @@ async fn rate_limit_429_with_retry_after() {
 #[tokio::test]
 async fn errors_are_problem_json_with_code() {
     let env = env(pool());
-    let cases: [(Method, &str, StatusCode, &str); 9] = [
+    let cases: [(Method, &str, StatusCode, &str); 10] = [
         (
             Method::GET,
             "/api/v1/nope",
@@ -519,6 +519,12 @@ async fn errors_are_problem_json_with_code() {
         (
             Method::GET,
             "/api/v1/stats/series?range=",
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+        ),
+        (
+            Method::GET,
+            "/api/v1/stats/clients?range=30d",
             StatusCode::BAD_REQUEST,
             "bad_request",
         ),
@@ -560,6 +566,7 @@ async fn unknown_query_ignored_unknown_id_404() {
         "/api/v1/bans",
         "/api/v1/stats/summary",
         "/api/v1/stats/series?range=7d",
+        "/api/v1/stats/clients?range=1h",
     ] {
         let plain = get(&env, path).await;
         assert_eq!(plain.status, StatusCode::OK, "{path}: {}", plain.body);
@@ -796,6 +803,7 @@ async fn openapi_json_matches_committed_file() {
         "/api/v1/bans",
         "/api/v1/stats/summary",
         "/api/v1/stats/series",
+        "/api/v1/stats/clients",
         "/api/v1/openapi.json",
         "/api/v1/agent/enroll",
         "/api/v1/agent/heartbeat",
@@ -814,6 +822,7 @@ async fn openapi_json_matches_committed_file() {
         "BanRecord",
         "StatsSummary",
         "StatsSeries",
+        "ClientsSeries",
         "LastRound",
         "EnrollRequest",
         "EnrollResponse",
@@ -1116,4 +1125,307 @@ async fn stats_are_cached_for_ten_seconds_with_their_own_etag() {
         StatusCode::OK,
         "the old tag no longer matches"
     );
+}
+
+// ---- client history ----------------------------------------------------------------------------
+
+/// The start of the last full 5-minute step before `NOW`, in milliseconds.
+fn step_start() -> i64 {
+    NOW.div_euclid(300_000) * 300_000 - 300_000
+}
+
+fn samples(env: &Env, at: i64, total: u64, domains: &[(&str, u64)]) {
+    let mut rows = vec![(String::new(), total)];
+    rows.extend(domains.iter().map(|(d, n)| ((*d).to_owned(), *n)));
+    env.store
+        .send(HistoryOp::ClientSamples { at: Ts(at), rows });
+}
+
+fn event(env: &Env, kind: EventKind, at: i64, node: Option<&str>, detail: Value) {
+    env.store.send(Event {
+        kind,
+        at: Ts(at),
+        node: node.map(node_id),
+        domain: Some("proxy.example.com".to_owned()),
+        detail,
+    });
+}
+
+#[tokio::test]
+async fn invalid_range_is_400() {
+    let env = env(pool());
+    for path in [
+        "/api/v1/stats/clients?range=1y",
+        "/api/v1/stats/clients?range=30d",
+        "/api/v1/stats/clients?range=",
+        "/api/v1/stats/clients?range=1H",
+    ] {
+        assert_problem(
+            &get(&env, path).await,
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+        );
+    }
+}
+
+#[tokio::test]
+async fn empty_table_is_200_with_no_points() {
+    let env = env(pool());
+    let resp = get(&env, "/api/v1/stats/clients").await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert!(resp.content_type().starts_with("application/json"));
+    let body = resp.json();
+    assert_eq!(body["range"], "24h", "24h is the default");
+    assert_eq!(body["step_sec"], 300);
+    assert_eq!(body["points"], json!([]));
+    assert_eq!(body["marks"], json!([]));
+}
+
+#[tokio::test]
+async fn range_steps_are_30_300_1800() {
+    let env = env(pool());
+    for (range, step) in [("10m", 30), ("1h", 30), ("24h", 300), ("7d", 1800)] {
+        let body = get(&env, &format!("/api/v1/stats/clients?range={range}"))
+            .await
+            .json();
+        assert_eq!(body["range"], range);
+        assert_eq!(body["step_sec"], step, "{range}");
+    }
+}
+
+#[tokio::test]
+async fn points_average_over_their_step() {
+    let env = env(pool());
+    let at = step_start();
+    samples(
+        &env,
+        at,
+        10,
+        &[("proxy.example.com", 4), ("edge.example.com", 1)],
+    );
+    samples(&env, at + 30_000, 21, &[("proxy.example.com", 7)]);
+    // The next step has its own single sample.
+    samples(&env, at + 300_000, 40, &[("proxy.example.com", 40)]);
+    env.store.flush().unwrap();
+
+    let body = get(&env, "/api/v1/stats/clients?range=24h").await.json();
+    let points = body["points"].as_array().unwrap();
+    assert_eq!(points.len(), 2, "{body}");
+    assert_eq!(points[0]["at"], rfc3339(at));
+    // 15.5 rounds to 16, 5.5 to 6; a domain is averaged over the samples that had it.
+    assert_eq!(points[0]["total"], 16);
+    assert_eq!(
+        points[0]["domains"],
+        json!({"edge.example.com": 1, "proxy.example.com": 6})
+    );
+    assert_eq!(points[1]["at"], rfc3339(at + 300_000));
+    assert_eq!(points[1]["total"], 40);
+}
+
+#[tokio::test]
+async fn gap_stays_a_gap() {
+    let env = env(pool());
+    let at = step_start();
+    samples(&env, at - 900_000, 5, &[]);
+    samples(&env, at, 9, &[]);
+    env.store.flush().unwrap();
+
+    let body = get(&env, "/api/v1/stats/clients?range=24h").await.json();
+    let times: Vec<&str> = body["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["at"].as_str().unwrap())
+        .collect();
+    // Nothing between the two steps: no zeros, no interpolation.
+    assert_eq!(times, [rfc3339(at - 900_000), rfc3339(at)]);
+    assert_eq!(body["points"][0]["total"], 5);
+    assert_eq!(body["points"][1]["total"], 9);
+}
+
+#[tokio::test]
+async fn old_samples_are_outside_the_range() {
+    let env = env(pool());
+    samples(&env, NOW - 11 * 60_000, 1, &[]);
+    samples(&env, NOW - 2 * 3_600_000, 2, &[]);
+    samples(&env, NOW - 60_000, 3, &[]);
+    env.store.flush().unwrap();
+
+    let total = |body: &Value| -> Vec<i64> {
+        body["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["total"].as_i64().unwrap())
+            .collect()
+    };
+    let ten = get(&env, "/api/v1/stats/clients?range=10m").await.json();
+    assert_eq!(total(&ten), [3]);
+    let hour = get(&env, "/api/v1/stats/clients?range=1h").await.json();
+    assert_eq!(total(&hour), [1, 3]);
+    let day = get(&env, "/api/v1/stats/clients?range=24h").await.json();
+    assert_eq!(total(&day), [2, 1, 3]);
+}
+
+#[tokio::test]
+async fn marks_cover_master_change_fold_and_ban_and_nothing_else() {
+    let env = env(pool());
+    let at = NOW - 3_000_000;
+    event(&env, EventKind::MasterChanged, at, None, json!({"slot": 0}));
+    event(
+        &env,
+        EventKind::NodeBanned,
+        at + 1_000,
+        Some("alpha-00001"),
+        json!({}),
+    );
+    event(
+        &env,
+        EventKind::SrmdAction,
+        at + 2_000,
+        None,
+        json!({"action": "fold", "target": "edge.example.com"}),
+    );
+    // Not marks.
+    event(
+        &env,
+        EventKind::SrmdAction,
+        at + 3_000,
+        None,
+        json!({"action": "create"}),
+    );
+    event(
+        &env,
+        EventKind::SrmdAction,
+        at + 4_000,
+        None,
+        json!({"action": "unfold"}),
+    );
+    event(
+        &env,
+        EventKind::NodeRegistered,
+        at + 5_000,
+        Some("beta-00002"),
+        json!({}),
+    );
+    event(
+        &env,
+        EventKind::NodeQuarantined,
+        at + 6_000,
+        Some("beta-00002"),
+        json!({}),
+    );
+    event(
+        &env,
+        EventKind::NodeDead,
+        at + 7_000,
+        Some("beta-00002"),
+        json!({}),
+    );
+    event(
+        &env,
+        EventKind::BanLifted,
+        at + 8_000,
+        Some("beta-00002"),
+        json!({}),
+    );
+    event(
+        &env,
+        EventKind::NodeReverifyFailed,
+        at + 9_000,
+        Some("beta-00002"),
+        json!({}),
+    );
+    event(&env, EventKind::DnsApplied, at + 10_000, None, json!({}));
+    event(&env, EventKind::SensorRound, at + 11_000, None, json!({}));
+    // A mark outside the range is not shown.
+    event(
+        &env,
+        EventKind::MasterChanged,
+        NOW - 3 * 86_400_000,
+        None,
+        json!({}),
+    );
+    env.store.flush().unwrap();
+
+    let body = get(&env, "/api/v1/stats/clients?range=24h").await.json();
+    assert_eq!(
+        body["marks"],
+        json!([
+            {"at": rfc3339(at), "kind": "master_change"},
+            {"at": rfc3339(at + 1_000), "kind": "ban"},
+            {"at": rfc3339(at + 2_000), "kind": "fold"},
+        ])
+    );
+    let week = get(&env, "/api/v1/stats/clients?range=7d").await.json();
+    assert_eq!(week["marks"].as_array().unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn answer_has_no_ip_or_node_name() {
+    let env = env(pool());
+    event(
+        &env,
+        EventKind::NodeBanned,
+        NOW - 60_000,
+        Some("alpha-00001"),
+        json!({"ip": "203.0.113.7", "node": "alpha-00001"}),
+    );
+    event(
+        &env,
+        EventKind::SrmdAction,
+        NOW - 50_000,
+        Some("beta-00002"),
+        json!({"action": "fold", "target": "198.51.100.9"}),
+    );
+    samples(&env, NOW - 60_000, 3, &[("proxy.example.com", 3)]);
+    env.store.flush().unwrap();
+
+    let resp = get(&env, "/api/v1/stats/clients?range=1h").await;
+    assert_eq!(resp.status, StatusCode::OK);
+    for secret in ["alpha-00001", "beta-00002", "203.0.113.7", "198.51.100.9"] {
+        assert!(!resp.body.contains(secret), "{secret} in {}", resp.body);
+    }
+    let body = resp.json();
+    for mark in body["marks"].as_array().unwrap() {
+        let mut keys: Vec<&String> = mark.as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["at", "kind"]);
+    }
+}
+
+#[tokio::test]
+async fn clients_etag_304() {
+    let env = env(pool());
+    samples(&env, NOW - 60_000, 3, &[]);
+    env.store.flush().unwrap();
+    let path = "/api/v1/stats/clients?range=1h";
+    let first = get(&env, path).await;
+    assert_eq!(first.status, StatusCode::OK);
+    let etag = first.etag();
+    assert!(etag.starts_with('"') && etag.ends_with('"'), "{etag}");
+    let again = send(&env, conditional(path, &etag)).await;
+    assert_eq!(again.status, StatusCode::NOT_MODIFIED);
+    assert!(again.body.is_empty());
+    let stale = send(&env, conditional(path, "\"0000000000000000\"")).await;
+    assert_eq!(stale.status, StatusCode::OK);
+    assert_eq!(stale.body, first.body);
+}
+
+#[tokio::test]
+async fn clients_answer_is_cached_for_ten_seconds() {
+    let env = env(pool());
+    let path = "/api/v1/stats/clients?range=1h";
+    let first = get(&env, path).await;
+    samples(&env, NOW - 5_000, 8, &[]);
+    env.store.flush().unwrap();
+    assert_eq!(
+        get(&env, path).await.body,
+        first.body,
+        "served from the cache"
+    );
+    env.clock.store(NOW + 10_001, Ordering::SeqCst);
+    let later = get(&env, path).await;
+    assert_ne!(later.body, first.body, "recomputed once the cache is old");
+    assert_eq!(later.json()["points"][0]["total"], 8);
 }

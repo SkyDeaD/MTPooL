@@ -1,6 +1,7 @@
 //! Pure pool logic without I/O.
 
 pub mod apply;
+pub mod clients;
 pub mod dns;
 pub mod health;
 pub mod lifecycle;
@@ -15,6 +16,7 @@ pub mod types;
 pub mod votes;
 
 pub use apply::apply;
+pub use clients::{ClientSample, TOTAL_DOMAIN, client_sample};
 pub use dns::{
     DnsOp, DnsPlanError, DnsState, LiveRecord, NewRecord, RecordKind, RecordValue, backoff,
     plan_changes,

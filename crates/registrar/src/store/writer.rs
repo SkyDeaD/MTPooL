@@ -118,6 +118,9 @@ impl Writer {
             WriteOp::Admin(op) => self.write_immediate(super::admin::name(&op), |conn| {
                 super::admin::apply(conn, &op).map(|_| ())
             }),
+            WriteOp::History(op) => self.write_immediate(super::history::name(&op), |conn| {
+                super::history::apply(conn, &op)
+            }),
             WriteOp::Report(op) => self.write_immediate(super::reports::name(&op), |conn| {
                 super::reports::apply(conn, &op)
             }),

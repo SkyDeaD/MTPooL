@@ -6,6 +6,7 @@ pub mod audit;
 pub mod auth;
 pub mod backup;
 pub mod cli;
+pub mod clients;
 pub mod config;
 pub mod dns;
 pub mod metrics;

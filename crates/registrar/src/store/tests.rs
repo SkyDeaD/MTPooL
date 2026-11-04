@@ -107,6 +107,7 @@ fn migrations_apply_on_empty_db() {
         "tokens",
         "sessions",
         "gp_measurements",
+        "client_samples",
     ] {
         let found: i64 = conn
             .query_row(
@@ -122,7 +123,7 @@ fn migrations_apply_on_empty_db() {
             r.get(0)
         })
         .unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
     let mode: String = conn
         .query_row("PRAGMA journal_mode", [], |r| r.get(0))
         .unwrap();
@@ -139,7 +140,100 @@ fn migrations_apply_on_empty_db() {
     // Opening again applies nothing twice.
     let store = Store::open(&path).unwrap();
     store.close().unwrap();
-    assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 5);
+    assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 6);
+}
+
+#[test]
+fn a_database_at_version_5_upgrades_cleanly() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).unwrap();
+    store.send(PersistOp::SetSettings(Settings {
+        proxy_port: 8443,
+        ..Settings::default()
+    }));
+    store.flush().unwrap();
+    store.close().unwrap();
+    // Take the database back to what version 5 left.
+    let conn = fresh(&path);
+    conn.execute_batch(
+        "DROP TABLE client_samples; DELETE FROM schema_migrations WHERE version = 6;",
+    )
+    .unwrap();
+    drop(conn);
+
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.load_at(NOW).unwrap().settings.proxy_port, 8443);
+    store.close().unwrap();
+    assert_eq!(
+        count(&path, "SELECT max(version) FROM schema_migrations"),
+        6
+    );
+    assert_eq!(count(&path, "SELECT count(*) FROM client_samples"), 0);
+}
+
+#[test]
+fn client_samples_are_written_and_replaced_by_their_key() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).unwrap();
+    let rows = |total: u64| {
+        vec![
+            (String::new(), total),
+            ("a.example.com".to_owned(), total / 2),
+        ]
+    };
+    store.send(HistoryOp::ClientSamples {
+        at: NOW,
+        rows: rows(10),
+    });
+    // The same moment again replaces, another moment adds.
+    store.send(HistoryOp::ClientSamples {
+        at: NOW,
+        rows: rows(20),
+    });
+    store.send(HistoryOp::ClientSamples {
+        at: Ts(NOW.0 + 30_000),
+        rows: rows(30),
+    });
+    store.flush().unwrap();
+    assert_eq!(count(&path, "SELECT count(*) FROM client_samples"), 4);
+    assert_eq!(
+        count(
+            &path,
+            &format!(
+                "SELECT clients FROM client_samples WHERE at = {} AND domain = ''",
+                NOW.0
+            )
+        ),
+        20
+    );
+}
+
+#[test]
+fn samples_older_than_8_days_are_deleted() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).unwrap();
+    for ms in [8 * DAY_MS + 1000, 8 * DAY_MS - 1000, 0] {
+        store.send(HistoryOp::ClientSamples {
+            at: Ts(NOW.0 - ms),
+            rows: vec![(String::new(), 1), ("a.example.com".to_owned(), 1)],
+        });
+    }
+    store.flush().unwrap();
+    assert_eq!(count(&path, "SELECT count(*) FROM client_samples"), 6);
+
+    store.retain(NOW).unwrap();
+
+    assert_eq!(count(&path, "SELECT count(*) FROM client_samples"), 4);
+    assert_eq!(
+        count(
+            &path,
+            &format!(
+                "SELECT count(*) FROM client_samples WHERE at < {}",
+                NOW.0 - 8 * DAY_MS
+            )
+        ),
+        0
+    );
 }
 
 #[test]
@@ -159,7 +253,7 @@ fn unknown_schema_version_refuses_open() {
             err,
             StoreError::UnknownSchemaVersion {
                 found: 999,
-                supported: 5
+                supported: 6
             }
         ),
         "{err:?}"

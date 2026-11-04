@@ -23,10 +23,12 @@ use rusqlite::{Connection, OpenFlags};
 
 pub use admin::AdminOp;
 pub use auth::{AuthOp, NewTokenRow};
+pub use history::HistoryOp;
 pub use reports::{ReportOp, measurement_seen};
 
 mod admin;
 mod auth;
+mod history;
 mod queries;
 mod reports;
 #[cfg(test)]
@@ -48,6 +50,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (3, include_str!("../../migrations/0003_reports.sql")),
     (4, include_str!("../../migrations/0004_admin.sql")),
     (5, include_str!("../../migrations/0005_rollouts.sql")),
+    (6, include_str!("../../migrations/0006_client_samples.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -110,6 +113,13 @@ pub enum WriteOp {
     Auth(AuthOp),
     Report(ReportOp),
     Admin(AdminOp),
+    History(HistoryOp),
+}
+
+impl From<HistoryOp> for WriteOp {
+    fn from(op: HistoryOp) -> WriteOp {
+        WriteOp::History(op)
+    }
 }
 
 impl From<AdminOp> for WriteOp {
