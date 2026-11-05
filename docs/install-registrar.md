@@ -59,6 +59,36 @@ curl -s https://pool.example.com/readyz
 sudo runuser -u mtpool -- mtpool-registrar admin reset-token
 ```
 
+## Релиз для нод
+
+Ноды берут агента из каталога `/var/lib/mtpool/releases` на регистраторе. Скрипт создаёт его пустым. Запустившись, регистратор сам скачивает последний релиз из GitHub, даже если это его собственная версия. Себя он при этом не заменяет. Обычно хватает нескольких секунд.
+
+Проверьте, что релиз на месте:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://pool.example.com/releases/manifest.json
+```
+
+Код 200 значит, что можно ставить ноды. Код 404 значит, что релиза пока нет. Причину ищите в журнале по `update.failed`:
+
+```bash
+journalctl -u mtpool-registrar -n 100 --no-pager
+```
+
+Без строки `MTPOOL_RELEASE_REPO` в `/etc/mtpool/registrar.env` самообновление выключено, и релиз сам не появится. Положите его вручную, манифест последним. Версия должна быть не новее регистратора: `mtpool-registrar version` покажет его версию. Манифест новее регистратора установщик нод не примет. Служба обновления попробует заменить бинарник, не найдёт его в каталоге и навсегда отклонит эту версию.
+
+```bash
+version=<версия регистратора>
+base=https://github.com/SkyDeaD/MTPooL/releases/download/v$version
+cd /var/lib/mtpool/releases
+for file in mtpool-agent-x86_64-unknown-linux-musl mtpool-agent-aarch64-unknown-linux-musl \
+    manifest.json.minisig manifest.json; do
+    sudo runuser -u mtpool -- curl -fsSL -o "$file" "$base/$file" || break
+done
+```
+
+Если цикл прервался с ошибкой, запустите его снова: манифест скачивается последним, поэтому до этого установщик нод его не увидит.
+
 ## Настройка пула
 
 Настройки меняются в панели (`/panel/`) или через `PATCH /api/v1/admin/settings` с админ-токеном. Они применяются без перезапуска. Неверное значение отклоняется целиком, ничего не меняется.

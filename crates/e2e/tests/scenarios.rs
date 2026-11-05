@@ -354,9 +354,12 @@ async fn restart_under_load_no_false_deaths() {
 #[tokio::test]
 #[ignore = "needs Docker; run with --ignored"]
 async fn db_write_error_visible_in_readyz() {
-    let stand = Stand::up_with(StandOptions { small_db: true })
-        .await
-        .expect("the stand comes up");
+    let stand = Stand::up_with(StandOptions {
+        small_db: true,
+        ..StandOptions::default()
+    })
+    .await
+    .expect("the stand comes up");
     let (_node, _id) = enroll_healthy(&stand, 1, "node-one").await;
     assert_eq!(
         stand.readyz().await.unwrap(),

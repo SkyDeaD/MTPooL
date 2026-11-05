@@ -17,7 +17,7 @@ pub use install::{InstallOptions, Installed, Token};
 pub use observe::eventually;
 pub use release::{Release, ReleaseSpec};
 pub use signing::{TestKey, ensure_test_key};
-pub use update::{RegistrarRelease, registrar_release};
+pub use update::{RegistrarRelease, pool_release, registrar_release};
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -249,6 +249,8 @@ pub struct StandOptions {
     /// Put the registrar's database on a 2 MB tmpfs that [`Stand::break_db_writes`] can fill.
     /// Such a database goes with the container, so the registrar of this stand is not restarted.
     pub small_db: bool,
+    /// Have the registrar poll the GitHub stand-in for releases, as an installed one polls GitHub.
+    pub self_update: bool,
 }
 
 /// One running copy of the stand.
@@ -279,6 +281,9 @@ impl Stand {
         let mut files = vec![compose_file()];
         if options.small_db {
             files.push(compose_file().with_file_name("compose.small-db.yml"));
+        }
+        if options.self_update {
+            files.push(compose_file().with_file_name("compose.self-update.yml"));
         }
         let mut guard = Guard {
             project: project.clone(),

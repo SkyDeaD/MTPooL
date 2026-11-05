@@ -3,10 +3,11 @@
 //! Two halves with different rights. The worker in this file runs inside the registrar service
 //! (user `mtpool`, sandboxed): it polls the releases, checks the signature, downloads, checks the
 //! checksums and puts the whole release into the releases directory, manifest last. It never
-//! touches the binary. A root helper (`apply`, started by a systemd path unit when the manifest
-//! changes) checks everything again from the files, swaps the binary, restarts the service,
-//! watches `/readyz` and, when the new build does not come up, the rollback unit puts the previous
-//! binary back.
+//! touches the binary. A release that is not newer than the registrar is published as well when
+//! the directory has nothing as new: nodes install from this directory. A root helper (`apply`,
+//! started by a systemd path unit when the manifest changes) checks everything again from the
+//! files, swaps the binary, restarts the service, watches `/readyz` and, when the new build does
+//! not come up, the rollback unit puts the previous binary back.
 
 pub mod apply;
 pub mod github;
@@ -199,11 +200,14 @@ impl<S: ReleaseSource> Updater<S> {
                 Err(e) => return self.refuse(&offer.tag, e.to_string()),
             };
         let running = effective_current(&self.current, &self.paths);
-        if manifest.version <= running || self.paths.is_rejected(&manifest.version) {
+        let newer = manifest.version > running;
+        if self.paths.is_rejected(&manifest.version)
+            || (!newer && self.holds_at_least(&manifest.version))
+        {
             self.pending = None;
             return Outcome::Ignored(manifest.version);
         }
-        if self.published_manifest().as_deref() == Some(offer.manifest.as_slice()) {
+        if newer && self.published_manifest().as_deref() == Some(offer.manifest.as_slice()) {
             self.pending = None;
             self.retrigger(&offer);
             return Outcome::Idle;
@@ -229,6 +233,22 @@ impl<S: ReleaseSource> Updater<S> {
 
     fn published_manifest(&self) -> Option<Vec<u8>> {
         std::fs::read(self.paths.releases.join(MANIFEST_NAME)).ok()
+    }
+
+    /// The directory holds a signed release of `version` or newer. A registrar installed from the
+    /// newest release has nothing newer to fetch, and a node still needs an agent from here: so a
+    /// release that is not newer than the registrar comes in too, unless this says it need not.
+    /// The update helper does not install it, its version is not above the running one.
+    fn holds_at_least(&self, version: &Version) -> bool {
+        let Some(bytes) = self.published_manifest() else {
+            return false;
+        };
+        let Ok(signature) = std::fs::read_to_string(self.paths.releases.join(SIGNATURE_NAME))
+        else {
+            return false;
+        };
+        manifest::verify_manifest_with(&self.key, &bytes, &signature)
+            .is_ok_and(|held| held.version >= *version)
     }
 
     /// The helper reacts to the manifest file changing. If it gave up (or was not there yet) while
@@ -654,33 +674,201 @@ mod tests {
         v
     }
 
+    fn v(text: &str) -> Version {
+        Version::parse(text).unwrap()
+    }
+
+    /// Puts `offer` into the releases directory, as an earlier publish left it.
+    fn in_directory(u: &Updater<Arc<Fake>>, offer: &Offer) {
+        std::fs::write(u.paths.releases.join(SIGNATURE_NAME), &offer.signature).unwrap();
+        std::fs::write(u.paths.releases.join(MANIFEST_NAME), &offer.manifest).unwrap();
+    }
+
+    fn manifest_in_directory(u: &Updater<Arc<Fake>>) -> Option<Vec<u8>> {
+        std::fs::read(u.paths.releases.join(MANIFEST_NAME)).ok()
+    }
+
+    /// A registrar installed from the newest release has that release's version: without this it
+    /// would have nothing to hand a first node until the next release.
     #[tokio::test]
-    async fn older_or_same_version_ignored() {
+    async fn the_release_of_the_running_version_fills_an_empty_directory() {
         let dir = tempfile::tempdir().unwrap();
         let source = Fake::new(vec![]);
         let same = offer(&source, &key(), "1.2.3", b"same");
+        source
+            .answers
+            .lock()
+            .unwrap()
+            .push_back(Ok(Latest::Release(same)));
+        let (mut u, events) = updater(source.clone(), dir.path());
+
+        let (o, _) = u.step().await;
+
+        assert_eq!(o, Outcome::Published(v("1.2.3")));
+        assert_eq!(
+            files_in(&dir.path().join("releases")),
+            [
+                "manifest.json",
+                "manifest.json.minisig",
+                "mtpool-registrar-x86_64-unknown-linux-musl"
+            ]
+        );
+        assert!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| e.action == "update.published")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_older_release_fills_an_empty_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = Fake::new(vec![]);
         let older = offer(&source, &key(), "1.2.2", b"older");
+        source
+            .answers
+            .lock()
+            .unwrap()
+            .push_back(Ok(Latest::Release(older)));
+        let (mut u, _) = updater(source.clone(), dir.path());
+
+        let (o, _) = u.step().await;
+
+        assert_eq!(o, Outcome::Published(v("1.2.2")));
+    }
+
+    #[tokio::test]
+    async fn the_running_version_replaces_an_older_release_in_the_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = Fake::new(vec![]);
+        let older = offer(&source, &key(), "1.2.2", b"older");
+        let same = offer(&source, &key(), "1.2.3", b"same");
+        source
+            .answers
+            .lock()
+            .unwrap()
+            .push_back(Ok(Latest::Release(same.clone())));
+        let (mut u, _) = updater(source.clone(), dir.path());
+        in_directory(&u, &older);
+
+        let (o, _) = u.step().await;
+
+        assert_eq!(o, Outcome::Published(v("1.2.3")));
+        assert_eq!(manifest_in_directory(&u), Some(same.manifest));
+    }
+
+    /// Writing the manifest again would also wake the update helper every time the registrar
+    /// starts, so it stays as it is.
+    #[tokio::test]
+    async fn a_release_already_in_the_directory_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = Fake::new(vec![]);
+        let same = offer(&source, &key(), "1.2.3", b"same");
+        source
+            .answers
+            .lock()
+            .unwrap()
+            .push_back(Ok(Latest::Release(same.clone())));
+        let (mut u, _) = updater(source.clone(), dir.path());
+        in_directory(&u, &same);
+        let path = u.paths.releases.join(MANIFEST_NAME);
+        let written = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        let (o, _) = u.step().await;
+
+        assert_eq!(o, Outcome::Ignored(v("1.2.3")));
+        assert!(source.downloads.lock().unwrap().is_empty());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            written,
+            "the helper is not woken"
+        );
+    }
+
+    /// A rollback leaves the newer manifest in the directory, and a release that is not newer
+    /// than the registrar does not push it out.
+    #[tokio::test]
+    async fn a_newer_release_in_the_directory_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = Fake::new(vec![]);
+        let newer = offer(&source, &key(), "1.3.0", b"newer");
+        let same = offer(&source, &key(), "1.2.3", b"same");
+        source
+            .answers
+            .lock()
+            .unwrap()
+            .push_back(Ok(Latest::Release(same)));
+        let (mut u, _) = updater(source.clone(), dir.path());
+        in_directory(&u, &newer);
+
+        let (o, _) = u.step().await;
+
+        assert_eq!(o, Outcome::Ignored(v("1.2.3")));
+        assert!(source.downloads.lock().unwrap().is_empty());
+        assert_eq!(manifest_in_directory(&u), Some(newer.manifest));
+    }
+
+    /// The directory is only believed when its signature is good.
+    #[tokio::test]
+    async fn a_directory_with_a_bad_signature_counts_as_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = Fake::new(vec![]);
+        let same = offer(&source, &key(), "1.2.3", b"same");
+        source
+            .answers
+            .lock()
+            .unwrap()
+            .push_back(Ok(Latest::Release(same.clone())));
+        let (mut u, _) = updater(source.clone(), dir.path());
+        in_directory(&u, &same);
+        std::fs::write(u.paths.releases.join(SIGNATURE_NAME), "not a signature").unwrap();
+
+        let (o, _) = u.step().await;
+
+        assert_eq!(o, Outcome::Published(v("1.2.3")));
+        assert_eq!(
+            std::fs::read_to_string(u.paths.releases.join(SIGNATURE_NAME)).unwrap(),
+            same.signature
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rolled_back_version_does_not_fill_an_empty_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = Fake::new(vec![]);
+        let same = offer(&source, &key(), "1.2.3", b"same");
+        source
+            .answers
+            .lock()
+            .unwrap()
+            .push_back(Ok(Latest::Release(same)));
+        let (mut u, _) = updater(source.clone(), dir.path());
+        u.paths.reject(&v("1.2.3"), "rolled back").unwrap();
+
+        let (o, _) = u.step().await;
+
+        assert_eq!(o, Outcome::Ignored(v("1.2.3")));
+        assert!(source.downloads.lock().unwrap().is_empty());
+        assert!(files_in(&dir.path().join("releases")).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_newer_release_is_published() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = Fake::new(vec![]);
         let newer = offer(&source, &key(), "1.2.4", b"newer");
-        source.answers.lock().unwrap().extend([
-            Ok(Latest::Release(same)),
-            Ok(Latest::Release(older)),
-            Ok(Latest::Release(newer)),
-        ]);
+        source
+            .answers
+            .lock()
+            .unwrap()
+            .push_back(Ok(Latest::Release(newer)));
         let (mut u, events) = updater(source.clone(), dir.path());
         let releases = dir.path().join("releases");
 
         let (o, _) = u.step().await;
-        assert_eq!(o, Outcome::Ignored(Version::parse("1.2.3").unwrap()));
-        let (o, _) = u.step().await;
-        assert_eq!(o, Outcome::Ignored(Version::parse("1.2.2").unwrap()));
-        assert!(
-            source.downloads.lock().unwrap().is_empty(),
-            "nothing is fetched for them"
-        );
-        assert!(files_in(&releases).is_empty());
-
-        let (o, _) = u.step().await;
-        assert_eq!(o, Outcome::Published(Version::parse("1.2.4").unwrap()));
+        assert_eq!(o, Outcome::Published(v("1.2.4")));
         assert_eq!(
             files_in(&releases),
             [

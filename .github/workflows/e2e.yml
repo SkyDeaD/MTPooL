@@ -106,6 +106,7 @@ jobs:
               all_sensors_down_no_ban_then_pruned
               token_file_option_works
               registrar_rollback_stops_the_rollout_of_its_agent
+              install_says_when_the_pool_has_no_release_yet
           - shard: "2"
             tests: >-
               release_rolls_through_canary_and_batches_and_stops_on_failure
@@ -127,6 +128,7 @@ jobs:
               agent_idles_under_20_mb_and_the_binary_is_under_15_mb
               reverify_clean_lifts_dirty_keeps
               registrar_installer_on_fresh_ubuntu
+              registrar_publishes_its_own_release_and_keeps_its_binary
           - shard: "6"
             tests: >-
               cloudflare_down_selection_continues_dns_recovers
@@ -138,6 +140,7 @@ jobs:
               stopped_engine_dead_not_banned
               gp_403_with_tls_healthy
               cheburcheck_fast_flag_alone_no_vote
+              first_node_installs_on_a_registrar_of_the_newest_release
           - shard: "8"
             tests: >-
               network_loss_via_netem_recovers

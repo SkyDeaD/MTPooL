@@ -9,8 +9,8 @@ use std::time::Instant;
 
 use common::{enroll_healthy, run_registrar_build, secs, settings};
 use mtpool_e2e::{
-    InstallOptions, PROXY_USER_SECRET, ReleaseSpec, Stand, TLS_DOMAIN, TestKey, Token,
-    ensure_test_key, eventually, registrar_release,
+    InstallOptions, PROXY_USER_SECRET, ReleaseSpec, Stand, StandOptions, TLS_DOMAIN, TestKey,
+    Token, ensure_test_key, eventually, pool_release, registrar_release,
 };
 use serde_json::Value;
 
@@ -155,6 +155,96 @@ async fn install_waits_for_a_registrar_that_was_rolled_back() {
         .await
         .expect("the agent answers");
     assert!(version.starts_with("0.9.1"), "{version}");
+}
+
+/// A registrar that has not fetched a release yet: the directory is empty.
+#[tokio::test]
+#[ignore = "needs Docker and the internet; run with --ignored"]
+async fn install_says_when_the_pool_has_no_release_yet() {
+    let stand = Stand::up().await.expect("the stand comes up");
+    let node = stand.node(1);
+    let run = node
+        .install(&InstallOptions {
+            name: "node-one",
+            token: Token::Env(stand.enroll_token()),
+            preset: None,
+            port: None,
+        })
+        .await
+        .expect("the installer runs");
+    assert!(!run.success, "the installer must stop:\n{}", run.output);
+    assert!(
+        run.output.contains("на пуле пока нет релиза"),
+        "it says why:\n{}",
+        run.output
+    );
+    assert!(
+        run.output.contains("повторите установку через минуту"),
+        "it says what to do:\n{}",
+        run.output
+    );
+    assert!(
+        run.output.contains("выключено самообновление"),
+        "it says what to do when nothing fetches a release:\n{}",
+        run.output
+    );
+    assert!(
+        node.node_id().await.unwrap().is_none(),
+        "the node did not enroll"
+    );
+}
+
+/// The registrar was installed from the newest release, so its version is that release's and no
+/// newer one is out yet (the stand's registrar is 0.9.0, `e2e/images/registrar/Dockerfile`).
+#[tokio::test]
+#[ignore = "needs Docker and the internet; run with --ignored"]
+async fn first_node_installs_on_a_registrar_of_the_newest_release() {
+    let stand = Stand::up_with(StandOptions {
+        self_update: true,
+        ..StandOptions::default()
+    })
+    .await
+    .expect("the stand comes up");
+    let key = ensure_test_key().expect("the stand's key");
+    let node = stand.node(1);
+    let agent = std::fs::read(node.fetch_agent_binary().await.expect("the agent build"))
+        .expect("the agent build is readable");
+    let registrar = std::fs::read(stand.fetch_registrar_binary().await.expect("the build"))
+        .expect("the registrar build is readable");
+    let target = node.target().await.expect("the target");
+    stand
+        .publish_github_release(&pool_release("0.9.0", &target, &agent, &registrar, &key).unwrap())
+        .await
+        .expect("the release is published");
+
+    eventually("the release reaches the registrar", secs(60), || async {
+        let listing = stand
+            .registrar_exec("ls /srv/releases")
+            .await
+            .map_err(|e| e.to_string())?;
+        if listing.output.contains("manifest.json\n") {
+            Ok(())
+        } else {
+            Err(listing.output)
+        }
+    })
+    .await
+    .unwrap();
+
+    let run = node
+        .install(&InstallOptions {
+            name: "node-one",
+            token: Token::Env(stand.enroll_token()),
+            preset: None,
+            port: None,
+        })
+        .await
+        .expect("the installer runs");
+    assert!(run.success, "the first node installs:\n{}", run.output);
+    assert!(
+        node.node_id().await.unwrap().is_some(),
+        "the first node enrolled"
+    );
 }
 
 #[tokio::test]
@@ -885,6 +975,81 @@ async fn installed_sum(stand: &Stand) -> String {
 
 async fn fresh_text(stand: &Stand, command: &str) -> String {
     stand.fresh_exec(command).await.unwrap().output
+}
+
+/// `install-registrar.sh` and the real units: the installer leaves the releases directory empty,
+/// the registrar fills it with the release of its own version, and the helper the manifest wakes
+/// leaves the binary alone.
+#[tokio::test]
+#[ignore = "needs Docker and the internet; run with --ignored"]
+async fn registrar_publishes_its_own_release_and_keeps_its_binary() {
+    let stand = Stand::up().await.expect("the stand comes up");
+    let key = ensure_test_key().expect("the stand's key");
+    let (target, original, build) = fresh_registrar_with_updates(&stand).await;
+    assert_eq!(
+        fresh_text(&stand, "ls -A /var/lib/mtpool/releases")
+            .await
+            .trim(),
+        "",
+        "the installer puts no release there"
+    );
+    let manifest_status = "curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+                           http://127.0.0.1:8080/releases/manifest.json";
+    assert_eq!(fresh_text(&stand, manifest_status).await.trim(), "404");
+
+    // Another file under the version the registrar runs: it must not be installed.
+    let mut other = build.clone();
+    other.push(b'x');
+    stand
+        .publish_github_release(&registrar_release("0.9.0", &target, &other, &key).unwrap())
+        .await
+        .expect("the release is published");
+    eventually("the node installer finds the release", secs(60), || async {
+        let status = fresh_text(&stand, manifest_status).await;
+        if status.trim() == "200" {
+            Ok(())
+        } else {
+            Err(status)
+        }
+    })
+    .await
+    .unwrap();
+
+    eventually("the helper has looked at it", secs(60), || async {
+        let helper = fresh_text(
+            &stand,
+            "systemctl show mtpool-registrar-update.service \
+             -p ActiveState -p Result -p ExecMainStartTimestampMonotonic",
+        )
+        .await;
+        let started = !helper.contains("ExecMainStartTimestampMonotonic=0");
+        if started && helper.contains("ActiveState=inactive") {
+            assert!(helper.contains("Result=success"), "{helper}");
+            Ok(())
+        } else {
+            Err(helper)
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        installed_sum(&stand).await,
+        original,
+        "the binary is the same"
+    );
+    assert_eq!(
+        fresh_text(&stand, "ls -A /var/lib/mtpool-update")
+            .await
+            .trim(),
+        "",
+        "no update is recorded"
+    );
+    assert_eq!(
+        fresh_text(&stand, "systemctl is-active mtpool-registrar.service")
+            .await
+            .trim(),
+        "active"
+    );
 }
 
 #[tokio::test]
