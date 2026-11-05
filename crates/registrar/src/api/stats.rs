@@ -19,7 +19,7 @@ use axum::response::Response;
 use mtpool_protocol::problem::Problem;
 use mtpool_protocol::public::{
     ClientsMark, ClientsMarkKind, ClientsPoint, ClientsRange, ClientsSeries, RecentBan,
-    StatsBucket, StatsPoint, StatsRange, StatsSeries, StatsSummary, Vote,
+    StatsBucket, StatsPoint, StatsRange, StatsSeries, StatsSummary, TrafficAllTime, Vote,
 };
 use mtpool_protocol::rfc3339;
 use rusqlite::Connection;
@@ -106,8 +106,6 @@ struct Acc {
     gap_n: i64,
     ingress: i64,
     egress: i64,
-    other_ingress: i64,
-    other_egress: i64,
 }
 
 impl Acc {
@@ -131,9 +129,6 @@ impl Acc {
             traffic_ingress_bytes: self.ingress,
             traffic_egress_bytes: self.egress,
             traffic_total_bytes: self.ingress + self.egress,
-            other_traffic_ingress_bytes: self.other_ingress,
-            other_traffic_egress_bytes: self.other_egress,
-            other_traffic_total_bytes: self.other_ingress + self.other_egress,
         }
     }
 }
@@ -151,6 +146,7 @@ struct Computed {
     buckets: Vec<StatsPoint>,
     by_reason: BTreeMap<String, i64>,
     recent: Vec<RecentBan>,
+    traffic_all_time: TrafficAllTime,
 }
 
 /// Bans that are not re-checks, with the seconds from the registration of the node and from
@@ -227,8 +223,7 @@ fn compute(conn: &Connection, range: StatsRange, now_ms: i64) -> rusqlite::Resul
     }
 
     let mut statement = conn.prepare_cached(
-        "SELECT (at - ?1) / ?2, SUM(from_client), SUM(to_client),
-                SUM(other_from_client), SUM(other_to_client)
+        "SELECT (at - ?1) / ?2, SUM(from_client), SUM(to_client)
          FROM traffic WHERE at >= ?1 AND at <= ?3 GROUP BY 1",
     )?;
     let traffic = statement.query_map([from_ms, step_ms, now_ms], |r| {
@@ -236,20 +231,35 @@ fn compute(conn: &Connection, range: StatsRange, now_ms: i64) -> rusqlite::Resul
             r.get::<_, i64>(0)?,
             r.get::<_, i64>(1)?,
             r.get::<_, i64>(2)?,
-            r.get::<_, i64>(3)?,
-            r.get::<_, i64>(4)?,
         ))
     })?;
     for row in traffic {
-        let (index, ingress, egress, other_ingress, other_egress) = row?;
+        let (index, ingress, egress) = row?;
         let acc = &mut accs[bucket_of(from_ms + index * step_ms)];
-        for acc in [acc, &mut kpi] {
-            acc.ingress += ingress;
-            acc.egress += egress;
-            acc.other_ingress += other_ingress;
-            acc.other_egress += other_egress;
-        }
+        acc.ingress += ingress;
+        acc.egress += egress;
+        kpi.ingress += ingress;
+        kpi.egress += egress;
     }
+
+    let traffic_all_time = conn.query_row(
+        "SELECT COALESCE(SUM(from_client), 0), COALESCE(SUM(to_client), 0),
+                COALESCE(SUM(other_from_client), 0), COALESCE(SUM(other_to_client), 0)
+         FROM traffic",
+        [],
+        |r| {
+            let (ingress, egress, other_ingress, other_egress): (i64, i64, i64, i64) =
+                (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
+            Ok(TrafficAllTime {
+                ingress_bytes: ingress,
+                egress_bytes: egress,
+                total_bytes: ingress + egress,
+                other_ingress_bytes: other_ingress,
+                other_egress_bytes: other_egress,
+                other_total_bytes: other_ingress + other_egress,
+            })
+        },
+    )?;
 
     let recent = ban_rows(conn, "ORDER BY at DESC, id DESC LIMIT ?1", &[&RECENT])?
         .into_iter()
@@ -269,6 +279,7 @@ fn compute(conn: &Connection, range: StatsRange, now_ms: i64) -> rusqlite::Resul
         buckets: accs.iter().map(Acc::point).collect(),
         by_reason,
         recent,
+        traffic_all_time,
     })
 }
 
@@ -294,6 +305,7 @@ async fn answer(
             by_reason: computed.by_reason,
             recent: computed.recent,
             history_ok: true,
+            traffic_all_time: computed.traffic_all_time,
         }),
         Route::Series => serde_json::to_string(&StatsSeries {
             range,

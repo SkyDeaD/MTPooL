@@ -6197,10 +6197,7 @@
           "bans",
           "traffic_ingress_bytes",
           "traffic_egress_bytes",
-          "traffic_total_bytes",
-          "other_traffic_ingress_bytes",
-          "other_traffic_egress_bytes",
-          "other_traffic_total_bytes"
+          "traffic_total_bytes"
         ],
         "properties": {
           "avg_gap_sec": {
@@ -6223,20 +6220,6 @@
             "type": "integer",
             "format": "int64",
             "description": "Bans that began in the stretch."
-          },
-          "other_traffic_egress_bytes": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Bytes from the nodes to clients of the node owners' own users. Not part of `traffic_*`."
-          },
-          "other_traffic_ingress_bytes": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Bytes from clients of the node owners' own users to the nodes. Not part of `traffic_*`."
-          },
-          "other_traffic_total_bytes": {
-            "type": "integer",
-            "format": "int64"
           },
           "traffic_egress_bytes": {
             "type": "integer",
@@ -6311,7 +6294,8 @@
           "kpi",
           "by_reason",
           "recent",
-          "history_ok"
+          "history_ok",
+          "traffic_all_time"
         ],
         "properties": {
           "by_reason": {
@@ -6331,7 +6315,7 @@
           },
           "history_ok": {
             "type": "boolean",
-            "description": "Whether the stored history reaches back to `from` (traffic is kept for 35 days)."
+            "description": "Whether the stored history reaches back to `from`."
           },
           "kpi": {
             "$ref": "#/components/schemas/StatsPoint"
@@ -6353,6 +6337,9 @@
           "step_sec": {
             "type": "integer",
             "format": "int64"
+          },
+          "traffic_all_time": {
+            "$ref": "#/components/schemas/TrafficAllTime"
           }
         }
       },
@@ -6491,6 +6478,48 @@
           },
           "scope": {
             "type": "string"
+          }
+        }
+      },
+      "TrafficAllTime": {
+        "type": "object",
+        "description": "All the traffic counted since the pool began, including nodes it no longer has.",
+        "required": [
+          "ingress_bytes",
+          "egress_bytes",
+          "total_bytes",
+          "other_ingress_bytes",
+          "other_egress_bytes",
+          "other_total_bytes"
+        ],
+        "properties": {
+          "egress_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes from the nodes to the pool's clients."
+          },
+          "ingress_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes from the pool's clients to the nodes."
+          },
+          "other_egress_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes from the nodes to clients of the node owners' own users. Not part of `total_bytes`."
+          },
+          "other_ingress_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes from clients of the node owners' own users to the nodes. Not part of `total_bytes`."
+          },
+          "other_total_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },

@@ -34,7 +34,7 @@ const root = process.cwd();
 const read = (...p: string[]) => readFileSync(join(root, ...p), 'utf8');
 
 describe('dashboard traffic', () => {
-  it('traffic_is_a_tile_with_the_split_and_a_chart_mode', async () => {
+  it('the_tile_shows_all_the_traffic_of_the_pool_and_of_the_owners_apart', async () => {
     const api = fakeApi();
     app = mount(Dashboard, { target, props: { fetchFn: api.fetchFn } });
     await settle();
@@ -43,42 +43,35 @@ describe('dashboard traffic', () => {
     expect(tiles).toHaveLength(4);
     const tile = tiles[3];
     expect(tile.querySelector('.l')?.textContent).toBe(t('dash.kpi.traffic'));
-    expect(tile.querySelector('.v')?.textContent).toBe(formatBytes(summary7d.kpi.traffic_total_bytes));
-    expect(tile.querySelector('.s')?.textContent).toContain(formatBytes(summary7d.kpi.traffic_egress_bytes));
-    expect(tile.querySelector('.s')?.textContent).toContain(formatBytes(summary7d.kpi.traffic_ingress_bytes));
-
-    const mode = [...target.querySelectorAll<HTMLButtonElement>('.seg button')].find(
-      (b) => b.textContent?.trim() === t('dash.metric.traffic'),
-    );
-    expect(mode).toBeDefined();
-    mode!.click();
-    await settle();
-    expect(target.querySelector('.th h2')?.textContent).toBe(t('dash.chart.traffic'));
-    expect(target.querySelectorAll('.bc').length).toBeGreaterThan(0);
-    expect(target.querySelector('.bc')?.getAttribute('aria-label')).toMatch(/МБ|ГБ/);
+    const values = [...tile.querySelectorAll('.v')].map((v) => v.textContent);
+    expect(values).toEqual([
+      formatBytes(summary7d.traffic_all_time.total_bytes),
+      formatBytes(summary7d.traffic_all_time.other_total_bytes),
+    ]);
+    const notes = [...tile.querySelectorAll('.s')].map((s) => s.textContent);
+    expect(notes).toEqual([t('dash.kpi.trafficPool'), t('dash.kpi.trafficOther')]);
   });
 
-  it('the_traffic_of_node_owners_is_kept_apart_from_the_pools', async () => {
+  it('the_tile_does_not_change_with_the_range', async () => {
     const api = fakeApi();
     app = mount(Dashboard, { target, props: { fetchFn: api.fetchFn } });
     await settle();
-    const tile = target.querySelectorAll('.kpis .kpi')[3];
-    expect(tile.querySelector('.v')?.textContent).toBe(formatBytes(summary7d.kpi.traffic_total_bytes));
-    expect(tile.textContent).toContain(
-      t('dash.kpi.trafficOther', { size: formatBytes(summary7d.kpi.other_traffic_total_bytes) }),
-    );
+    const value = () => target.querySelectorAll('.kpis .kpi')[3].querySelector('.v')?.textContent;
+    const before = value();
+    [...target.querySelectorAll<HTMLButtonElement>('.seg button')]
+      .find((b) => b.textContent?.trim() === t('dash.range.30d'))!
+      .click();
+    await settle();
+    expect(value()).toBe(before);
+  });
 
-    const seg = (label: string) =>
-      [...target.querySelectorAll<HTMLButtonElement>('.seg button')].find((b) => b.textContent?.trim() === label)!;
-    const label = () => target.querySelector('.bc')?.getAttribute('aria-label');
-    seg(t('dash.metric.traffic')).click();
+  it('traffic_is_not_a_chart', async () => {
+    const api = fakeApi();
+    app = mount(Dashboard, { target, props: { fetchFn: api.fetchFn } });
     await settle();
-    const pool = label();
-    seg(t('dash.metric.other')).click();
-    await settle();
-    expect(target.querySelector('.th h2')?.textContent).toBe(t('dash.chart.other'));
-    expect(label()).toMatch(/МБ|ГБ/);
-    expect(label()).not.toBe(pool);
+    const labels = [...target.querySelectorAll('.seg button')].map((b) => b.textContent?.trim());
+    expect(labels).toEqual(expect.arrayContaining([t('dash.metric.bans'), t('dash.metric.gap'), t('dash.metric.life')]));
+    expect(labels.join(' ')).not.toContain('Трафик');
   });
 
   it('no_owner_traffic_says_nothing_about_it', async () => {
@@ -88,36 +81,14 @@ describe('dashboard traffic', () => {
       const res = await inner(input, init);
       if (!String(input).includes('stats/summary') || res.status !== 200) return res;
       const body = await res.json();
-      body.kpi.other_traffic_total_bytes = 0;
+      body.traffic_all_time.other_total_bytes = 0;
       return new Response(JSON.stringify(body), { status: 200, headers: res.headers });
     }) as typeof fetch;
     app = mount(Dashboard, { target, props: { fetchFn } });
     await settle();
     const tile = target.querySelectorAll('.kpis .kpi')[3];
+    expect(tile.querySelectorAll('.v')).toHaveLength(1);
     expect(tile.querySelectorAll('.s')).toHaveLength(1);
-  });
-
-  it('a_day_without_bans_still_shows_the_traffic', async () => {
-    const api = fakeApi();
-    const inner = api.fetchFn;
-    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const res = await inner(input, init);
-      if (!String(input).includes('stats/summary') || res.status !== 200) return res;
-      const body = await res.json();
-      body.kpi.bans = 0;
-      return new Response(JSON.stringify(body), { status: 200, headers: res.headers });
-    }) as typeof fetch;
-    app = mount(Dashboard, { target, props: { fetchFn } });
-    await settle();
-    const seg = (label: string) =>
-      [...target.querySelectorAll<HTMLButtonElement>('.seg button')].find((b) => b.textContent?.trim() === label)!;
-    seg(t('dash.range.24h')).click();
-    await settle();
-    expect(target.textContent).toContain(t('dash.today.none'));
-    seg(t('dash.metric.traffic')).click();
-    await settle();
-    expect(target.textContent).not.toContain(t('dash.today.none'));
-    expect(target.querySelectorAll('.bc').length).toBeGreaterThan(0);
   });
 
   it('a_short_history_is_said_aloud', async () => {

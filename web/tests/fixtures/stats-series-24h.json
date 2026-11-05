@@ -12,10 +12,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 22649242,
       "traffic_egress_bytes": 188743680,
-      "traffic_total_bytes": 211392922,
-      "other_traffic_ingress_bytes": 70464307,
-      "other_traffic_egress_bytes": 105696461,
-      "other_traffic_total_bytes": 176160768
+      "traffic_total_bytes": 211392922
     },
     {
       "start_ts": "2026-11-03T13:00:00Z",
@@ -24,10 +21,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 27304919,
       "traffic_egress_bytes": 227540992,
-      "traffic_total_bytes": 254845911,
-      "other_traffic_ingress_bytes": 84948637,
-      "other_traffic_egress_bytes": 127422955,
-      "other_traffic_total_bytes": 212371592
+      "traffic_total_bytes": 254845911
     },
     {
       "start_ts": "2026-11-03T14:00:00Z",
@@ -36,10 +30,7 @@
       "avg_gap_sec": 43200,
       "traffic_ingress_bytes": 31960596,
       "traffic_egress_bytes": 266338304,
-      "traffic_total_bytes": 298298900,
-      "other_traffic_ingress_bytes": 99432966,
-      "other_traffic_egress_bytes": 149149450,
-      "other_traffic_total_bytes": 248582416
+      "traffic_total_bytes": 298298900
     },
     {
       "start_ts": "2026-11-03T15:00:00Z",
@@ -48,10 +39,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 25291653,
       "traffic_egress_bytes": 210763776,
-      "traffic_total_bytes": 236055429,
-      "other_traffic_ingress_bytes": 78685143,
-      "other_traffic_egress_bytes": 118027714,
-      "other_traffic_total_bytes": 196712857
+      "traffic_total_bytes": 236055429
     },
     {
       "start_ts": "2026-11-03T16:00:00Z",
@@ -60,10 +48,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 29947331,
       "traffic_egress_bytes": 249561088,
-      "traffic_total_bytes": 279508419,
-      "other_traffic_ingress_bytes": 93169473,
-      "other_traffic_egress_bytes": 139754209,
-      "other_traffic_total_bytes": 232923682
+      "traffic_total_bytes": 279508419
     },
     {
       "start_ts": "2026-11-03T17:00:00Z",
@@ -72,10 +57,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 23278387,
       "traffic_egress_bytes": 193986560,
-      "traffic_total_bytes": 217264947,
-      "other_traffic_ingress_bytes": 72421649,
-      "other_traffic_egress_bytes": 108632473,
-      "other_traffic_total_bytes": 181054122
+      "traffic_total_bytes": 217264947
     },
     {
       "start_ts": "2026-11-03T18:00:00Z",
@@ -84,10 +66,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 27934065,
       "traffic_egress_bytes": 232783872,
-      "traffic_total_bytes": 260717937,
-      "other_traffic_ingress_bytes": 86905979,
-      "other_traffic_egress_bytes": 130358968,
-      "other_traffic_total_bytes": 217264947
+      "traffic_total_bytes": 260717937
     },
     {
       "start_ts": "2026-11-03T19:00:00Z",
@@ -96,10 +75,7 @@
       "avg_gap_sec": 61200,
       "traffic_ingress_bytes": 32589742,
       "traffic_egress_bytes": 271581184,
-      "traffic_total_bytes": 304170926,
-      "other_traffic_ingress_bytes": 101390308,
-      "other_traffic_egress_bytes": 152085463,
-      "other_traffic_total_bytes": 253475771
+      "traffic_total_bytes": 304170926
     },
     {
       "start_ts": "2026-11-03T20:00:00Z",
@@ -108,10 +84,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 25920799,
       "traffic_egress_bytes": 216006656,
-      "traffic_total_bytes": 241927455,
-      "other_traffic_ingress_bytes": 80642485,
-      "other_traffic_egress_bytes": 120963727,
-      "other_traffic_total_bytes": 201606212
+      "traffic_total_bytes": 241927455
     },
     {
       "start_ts": "2026-11-03T21:00:00Z",
@@ -120,10 +93,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 30576476,
       "traffic_egress_bytes": 254803968,
-      "traffic_total_bytes": 285380444,
-      "other_traffic_ingress_bytes": 95126814,
-      "other_traffic_egress_bytes": 142690222,
-      "other_traffic_total_bytes": 237817036
+      "traffic_total_bytes": 285380444
     },
     {
       "start_ts": "2026-11-03T22:00:00Z",
@@ -132,10 +102,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 23907533,
       "traffic_egress_bytes": 199229440,
-      "traffic_total_bytes": 223136973,
-      "other_traffic_ingress_bytes": 74378991,
-      "other_traffic_egress_bytes": 111568486,
-      "other_traffic_total_bytes": 185947477
+      "traffic_total_bytes": 223136973
     },
     {
       "start_ts": "2026-11-03T23:00:00Z",
@@ -144,10 +111,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 28563210,
       "traffic_egress_bytes": 238026752,
-      "traffic_total_bytes": 266589962,
-      "other_traffic_ingress_bytes": 88863320,
-      "other_traffic_egress_bytes": 133294981,
-      "other_traffic_total_bytes": 222158301
+      "traffic_total_bytes": 266589962
     },
     {
       "start_ts": "2026-11-04T00:00:00Z",
@@ -156,10 +120,7 @@
       "avg_gap_sec": 79200,
       "traffic_ingress_bytes": 33218888,
       "traffic_egress_bytes": 276824064,
-      "traffic_total_bytes": 310042952,
-      "other_traffic_ingress_bytes": 103347650,
-      "other_traffic_egress_bytes": 155021476,
-      "other_traffic_total_bytes": 258369126
+      "traffic_total_bytes": 310042952
     },
     {
       "start_ts": "2026-11-04T01:00:00Z",
@@ -168,10 +129,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 26549944,
       "traffic_egress_bytes": 221249536,
-      "traffic_total_bytes": 247799480,
-      "other_traffic_ingress_bytes": 82599826,
-      "other_traffic_egress_bytes": 123899740,
-      "other_traffic_total_bytes": 206499566
+      "traffic_total_bytes": 247799480
     },
     {
       "start_ts": "2026-11-04T02:00:00Z",
@@ -180,10 +138,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 31205622,
       "traffic_egress_bytes": 260046848,
-      "traffic_total_bytes": 291252470,
-      "other_traffic_ingress_bytes": 97084156,
-      "other_traffic_egress_bytes": 145626235,
-      "other_traffic_total_bytes": 242710391
+      "traffic_total_bytes": 291252470
     },
     {
       "start_ts": "2026-11-04T03:00:00Z",
@@ -192,10 +147,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 24536678,
       "traffic_egress_bytes": 204472320,
-      "traffic_total_bytes": 229008998,
-      "other_traffic_ingress_bytes": 76336332,
-      "other_traffic_egress_bytes": 114504499,
-      "other_traffic_total_bytes": 190840831
+      "traffic_total_bytes": 229008998
     },
     {
       "start_ts": "2026-11-04T04:00:00Z",
@@ -204,10 +156,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 29192356,
       "traffic_egress_bytes": 243269632,
-      "traffic_total_bytes": 272461988,
-      "other_traffic_ingress_bytes": 90820662,
-      "other_traffic_egress_bytes": 136230994,
-      "other_traffic_total_bytes": 227051656
+      "traffic_total_bytes": 272461988
     },
     {
       "start_ts": "2026-11-04T05:00:00Z",
@@ -216,10 +165,7 @@
       "avg_gap_sec": 97200,
       "traffic_ingress_bytes": 33848033,
       "traffic_egress_bytes": 282066944,
-      "traffic_total_bytes": 315914977,
-      "other_traffic_ingress_bytes": 105304992,
-      "other_traffic_egress_bytes": 157957488,
-      "other_traffic_total_bytes": 263262480
+      "traffic_total_bytes": 315914977
     },
     {
       "start_ts": "2026-11-04T06:00:00Z",
@@ -228,10 +174,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 27179090,
       "traffic_egress_bytes": 226492416,
-      "traffic_total_bytes": 253671506,
-      "other_traffic_ingress_bytes": 84557168,
-      "other_traffic_egress_bytes": 126835753,
-      "other_traffic_total_bytes": 211392921
+      "traffic_total_bytes": 253671506
     },
     {
       "start_ts": "2026-11-04T07:00:00Z",
@@ -240,10 +183,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 31834767,
       "traffic_egress_bytes": 265289728,
-      "traffic_total_bytes": 297124495,
-      "other_traffic_ingress_bytes": 99041498,
-      "other_traffic_egress_bytes": 148562247,
-      "other_traffic_total_bytes": 247603745
+      "traffic_total_bytes": 297124495
     },
     {
       "start_ts": "2026-11-04T08:00:00Z",
@@ -252,10 +192,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 25165824,
       "traffic_egress_bytes": 209715200,
-      "traffic_total_bytes": 234881024,
-      "other_traffic_ingress_bytes": 78293674,
-      "other_traffic_egress_bytes": 117440512,
-      "other_traffic_total_bytes": 195734186
+      "traffic_total_bytes": 234881024
     },
     {
       "start_ts": "2026-11-04T09:00:00Z",
@@ -264,10 +201,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 29821501,
       "traffic_egress_bytes": 248512512,
-      "traffic_total_bytes": 278334013,
-      "other_traffic_ingress_bytes": 92778004,
-      "other_traffic_egress_bytes": 139167006,
-      "other_traffic_total_bytes": 231945010
+      "traffic_total_bytes": 278334013
     },
     {
       "start_ts": "2026-11-04T10:00:00Z",
@@ -276,10 +210,7 @@
       "avg_gap_sec": 115200,
       "traffic_ingress_bytes": 23152558,
       "traffic_egress_bytes": 192937984,
-      "traffic_total_bytes": 216090542,
-      "other_traffic_ingress_bytes": 72030180,
-      "other_traffic_egress_bytes": 108045271,
-      "other_traffic_total_bytes": 180075451
+      "traffic_total_bytes": 216090542
     },
     {
       "start_ts": "2026-11-04T11:00:00Z",
@@ -288,10 +219,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 27808236,
       "traffic_egress_bytes": 231735296,
-      "traffic_total_bytes": 259543532,
-      "other_traffic_ingress_bytes": 86514510,
-      "other_traffic_egress_bytes": 129771766,
-      "other_traffic_total_bytes": 216286276
+      "traffic_total_bytes": 259543532
     }
   ]
 }

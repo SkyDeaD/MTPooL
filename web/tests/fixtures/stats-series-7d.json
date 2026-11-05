@@ -12,10 +12,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 181193933,
       "traffic_egress_bytes": 1509949440,
-      "traffic_total_bytes": 1691143373,
-      "other_traffic_ingress_bytes": 563714457,
-      "other_traffic_egress_bytes": 845571686,
-      "other_traffic_total_bytes": 1409286143
+      "traffic_total_bytes": 1691143373
     },
     {
       "start_ts": "2026-10-28T18:00:00Z",
@@ -24,10 +21,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 218439352,
       "traffic_egress_bytes": 1820327936,
-      "traffic_total_bytes": 2038767288,
-      "other_traffic_ingress_bytes": 679589096,
-      "other_traffic_egress_bytes": 1019383644,
-      "other_traffic_total_bytes": 1698972740
+      "traffic_total_bytes": 2038767288
     },
     {
       "start_ts": "2026-10-29T00:00:00Z",
@@ -36,10 +30,7 @@
       "avg_gap_sec": 43200,
       "traffic_ingress_bytes": 255684772,
       "traffic_egress_bytes": 2130706432,
-      "traffic_total_bytes": 2386391204,
-      "other_traffic_ingress_bytes": 795463734,
-      "other_traffic_egress_bytes": 1193195602,
-      "other_traffic_total_bytes": 1988659336
+      "traffic_total_bytes": 2386391204
     },
     {
       "start_ts": "2026-10-29T06:00:00Z",
@@ -48,10 +39,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 202333225,
       "traffic_egress_bytes": 1686110208,
-      "traffic_total_bytes": 1888443433,
-      "other_traffic_ingress_bytes": 629481144,
-      "other_traffic_egress_bytes": 944221716,
-      "other_traffic_total_bytes": 1573702860
+      "traffic_total_bytes": 1888443433
     },
     {
       "start_ts": "2026-10-29T12:00:00Z",
@@ -60,10 +48,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 239578644,
       "traffic_egress_bytes": 1996488704,
-      "traffic_total_bytes": 2236067348,
-      "other_traffic_ingress_bytes": 745355782,
-      "other_traffic_egress_bytes": 1118033674,
-      "other_traffic_total_bytes": 1863389456
+      "traffic_total_bytes": 2236067348
     },
     {
       "start_ts": "2026-10-29T18:00:00Z",
@@ -72,10 +57,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 186227098,
       "traffic_egress_bytes": 1551892480,
-      "traffic_total_bytes": 1738119578,
-      "other_traffic_ingress_bytes": 579373192,
-      "other_traffic_egress_bytes": 869059789,
-      "other_traffic_total_bytes": 1448432981
+      "traffic_total_bytes": 1738119578
     },
     {
       "start_ts": "2026-10-30T00:00:00Z",
@@ -84,10 +66,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 223472517,
       "traffic_egress_bytes": 1862270976,
-      "traffic_total_bytes": 2085743493,
-      "other_traffic_ingress_bytes": 695247831,
-      "other_traffic_egress_bytes": 1042871746,
-      "other_traffic_total_bytes": 1738119577
+      "traffic_total_bytes": 2085743493
     },
     {
       "start_ts": "2026-10-30T06:00:00Z",
@@ -96,10 +75,7 @@
       "avg_gap_sec": 61200,
       "traffic_ingress_bytes": 260717937,
       "traffic_egress_bytes": 2172649472,
-      "traffic_total_bytes": 2433367409,
-      "other_traffic_ingress_bytes": 811122469,
-      "other_traffic_egress_bytes": 1216683704,
-      "other_traffic_total_bytes": 2027806173
+      "traffic_total_bytes": 2433367409
     },
     {
       "start_ts": "2026-10-30T12:00:00Z",
@@ -108,10 +84,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 207366390,
       "traffic_egress_bytes": 1728053248,
-      "traffic_total_bytes": 1935419638,
-      "other_traffic_ingress_bytes": 645139879,
-      "other_traffic_egress_bytes": 967709819,
-      "other_traffic_total_bytes": 1612849698
+      "traffic_total_bytes": 1935419638
     },
     {
       "start_ts": "2026-10-30T18:00:00Z",
@@ -120,10 +93,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 244611809,
       "traffic_egress_bytes": 2038431744,
-      "traffic_total_bytes": 2283043553,
-      "other_traffic_ingress_bytes": 761014517,
-      "other_traffic_egress_bytes": 1141521776,
-      "other_traffic_total_bytes": 1902536293
+      "traffic_total_bytes": 2283043553
     },
     {
       "start_ts": "2026-10-31T00:00:00Z",
@@ -132,10 +102,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 191260262,
       "traffic_egress_bytes": 1593835520,
-      "traffic_total_bytes": 1785095782,
-      "other_traffic_ingress_bytes": 595031927,
-      "other_traffic_egress_bytes": 892547891,
-      "other_traffic_total_bytes": 1487579818
+      "traffic_total_bytes": 1785095782
     },
     {
       "start_ts": "2026-10-31T06:00:00Z",
@@ -144,10 +111,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 228505682,
       "traffic_egress_bytes": 1904214016,
-      "traffic_total_bytes": 2132719698,
-      "other_traffic_ingress_bytes": 710906566,
-      "other_traffic_egress_bytes": 1066359849,
-      "other_traffic_total_bytes": 1777266415
+      "traffic_total_bytes": 2132719698
     },
     {
       "start_ts": "2026-10-31T12:00:00Z",
@@ -156,10 +120,7 @@
       "avg_gap_sec": 79200,
       "traffic_ingress_bytes": 265751101,
       "traffic_egress_bytes": 2214592512,
-      "traffic_total_bytes": 2480343613,
-      "other_traffic_ingress_bytes": 826781204,
-      "other_traffic_egress_bytes": 1240171806,
-      "other_traffic_total_bytes": 2066953010
+      "traffic_total_bytes": 2480343613
     },
     {
       "start_ts": "2026-10-31T18:00:00Z",
@@ -168,10 +129,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 212399555,
       "traffic_egress_bytes": 1769996288,
-      "traffic_total_bytes": 1982395843,
-      "other_traffic_ingress_bytes": 660798614,
-      "other_traffic_egress_bytes": 991197921,
-      "other_traffic_total_bytes": 1651996535
+      "traffic_total_bytes": 1982395843
     },
     {
       "start_ts": "2026-11-01T00:00:00Z",
@@ -180,10 +138,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 249644974,
       "traffic_egress_bytes": 2080374784,
-      "traffic_total_bytes": 2330019758,
-      "other_traffic_ingress_bytes": 776673252,
-      "other_traffic_egress_bytes": 1165009879,
-      "other_traffic_total_bytes": 1941683131
+      "traffic_total_bytes": 2330019758
     },
     {
       "start_ts": "2026-11-01T06:00:00Z",
@@ -192,10 +147,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 196293427,
       "traffic_egress_bytes": 1635778560,
-      "traffic_total_bytes": 1832071987,
-      "other_traffic_ingress_bytes": 610690662,
-      "other_traffic_egress_bytes": 916035993,
-      "other_traffic_total_bytes": 1526726655
+      "traffic_total_bytes": 1832071987
     },
     {
       "start_ts": "2026-11-01T12:00:00Z",
@@ -204,10 +156,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 233538847,
       "traffic_egress_bytes": 1946157056,
-      "traffic_total_bytes": 2179695903,
-      "other_traffic_ingress_bytes": 726565301,
-      "other_traffic_egress_bytes": 1089847951,
-      "other_traffic_total_bytes": 1816413252
+      "traffic_total_bytes": 2179695903
     },
     {
       "start_ts": "2026-11-01T18:00:00Z",
@@ -216,10 +165,7 @@
       "avg_gap_sec": 97200,
       "traffic_ingress_bytes": 270784266,
       "traffic_egress_bytes": 2256535552,
-      "traffic_total_bytes": 2527319818,
-      "other_traffic_ingress_bytes": 842439939,
-      "other_traffic_egress_bytes": 1263659909,
-      "other_traffic_total_bytes": 2106099848
+      "traffic_total_bytes": 2527319818
     },
     {
       "start_ts": "2026-11-02T00:00:00Z",
@@ -228,10 +174,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 217432719,
       "traffic_egress_bytes": 1811939328,
-      "traffic_total_bytes": 2029372047,
-      "other_traffic_ingress_bytes": 676457349,
-      "other_traffic_egress_bytes": 1014686023,
-      "other_traffic_total_bytes": 1691143372
+      "traffic_total_bytes": 2029372047
     },
     {
       "start_ts": "2026-11-02T06:00:00Z",
@@ -240,10 +183,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 254678139,
       "traffic_egress_bytes": 2122317824,
-      "traffic_total_bytes": 2376995963,
-      "other_traffic_ingress_bytes": 792331987,
-      "other_traffic_egress_bytes": 1188497981,
-      "other_traffic_total_bytes": 1980829968
+      "traffic_total_bytes": 2376995963
     },
     {
       "start_ts": "2026-11-02T12:00:00Z",
@@ -252,10 +192,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 201326592,
       "traffic_egress_bytes": 1677721600,
-      "traffic_total_bytes": 1879048192,
-      "other_traffic_ingress_bytes": 626349397,
-      "other_traffic_egress_bytes": 939524096,
-      "other_traffic_total_bytes": 1565873493
+      "traffic_total_bytes": 1879048192
     },
     {
       "start_ts": "2026-11-02T18:00:00Z",
@@ -264,10 +201,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 238572012,
       "traffic_egress_bytes": 1988100096,
-      "traffic_total_bytes": 2226672108,
-      "other_traffic_ingress_bytes": 742224036,
-      "other_traffic_egress_bytes": 1113336054,
-      "other_traffic_total_bytes": 1855560090
+      "traffic_total_bytes": 2226672108
     },
     {
       "start_ts": "2026-11-03T00:00:00Z",
@@ -276,10 +210,7 @@
       "avg_gap_sec": 115200,
       "traffic_ingress_bytes": 185220465,
       "traffic_egress_bytes": 1543503872,
-      "traffic_total_bytes": 1728724337,
-      "other_traffic_ingress_bytes": 576241445,
-      "other_traffic_egress_bytes": 864362168,
-      "other_traffic_total_bytes": 1440603613
+      "traffic_total_bytes": 1728724337
     },
     {
       "start_ts": "2026-11-03T06:00:00Z",
@@ -288,10 +219,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 222465884,
       "traffic_egress_bytes": 1853882368,
-      "traffic_total_bytes": 2076348252,
-      "other_traffic_ingress_bytes": 692116084,
-      "other_traffic_egress_bytes": 1038174126,
-      "other_traffic_total_bytes": 1730290210
+      "traffic_total_bytes": 2076348252
     },
     {
       "start_ts": "2026-11-03T12:00:00Z",
@@ -300,10 +228,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 259711304,
       "traffic_egress_bytes": 2164260864,
-      "traffic_total_bytes": 2423972168,
-      "other_traffic_ingress_bytes": 807990722,
-      "other_traffic_egress_bytes": 1211986084,
-      "other_traffic_total_bytes": 2019976806
+      "traffic_total_bytes": 2423972168
     },
     {
       "start_ts": "2026-11-03T18:00:00Z",
@@ -312,10 +237,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 206359757,
       "traffic_egress_bytes": 1719664640,
-      "traffic_total_bytes": 1926024397,
-      "other_traffic_ingress_bytes": 642008132,
-      "other_traffic_egress_bytes": 963012198,
-      "other_traffic_total_bytes": 1605020330
+      "traffic_total_bytes": 1926024397
     },
     {
       "start_ts": "2026-11-04T00:00:00Z",
@@ -324,10 +246,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 243605176,
       "traffic_egress_bytes": 2030043136,
-      "traffic_total_bytes": 2273648312,
-      "other_traffic_ingress_bytes": 757882770,
-      "other_traffic_egress_bytes": 1136824156,
-      "other_traffic_total_bytes": 1894706926
+      "traffic_total_bytes": 2273648312
     },
     {
       "start_ts": "2026-11-04T06:00:00Z",
@@ -336,10 +255,7 @@
       "avg_gap_sec": 133200,
       "traffic_ingress_bytes": 190253629,
       "traffic_egress_bytes": 1585446912,
-      "traffic_total_bytes": 1775700541,
-      "other_traffic_ingress_bytes": 591900180,
-      "other_traffic_egress_bytes": 887850270,
-      "other_traffic_total_bytes": 1479750450
+      "traffic_total_bytes": 1775700541
     }
   ]
 }

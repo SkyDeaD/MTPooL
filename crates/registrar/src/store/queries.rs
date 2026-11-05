@@ -14,7 +14,6 @@ use super::StoreError;
 
 const DAY_MS: i64 = 24 * 3600 * 1000;
 const EVENTS_TTL_MS: i64 = 30 * DAY_MS;
-const TRAFFIC_TTL_MS: i64 = 35 * DAY_MS;
 const ROUNDS_TTL_MS: i64 = 35 * DAY_MS;
 const TOMBSTONE_TTL_MS: i64 = 7 * DAY_MS;
 const SAMPLES_TTL_MS: i64 = 8 * DAY_MS;
@@ -213,15 +212,12 @@ fn load_srmd(conn: &Connection) -> Result<SrmdState, StoreError> {
     }
 }
 
-/// Events older than 30 days, traffic and sensor rounds older than 35 days, client samples
-/// older than 8 days, node samples older than 31 days, tombstones past their 7 days. Bans are kept: they are the audit of bans.
+/// Events older than 30 days, sensor rounds older than 35 days, client samples older than 8 days,
+/// node samples older than 31 days, tombstones past their 7 days. Bans are kept: they are the
+/// audit of bans. Traffic is kept: one row per node and hour is the total of the pool.
 pub(super) fn retain(conn: &Connection, now: Ts) -> Result<(), StoreError> {
     let cutoff = |ttl: i64| now.0.saturating_sub(ttl);
     conn.execute("DELETE FROM events WHERE at < ?1", [cutoff(EVENTS_TTL_MS)])?;
-    conn.execute(
-        "DELETE FROM traffic WHERE at < ?1",
-        [cutoff(TRAFFIC_TTL_MS)],
-    )?;
     // The votes of a round go with it (`ON DELETE CASCADE`, foreign keys are on).
     conn.execute(
         "DELETE FROM sensor_rounds WHERE at < ?1",

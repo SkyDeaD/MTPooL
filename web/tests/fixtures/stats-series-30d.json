@@ -12,10 +12,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 679477248,
       "traffic_egress_bytes": 5662310400,
-      "traffic_total_bytes": 6341787648,
-      "other_traffic_ingress_bytes": 2113929216,
-      "other_traffic_egress_bytes": 3170893824,
-      "other_traffic_total_bytes": 5284823040
+      "traffic_total_bytes": 6341787648
     },
     {
       "start_ts": "2026-10-06T12:00:00Z",
@@ -24,10 +21,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 819147571,
       "traffic_egress_bytes": 6826229760,
-      "traffic_total_bytes": 7645377331,
-      "other_traffic_ingress_bytes": 2548459110,
-      "other_traffic_egress_bytes": 3822688665,
-      "other_traffic_total_bytes": 6371147775
+      "traffic_total_bytes": 7645377331
     },
     {
       "start_ts": "2026-10-07T12:00:00Z",
@@ -36,10 +30,7 @@
       "avg_gap_sec": 43200,
       "traffic_ingress_bytes": 958817894,
       "traffic_egress_bytes": 7990149120,
-      "traffic_total_bytes": 8948967014,
-      "other_traffic_ingress_bytes": 2982989004,
-      "other_traffic_egress_bytes": 4474483507,
-      "other_traffic_total_bytes": 7457472511
+      "traffic_total_bytes": 8948967014
     },
     {
       "start_ts": "2026-10-08T12:00:00Z",
@@ -48,10 +39,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 758749594,
       "traffic_egress_bytes": 6322913280,
-      "traffic_total_bytes": 7081662874,
-      "other_traffic_ingress_bytes": 2360554291,
-      "other_traffic_egress_bytes": 3540831437,
-      "other_traffic_total_bytes": 5901385728
+      "traffic_total_bytes": 7081662874
     },
     {
       "start_ts": "2026-10-09T12:00:00Z",
@@ -60,10 +48,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 898419917,
       "traffic_egress_bytes": 7486832640,
-      "traffic_total_bytes": 8385252557,
-      "other_traffic_ingress_bytes": 2795084185,
-      "other_traffic_egress_bytes": 4192626278,
-      "other_traffic_total_bytes": 6987710463
+      "traffic_total_bytes": 8385252557
     },
     {
       "start_ts": "2026-10-10T12:00:00Z",
@@ -72,10 +57,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 698351616,
       "traffic_egress_bytes": 5819596800,
-      "traffic_total_bytes": 6517948416,
-      "other_traffic_ingress_bytes": 2172649472,
-      "other_traffic_egress_bytes": 3258974208,
-      "other_traffic_total_bytes": 5431623680
+      "traffic_total_bytes": 6517948416
     },
     {
       "start_ts": "2026-10-11T12:00:00Z",
@@ -84,10 +66,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 838021939,
       "traffic_egress_bytes": 6983516160,
-      "traffic_total_bytes": 7821538099,
-      "other_traffic_ingress_bytes": 2607179366,
-      "other_traffic_egress_bytes": 3910769049,
-      "other_traffic_total_bytes": 6517948415
+      "traffic_total_bytes": 7821538099
     },
     {
       "start_ts": "2026-10-12T12:00:00Z",
@@ -96,10 +75,7 @@
       "avg_gap_sec": 61200,
       "traffic_ingress_bytes": 977692262,
       "traffic_egress_bytes": 8147435520,
-      "traffic_total_bytes": 9125127782,
-      "other_traffic_ingress_bytes": 3041709260,
-      "other_traffic_egress_bytes": 4562563891,
-      "other_traffic_total_bytes": 7604273151
+      "traffic_total_bytes": 9125127782
     },
     {
       "start_ts": "2026-10-13T12:00:00Z",
@@ -108,10 +84,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 777623962,
       "traffic_egress_bytes": 6480199680,
-      "traffic_total_bytes": 7257823642,
-      "other_traffic_ingress_bytes": 2419274547,
-      "other_traffic_egress_bytes": 3628911821,
-      "other_traffic_total_bytes": 6048186368
+      "traffic_total_bytes": 7257823642
     },
     {
       "start_ts": "2026-10-14T12:00:00Z",
@@ -120,10 +93,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 917294285,
       "traffic_egress_bytes": 7644119040,
-      "traffic_total_bytes": 8561413325,
-      "other_traffic_ingress_bytes": 2853804441,
-      "other_traffic_egress_bytes": 4280706662,
-      "other_traffic_total_bytes": 7134511103
+      "traffic_total_bytes": 8561413325
     },
     {
       "start_ts": "2026-10-15T12:00:00Z",
@@ -132,10 +102,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 717225984,
       "traffic_egress_bytes": 5976883200,
-      "traffic_total_bytes": 6694109184,
-      "other_traffic_ingress_bytes": 2231369728,
-      "other_traffic_egress_bytes": 3347054592,
-      "other_traffic_total_bytes": 5578424320
+      "traffic_total_bytes": 6694109184
     },
     {
       "start_ts": "2026-10-16T12:00:00Z",
@@ -144,10 +111,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 856896307,
       "traffic_egress_bytes": 7140802560,
-      "traffic_total_bytes": 7997698867,
-      "other_traffic_ingress_bytes": 2665899622,
-      "other_traffic_egress_bytes": 3998849433,
-      "other_traffic_total_bytes": 6664749055
+      "traffic_total_bytes": 7997698867
     },
     {
       "start_ts": "2026-10-17T12:00:00Z",
@@ -156,10 +120,7 @@
       "avg_gap_sec": 79200,
       "traffic_ingress_bytes": 996566630,
       "traffic_egress_bytes": 8304721920,
-      "traffic_total_bytes": 9301288550,
-      "other_traffic_ingress_bytes": 3100429516,
-      "other_traffic_egress_bytes": 4650644275,
-      "other_traffic_total_bytes": 7751073791
+      "traffic_total_bytes": 9301288550
     },
     {
       "start_ts": "2026-10-18T12:00:00Z",
@@ -168,10 +129,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 796498330,
       "traffic_egress_bytes": 6637486080,
-      "traffic_total_bytes": 7433984410,
-      "other_traffic_ingress_bytes": 2477994803,
-      "other_traffic_egress_bytes": 3716992205,
-      "other_traffic_total_bytes": 6194987008
+      "traffic_total_bytes": 7433984410
     },
     {
       "start_ts": "2026-10-19T12:00:00Z",
@@ -180,10 +138,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 936168653,
       "traffic_egress_bytes": 7801405440,
-      "traffic_total_bytes": 8737574093,
-      "other_traffic_ingress_bytes": 2912524697,
-      "other_traffic_egress_bytes": 4368787046,
-      "other_traffic_total_bytes": 7281311743
+      "traffic_total_bytes": 8737574093
     },
     {
       "start_ts": "2026-10-20T12:00:00Z",
@@ -192,10 +147,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 736100352,
       "traffic_egress_bytes": 6134169600,
-      "traffic_total_bytes": 6870269952,
-      "other_traffic_ingress_bytes": 2290089984,
-      "other_traffic_egress_bytes": 3435134976,
-      "other_traffic_total_bytes": 5725224960
+      "traffic_total_bytes": 6870269952
     },
     {
       "start_ts": "2026-10-21T12:00:00Z",
@@ -204,10 +156,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 875770675,
       "traffic_egress_bytes": 7298088960,
-      "traffic_total_bytes": 8173859635,
-      "other_traffic_ingress_bytes": 2724619878,
-      "other_traffic_egress_bytes": 4086929817,
-      "other_traffic_total_bytes": 6811549695
+      "traffic_total_bytes": 8173859635
     },
     {
       "start_ts": "2026-10-22T12:00:00Z",
@@ -216,10 +165,7 @@
       "avg_gap_sec": 97200,
       "traffic_ingress_bytes": 1015440998,
       "traffic_egress_bytes": 8462008320,
-      "traffic_total_bytes": 9477449318,
-      "other_traffic_ingress_bytes": 3159149772,
-      "other_traffic_egress_bytes": 4738724659,
-      "other_traffic_total_bytes": 7897874431
+      "traffic_total_bytes": 9477449318
     },
     {
       "start_ts": "2026-10-23T12:00:00Z",
@@ -228,10 +174,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 815372698,
       "traffic_egress_bytes": 6794772480,
-      "traffic_total_bytes": 7610145178,
-      "other_traffic_ingress_bytes": 2536715059,
-      "other_traffic_egress_bytes": 3805072589,
-      "other_traffic_total_bytes": 6341787648
+      "traffic_total_bytes": 7610145178
     },
     {
       "start_ts": "2026-10-24T12:00:00Z",
@@ -240,10 +183,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 955043021,
       "traffic_egress_bytes": 7958691840,
-      "traffic_total_bytes": 8913734861,
-      "other_traffic_ingress_bytes": 2971244953,
-      "other_traffic_egress_bytes": 4456867430,
-      "other_traffic_total_bytes": 7428112383
+      "traffic_total_bytes": 8913734861
     },
     {
       "start_ts": "2026-10-25T12:00:00Z",
@@ -252,10 +192,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 754974720,
       "traffic_egress_bytes": 6291456000,
-      "traffic_total_bytes": 7046430720,
-      "other_traffic_ingress_bytes": 2348810240,
-      "other_traffic_egress_bytes": 3523215360,
-      "other_traffic_total_bytes": 5872025600
+      "traffic_total_bytes": 7046430720
     },
     {
       "start_ts": "2026-10-26T12:00:00Z",
@@ -264,10 +201,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 894645043,
       "traffic_egress_bytes": 7455375360,
-      "traffic_total_bytes": 8350020403,
-      "other_traffic_ingress_bytes": 2783340134,
-      "other_traffic_egress_bytes": 4175010201,
-      "other_traffic_total_bytes": 6958350335
+      "traffic_total_bytes": 8350020403
     },
     {
       "start_ts": "2026-10-27T12:00:00Z",
@@ -276,10 +210,7 @@
       "avg_gap_sec": 115200,
       "traffic_ingress_bytes": 694576742,
       "traffic_egress_bytes": 5788139520,
-      "traffic_total_bytes": 6482716262,
-      "other_traffic_ingress_bytes": 2160905420,
-      "other_traffic_egress_bytes": 3241358131,
-      "other_traffic_total_bytes": 5402263551
+      "traffic_total_bytes": 6482716262
     },
     {
       "start_ts": "2026-10-28T12:00:00Z",
@@ -288,10 +219,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 834247066,
       "traffic_egress_bytes": 6952058880,
-      "traffic_total_bytes": 7786305946,
-      "other_traffic_ingress_bytes": 2595435315,
-      "other_traffic_egress_bytes": 3893152973,
-      "other_traffic_total_bytes": 6488588288
+      "traffic_total_bytes": 7786305946
     },
     {
       "start_ts": "2026-10-29T12:00:00Z",
@@ -300,10 +228,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 973917389,
       "traffic_egress_bytes": 8115978240,
-      "traffic_total_bytes": 9089895629,
-      "other_traffic_ingress_bytes": 3029965209,
-      "other_traffic_egress_bytes": 4544947814,
-      "other_traffic_total_bytes": 7574913023
+      "traffic_total_bytes": 9089895629
     },
     {
       "start_ts": "2026-10-30T12:00:00Z",
@@ -312,10 +237,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 773849088,
       "traffic_egress_bytes": 6448742400,
-      "traffic_total_bytes": 7222591488,
-      "other_traffic_ingress_bytes": 2407530496,
-      "other_traffic_egress_bytes": 3611295744,
-      "other_traffic_total_bytes": 6018826240
+      "traffic_total_bytes": 7222591488
     },
     {
       "start_ts": "2026-10-31T12:00:00Z",
@@ -324,10 +246,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 913519411,
       "traffic_egress_bytes": 7612661760,
-      "traffic_total_bytes": 8526181171,
-      "other_traffic_ingress_bytes": 2842060390,
-      "other_traffic_egress_bytes": 4263090585,
-      "other_traffic_total_bytes": 7105150975
+      "traffic_total_bytes": 8526181171
     },
     {
       "start_ts": "2026-11-01T12:00:00Z",
@@ -336,10 +255,7 @@
       "avg_gap_sec": 133200,
       "traffic_ingress_bytes": 713451110,
       "traffic_egress_bytes": 5945425920,
-      "traffic_total_bytes": 6658877030,
-      "other_traffic_ingress_bytes": 2219625676,
-      "other_traffic_egress_bytes": 3329438515,
-      "other_traffic_total_bytes": 5549064191
+      "traffic_total_bytes": 6658877030
     },
     {
       "start_ts": "2026-11-02T12:00:00Z",
@@ -348,10 +264,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 853121434,
       "traffic_egress_bytes": 7109345280,
-      "traffic_total_bytes": 7962466714,
-      "other_traffic_ingress_bytes": 2654155571,
-      "other_traffic_egress_bytes": 3981233357,
-      "other_traffic_total_bytes": 6635388928
+      "traffic_total_bytes": 7962466714
     },
     {
       "start_ts": "2026-11-03T12:00:00Z",
@@ -360,10 +273,7 @@
       "avg_gap_sec": null,
       "traffic_ingress_bytes": 992791757,
       "traffic_egress_bytes": 8273264640,
-      "traffic_total_bytes": 9266056397,
-      "other_traffic_ingress_bytes": 3088685465,
-      "other_traffic_egress_bytes": 4633028198,
-      "other_traffic_total_bytes": 7721713663
+      "traffic_total_bytes": 9266056397
     }
   ]
 }

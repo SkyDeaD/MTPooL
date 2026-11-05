@@ -308,11 +308,21 @@ pub struct StatsPoint {
     /// Bytes from the nodes to the pool's clients.
     pub traffic_egress_bytes: i64,
     pub traffic_total_bytes: i64,
-    /// Bytes from clients of the node owners' own users to the nodes. Not part of `traffic_*`.
-    pub other_traffic_ingress_bytes: i64,
-    /// Bytes from the nodes to clients of the node owners' own users. Not part of `traffic_*`.
-    pub other_traffic_egress_bytes: i64,
-    pub other_traffic_total_bytes: i64,
+}
+
+/// All the traffic counted since the pool began, including nodes it no longer has.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct TrafficAllTime {
+    /// Bytes from the pool's clients to the nodes.
+    pub ingress_bytes: i64,
+    /// Bytes from the nodes to the pool's clients.
+    pub egress_bytes: i64,
+    pub total_bytes: i64,
+    /// Bytes from clients of the node owners' own users to the nodes. Not part of `total_bytes`.
+    pub other_ingress_bytes: i64,
+    /// Bytes from the nodes to clients of the node owners' own users. Not part of `total_bytes`.
+    pub other_egress_bytes: i64,
+    pub other_total_bytes: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -350,8 +360,9 @@ pub struct StatsSummary {
     pub by_reason: BTreeMap<String, i64>,
     /// The last 30 bans, newest first.
     pub recent: Vec<RecentBan>,
-    /// Whether the stored history reaches back to `from` (traffic is kept for 35 days).
+    /// Whether the stored history reaches back to `from`.
     pub history_ok: bool,
+    pub traffic_all_time: TrafficAllTime,
 }
 
 /// Figures per bucket over a range.
