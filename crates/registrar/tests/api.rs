@@ -243,6 +243,27 @@ fn ban(
         at: Ts(at),
         votes: votes.to_vec(),
         reverify,
+        node_registered_at: None,
+    });
+}
+
+/// A ban as the pool records it: the record of the node is gone by then, only the time of its
+/// registration stays.
+fn ban_of_node_registered_at(
+    store: &Store,
+    node: &str,
+    ip: [u8; 4],
+    at: i64,
+    votes: &[(SensorKind, Vote)],
+    registered_at: i64,
+) {
+    store.send(PersistOp::RecordBan {
+        ip: Ipv4Addr::from(ip),
+        node: node_id(node),
+        at: Ts(at),
+        votes: votes.to_vec(),
+        reverify: false,
+        node_registered_at: Some(Ts(registered_at)),
     });
 }
 
@@ -259,7 +280,7 @@ fn traffic(store: &Store, node: &str, at: i64, from_client: u64, to_client: u64)
 ///
 /// ```text
 /// id  at (s before now)  node   reverify  lifetime  gap
-///  1  100000             gamma  no        none      none      (gamma is not in the database)
+///  1  100000             gamma  no        none      none      (banned before the time was kept)
 ///  2  5000               alpha  no        15000     95000
 ///  3  3000               beta   no        7000      2000
 ///  4  2000               beta   yes       none      none
@@ -276,21 +297,21 @@ fn seed_history(env: &Env) {
         &[(Globalping, Vote::Blocked), (RedFlag, Vote::Blocked)],
         false,
     );
-    ban(
+    ban_of_node_registered_at(
         &env.store,
         "alpha-00001",
         [203, 0, 113, 7],
         NOW - 5_000_000,
         &[(Globalping, Vote::Blocked), (Cheburcheck, Vote::Blocked)],
-        false,
+        NOW - 20_000_000,
     );
-    ban(
+    ban_of_node_registered_at(
         &env.store,
         "beta-00002",
         [198, 51, 100, 9],
         NOW - 3_000_000,
         &[(Globalping, Vote::Blocked), (RedFlag, Vote::Blocked)],
-        false,
+        NOW - 10_000_000,
     );
     ban(
         &env.store,
@@ -982,7 +1003,7 @@ async fn bans_newest_first_with_paging_and_fields() {
         ])
     );
     let first = by_id(1);
-    assert_eq!(first["lifetime_sec"], Value::Null, "its node is gone");
+    assert_eq!(first["lifetime_sec"], Value::Null, "no time was kept");
     assert_eq!(
         first["gap_sec"],
         Value::Null,
@@ -1578,4 +1599,78 @@ async fn public_nodes_carry_the_new_fields_and_no_evidence() {
     let one = one.json();
     assert_eq!(one["checks"]["tcp"], true, "{one}");
     assert!(one["rotates_at"].is_string(), "{one}");
+}
+
+#[tokio::test]
+async fn a_ban_tells_how_long_the_node_lived_after_its_record_is_gone() {
+    let env = env(PoolState::default());
+    ban_of_node_registered_at(
+        &env.store,
+        "alpha-00001",
+        [203, 0, 113, 7],
+        NOW - 5_000_000,
+        &[(SensorKind::Globalping, Vote::Blocked)],
+        NOW - 20_000_000,
+    );
+    env.store.flush().unwrap();
+
+    let log = get(&env, "/api/v1/bans").await;
+    assert_eq!(log.status, StatusCode::OK, "{}", log.body);
+    let log: Value = serde_json::from_str(&log.body).unwrap();
+    assert_eq!(log[0]["lifetime_sec"], 15000);
+
+    let summary = get(&env, "/api/v1/stats/summary?range=24h").await;
+    assert_eq!(summary.status, StatusCode::OK, "{}", summary.body);
+    let summary: Value = serde_json::from_str(&summary.body).unwrap();
+    assert_eq!(summary["kpi"]["avg_lifetime_sec"], 15000);
+}
+
+#[tokio::test]
+async fn the_active_bans_leave_out_rechecks_and_lifted_ones() {
+    let env = env(PoolState::default());
+    let votes = [(SensorKind::Globalping, Vote::Blocked)];
+    ban(
+        &env.store,
+        "lifted-00001",
+        [192, 0, 2, 1],
+        NOW - 5_000,
+        &votes,
+        false,
+    );
+    ban(
+        &env.store,
+        "banned-00002",
+        [192, 0, 2, 2],
+        NOW - 4_000,
+        &votes,
+        false,
+    );
+    ban(
+        &env.store,
+        "banned-00002",
+        [192, 0, 2, 2],
+        NOW - 3_000,
+        &votes,
+        true,
+    );
+    env.store.send(PersistOp::LiftBan {
+        ip: Ipv4Addr::new(192, 0, 2, 1),
+        at: Ts(NOW - 2_000),
+        admin: true,
+    });
+    env.store.flush().unwrap();
+
+    let ids = |body: &str| -> Vec<String> {
+        let rows: Vec<Value> = serde_json::from_str(body).unwrap();
+        rows.iter()
+            .map(|r| r["node_id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let active = get(&env, "/api/v1/bans?active=true").await;
+    assert_eq!(active.status, StatusCode::OK, "{}", active.body);
+    assert_eq!(ids(&active.body), ["banned-00002"]);
+    let all = get(&env, "/api/v1/bans?active=false").await;
+    assert_eq!(ids(&all.body).len(), 3);
+    let wrong = get(&env, "/api/v1/bans?active=maybe").await;
+    assert_eq!(wrong.status, StatusCode::BAD_REQUEST, "{}", wrong.body);
 }

@@ -312,6 +312,7 @@ fn announce(
                         at: now,
                         votes: votes.clone(),
                         reverify: false,
+                        node_registered_at: Some(node.registered_at),
                     },
                 );
                 emit_node(
@@ -334,6 +335,7 @@ fn announce(
                         at: now,
                         votes,
                         reverify: true,
+                        node_registered_at: None,
                     },
                 );
                 // Not `NodeBanned`: the agent registers again every few minutes from a
@@ -2239,7 +2241,7 @@ mod tests {
             .expect("the failed reverify is recorded");
         assert!(matches!(
             record,
-            PersistOp::RecordBan { ip: a, node, reverify: true, votes, .. }
+            PersistOp::RecordBan { ip: a, node, reverify: true, votes, node_registered_at: None, .. }
                 if *a == ip(1) && *node == id("n2") && votes.len() == 2
         ));
     }
@@ -2249,6 +2251,7 @@ mod tests {
         let mut p = Pool::new();
         p.make_healthy("n1", ip(1));
         p.quarantine("n1");
+        let registered_at = p.state.nodes[&id("n1")].registered_at;
         let effects = p.round("n1", &blocked());
         let record = persists(&effects)
             .into_iter()
@@ -2256,10 +2259,11 @@ mod tests {
             .expect("the ban is recorded");
         assert!(matches!(
             record,
-            PersistOp::RecordBan { ip: a, node, at, votes, reverify: false }
+            PersistOp::RecordBan { ip: a, node, at, votes, reverify: false, node_registered_at }
                 if *a == ip(1)
                     && *node == id("n1")
                     && *at == p.now
+                    && *node_registered_at == Some(registered_at)
                     && votes[..] == [
                         (SensorKind::Globalping, Vote::Blocked),
                         (SensorKind::Cheburcheck, Vote::Blocked),

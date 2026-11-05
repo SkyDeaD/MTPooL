@@ -1,7 +1,7 @@
 // What the pages work out from API answers. Pure functions: no time of their own, no network.
 import { t } from './i18n';
 import { messages, type MessageKey } from '../strings.ru';
-import type { Engine, NodeChecks, NodeHistory, PublicDomain, PublicNode } from './types';
+import type { BanRecord, Engine, NodeChecks, NodeHistory, PublicDomain, PublicNode } from './types';
 
 export const ENGINE_NAMES: Record<Engine, string> = {
   telemt: 'telemt',
@@ -189,4 +189,14 @@ export function sensorName(sensor: string): string {
 /** "Globalping + cheburcheck" from the API's `cheburcheck+globalping`. */
 export function reasonLabel(reason: string): string {
   return reason.split('+').map(sensorName).join(' + ');
+}
+
+/**
+ * The bans of the panel, newest first: every ban in force, since each can be lifted from here, and
+ * the latest of the log until there are `size` rows.
+ */
+export function panelBans(active: readonly BanRecord[], log: readonly BanRecord[], size: number): BanRecord[] {
+  const inForce = new Set(active.map((b) => b.id));
+  const rest = log.filter((b) => !b.reverify && !inForce.has(b.id)).slice(0, Math.max(0, size - active.length));
+  return [...active, ...rest].sort((a, b) => b.id - a.id);
 }

@@ -247,6 +247,9 @@ pub enum PersistOp {
         at: Ts,
         votes: Vec<(SensorKind, Vote)>,
         reverify: bool,
+        /// When the banned node registered: the record goes with the ban, and how long the node
+        /// lived is still asked of it. A failed reverify has none, its record is a new attempt.
+        node_registered_at: Option<Ts>,
     },
     /// The ban of an IP ended: a clean reverify round, or an admin.
     LiftBan {

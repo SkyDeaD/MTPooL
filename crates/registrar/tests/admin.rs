@@ -723,6 +723,7 @@ async fn unban_works_from_the_id_of_any_open_row_of_the_ban_log() {
         at: Ts(NOW),
         votes: vec![],
         reverify: true,
+        node_registered_at: None,
     });
     env.store.flush().unwrap();
 
@@ -1077,6 +1078,7 @@ async fn status_shows_sensors_dns_and_counters() {
             at: mtpool_core::Ts(at),
             votes: vec![(SensorKind::Globalping, Vote::Blocked)],
             reverify,
+            node_registered_at: None,
         });
     };
     ban(NOW - 1_000, false);

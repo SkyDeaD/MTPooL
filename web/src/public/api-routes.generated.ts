@@ -41,7 +41,8 @@ export const publicRoutes: ApiRoute[] = [
     "path": "/api/v1/bans",
     "query": [
       "limit",
-      "before"
+      "before",
+      "active"
     ]
   },
   {

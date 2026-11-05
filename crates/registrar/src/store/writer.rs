@@ -440,9 +440,11 @@ fn apply_op(conn: &Connection, op: &PersistOp) -> Result<(), StoreError> {
             at,
             votes,
             reverify,
+            node_registered_at,
         } => {
             conn.prepare_cached(
-                "INSERT INTO bans(ip, node, at, votes, reverify) VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO bans(ip, node, at, votes, reverify, node_registered_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )?
             .execute(params![
                 ip.to_string(),
@@ -450,6 +452,7 @@ fn apply_op(conn: &Connection, op: &PersistOp) -> Result<(), StoreError> {
                 at.0,
                 to_json("ban votes", votes)?,
                 reverify,
+                node_registered_at.map(|t| t.0),
             ])?;
         }
         PersistOp::LiftBan { ip, at, admin } => {

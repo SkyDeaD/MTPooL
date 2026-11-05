@@ -159,7 +159,7 @@ fn a_database_at_version_5_upgrades_cleanly() {
     let conn = fresh(&path);
     conn.execute_batch(
         "DROP TABLE client_samples; DROP TABLE node_samples; \
-         ALTER TABLE ip_blocks DROP COLUMN owner; DROP INDEX tokens_node_id; \
+         ALTER TABLE bans DROP COLUMN node_registered_at; ALTER TABLE ip_blocks DROP COLUMN owner; DROP INDEX tokens_node_id; \
          DELETE FROM schema_migrations WHERE version >= 6;",
     )
     .unwrap();
@@ -188,7 +188,7 @@ fn a_database_at_version_7_upgrades_and_loses_the_tokens_of_nodes_it_no_longer_h
     store.close().unwrap();
     let conn = fresh(&path);
     conn.execute_batch(
-        "ALTER TABLE ip_blocks DROP COLUMN owner; DROP INDEX tokens_node_id; \
+        "ALTER TABLE bans DROP COLUMN node_registered_at; ALTER TABLE ip_blocks DROP COLUMN owner; DROP INDEX tokens_node_id; \
          DELETE FROM schema_migrations WHERE version = 8; \
          INSERT INTO ip_blocks(ip, node_id, blocked_at) VALUES ('198.51.100.9', 'old-a1b2c', 1); \
          INSERT INTO tokens(kind, hash, prefix, node_id, created_at) \
@@ -246,6 +246,7 @@ fn deleting_a_node_deletes_its_token_and_keeps_its_history() {
         at: NOW,
         votes: vec![],
         reverify: false,
+        node_registered_at: None,
     });
     store.flush().unwrap();
     let conn = fresh(&path);
@@ -313,7 +314,7 @@ fn a_database_at_version_6_upgrades_cleanly() {
     store.close().unwrap();
     let conn = fresh(&path);
     conn.execute_batch(
-        "DROP TABLE node_samples; ALTER TABLE ip_blocks DROP COLUMN owner; \
+        "DROP TABLE node_samples; ALTER TABLE bans DROP COLUMN node_registered_at; ALTER TABLE ip_blocks DROP COLUMN owner; \
          DROP INDEX tokens_node_id; DELETE FROM schema_migrations WHERE version >= 7;",
     )
     .unwrap();
@@ -1024,6 +1025,7 @@ fn lift_ban_closes_the_open_rows_of_that_ip() {
             (SensorKind::RedFlag, Vote::Blocked),
         ],
         reverify,
+        node_registered_at: None,
     };
     store.send(ban("198.51.100.1", 100, false));
     store.send(ban("198.51.100.1", 200, true));
@@ -1401,4 +1403,186 @@ fn processes_opening_a_new_database_together_all_succeed() {
         }
         assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 8);
     }
+}
+
+/// The database an older build left: the migrations up to `version`, nothing else.
+fn database_at(path: &Path, version: i64) {
+    let conn = Connection::open(path).unwrap();
+    for (v, sql) in MIGRATIONS.iter().filter(|(v, _)| *v <= version) {
+        conn.execute_batch(sql).unwrap();
+        conn.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, 0)",
+            [v],
+        )
+        .unwrap();
+    }
+}
+
+fn version_of(path: &Path) -> i64 {
+    count(path, "SELECT MAX(version) FROM schema_migrations")
+}
+
+fn a_ban_row(conn: &Connection, node: &str, reverify: i64) {
+    conn.execute(
+        "INSERT INTO bans(ip, node, at, votes, reverify) VALUES ('192.0.2.1', ?1, 9000, '[]', ?2)",
+        rusqlite::params![node, reverify],
+    )
+    .unwrap();
+}
+
+#[test]
+fn the_migration_keeps_when_the_nodes_of_old_bans_registered() {
+    let (_dir, path) = temp_db();
+    database_at(&path, 7);
+    let conn = fresh(&path);
+    conn.execute(
+        "INSERT INTO nodes(id, owner, ip, port, engine, state, record) \
+         VALUES ('old-00001', 1, '192.0.2.1', 443, 'telemt', 'banned', '{\"registered_at\": 1000}')",
+        [],
+    )
+    .unwrap();
+    a_ban_row(&conn, "old-00001", 0);
+    a_ban_row(&conn, "old-00001", 1);
+    a_ban_row(&conn, "gone-00002", 0);
+    drop(conn);
+
+    Store::open(&path).unwrap().close().unwrap();
+
+    let conn = fresh(&path);
+    let mut stmt = conn
+        .prepare("SELECT node_registered_at FROM bans ORDER BY id")
+        .unwrap();
+    let kept: Vec<Option<i64>> = stmt
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(kept, vec![Some(1000), None, None]);
+}
+
+#[test]
+fn a_migration_first_keeps_a_copy_of_the_database() {
+    let (_dir, path) = temp_db();
+    database_at(&path, 7);
+    a_ban_row(&fresh(&path), "old-00001", 0);
+
+    Store::open(&path).unwrap().close().unwrap();
+
+    let copy = crate::backup::before_migration(&path, 7);
+    assert!(copy.is_file(), "{}", copy.display());
+    assert_eq!(version_of(&copy), 7);
+    assert_eq!(count(&copy, "SELECT COUNT(*) FROM bans"), 1);
+    assert_eq!(version_of(&path), 8);
+
+    // A restore checks the sum beside the copy, so the sum must be there.
+    crate::backup::restore(&path, &copy).unwrap();
+    assert_eq!(version_of(&path), 7);
+}
+
+#[test]
+fn a_database_with_nothing_to_migrate_gets_no_copy() {
+    let (dir, path) = temp_db();
+    Store::open(&path).unwrap().close().unwrap();
+    Store::open(&path).unwrap().close().unwrap();
+    let copies: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains(".before-v"))
+        .collect();
+    assert!(copies.is_empty(), "{copies:?}");
+}
+
+#[test]
+fn only_the_newest_copy_stays() {
+    let (_dir, path) = temp_db();
+    database_at(&path, 7);
+    let old = crate::backup::before_migration(&path, 6);
+    std::fs::write(&old, b"old").unwrap();
+    let old_sum = std::path::PathBuf::from(format!("{}.sha256", old.display()));
+    std::fs::write(&old_sum, b"old").unwrap();
+
+    Store::open(&path).unwrap().close().unwrap();
+
+    assert!(!old.exists());
+    assert!(!old_sum.exists());
+    assert!(crate::backup::before_migration(&path, 7).is_file());
+}
+
+/// The build that was put back finds the database of the one that failed.
+fn rolled_back(path: &Path) {
+    database_at(path, 7);
+    a_ban_row(&fresh(path), "before-00001", 0);
+    Store::open(path).unwrap().close().unwrap();
+    a_ban_row(&fresh(path), "after-00002", 0);
+}
+
+#[test]
+fn a_build_put_back_takes_the_database_it_knows() {
+    let (_dir, path) = temp_db();
+    rolled_back(&path);
+
+    assert!(undo_schema(&path, 7, UNDO_WINDOW).unwrap());
+
+    assert_eq!(version_of(&path), 7);
+    assert_eq!(count(&path, "SELECT COUNT(*) FROM bans"), 1);
+    assert!(!crate::backup::before_migration(&path, 7).exists());
+    // Once only.
+    assert!(!undo_schema(&path, 7, UNDO_WINDOW).unwrap());
+}
+
+#[test]
+fn an_old_copy_is_not_taken_back() {
+    let (_dir, path) = temp_db();
+    rolled_back(&path);
+
+    assert!(!undo_schema(&path, 7, Duration::ZERO).unwrap());
+
+    assert_eq!(version_of(&path), 8, "the database is left as it was");
+    assert!(crate::backup::before_migration(&path, 7).is_file());
+}
+
+#[test]
+fn a_database_this_build_knows_is_left_alone() {
+    let (_dir, path) = temp_db();
+    rolled_back(&path);
+    assert!(!undo_schema(&path, 8, UNDO_WINDOW).unwrap());
+    assert_eq!(count(&path, "SELECT COUNT(*) FROM bans"), 2);
+}
+
+#[test]
+fn a_newer_database_without_a_copy_is_still_refused() {
+    let (_dir, path) = temp_db();
+    Store::open(&path).unwrap().close().unwrap();
+    fresh(&path)
+        .execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (999, 0)",
+            [],
+        )
+        .unwrap();
+    assert!(!undo_newer_schema(&path).unwrap());
+    assert!(matches!(
+        Store::open(&path),
+        Err(StoreError::UnknownSchemaVersion { found: 999, .. })
+    ));
+}
+
+#[test]
+fn a_damaged_copy_is_not_taken_back() {
+    let (_dir, path) = temp_db();
+    rolled_back(&path);
+    std::fs::write(crate::backup::before_migration(&path, 7), b"damaged").unwrap();
+
+    assert!(undo_schema(&path, 7, UNDO_WINDOW).is_err());
+    assert_eq!(version_of(&path), 8, "the database is left as it was");
+}
+
+#[test]
+fn a_corrupt_file_is_left_for_the_open_to_explain() {
+    let (_dir, path) = temp_db();
+    std::fs::write(&path, b"this is not a database, ".repeat(400)).unwrap();
+    assert!(!undo_newer_schema(&path).unwrap());
+    assert!(matches!(
+        Store::open(&path),
+        Err(StoreError::Corrupt { .. })
+    ));
 }

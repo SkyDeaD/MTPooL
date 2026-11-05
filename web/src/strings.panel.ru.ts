@@ -537,7 +537,7 @@ export const panelMessages = {
   'panel.overview.services': 'Сервисы',
   'panel.overview.cloudflare': 'Cloudflare',
   'panel.overview.cfError': 'Ошибка',
-  'panel.overview.lastBans': 'Последние баны',
+  'panel.overview.lastBans': 'Действующие и последние баны',
   'panel.overview.allBans': 'Все баны',
   'panel.overview.events': 'События',
   'panel.overview.allEvents': 'Весь журнал',

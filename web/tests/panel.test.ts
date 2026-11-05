@@ -324,6 +324,32 @@ describe('node page', () => {
     expect(text()).toContain(t('panel.node.hint'));
   });
 
+  it('every_ban_in_force_can_be_lifted_and_a_lifted_one_cannot', async () => {
+    const row = (id: number, lifted: boolean, reverify = false) => ({
+      id,
+      ip: '203.x.x.91',
+      node_id: `node-${id}`,
+      at: '2026-11-04T09:00:00Z',
+      votes: [],
+      reverify,
+      lifted_at: lifted ? '2026-11-04T10:00:00Z' : null,
+      lifted_by_admin: lifted,
+    });
+    // The oldest ban in force is far below the rows the panel shows as the latest.
+    const rows = [
+      ...Array.from({ length: 7 }, (_, i) => row(100 - i, true)),
+      row(50, true, true),
+      row(10, false),
+    ];
+    api.pub.set('bans', rows);
+    start('#/overview');
+    await login();
+    const buttons = [...document.querySelectorAll('button')].filter((b) => b.textContent?.trim() === t('panel.node.unban'));
+    expect(buttons.map((b) => b.closest('tr')?.textContent?.includes('node-10'))).toEqual([true]);
+    const rowsShown = document.querySelectorAll('table.list tbody tr');
+    expect([...rowsShown].some((r) => r.textContent?.includes('node-100'))).toBe(true);
+  });
+
   it('a_ban_is_lifted_from_the_ban_history', async () => {
     start('#/overview');
     await login();

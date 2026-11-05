@@ -152,11 +152,9 @@ struct Computed {
 /// the previous ban. Both are `NULL` when unknown.
 const BANS: &str = "WITH real AS (
         SELECT b.id AS id, b.node AS node, b.ip AS ip, b.at AS at, b.votes AS votes,
-               CASE WHEN n.id IS NULL THEN NULL
-                    ELSE (b.at - CAST(json_extract(n.record, '$.registered_at') AS INTEGER)) / 1000
-               END AS lifetime,
+               (b.at - b.node_registered_at) / 1000 AS lifetime,
                (b.at - LAG(b.at) OVER (ORDER BY b.at, b.id)) / 1000 AS gap
-        FROM bans b LEFT JOIN nodes n ON n.id = b.node
+        FROM bans b
         WHERE b.reverify = 0
     )
     SELECT node, ip, at, votes, lifetime, gap FROM real";

@@ -19,7 +19,7 @@
 | доступность и клиенты ноды за сутки | `GET /api/v1/nodes/{id}/history` |
 | домены, мастера, клиенты | `GET /api/v1/domains` |
 | прокси-ссылки и QR-код | `GET /api/v1/links`, `GET /api/v1/links/{id}/qr.svg` |
-| история банов | `GET /api/v1/bans` |
+| история банов | `GET /api/v1/bans`; с `active=true` только действующие |
 | KPI и ряды | `GET /api/v1/stats/summary`, `GET /api/v1/stats/series` |
 | свой профиль | `GET /api/v1/me` |
 | свои ноды с полным IP | `GET /api/v1/me/nodes` |

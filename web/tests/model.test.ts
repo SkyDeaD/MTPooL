@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { checkRows, formatAvailability, groupNodes, historySlots, poolCounts, whyText } from '../src/lib/model';
-import type { PublicNode } from '../src/lib/types';
+import { checkRows, formatAvailability, groupNodes, historySlots, panelBans, poolCounts, whyText } from '../src/lib/model';
+import type { BanRecord, PublicNode } from '../src/lib/types';
 import history from './fixtures/node-history.json';
 import nodes from './fixtures/nodes.json';
 import { FIXTURE_NOW } from './helpers';
@@ -8,6 +8,29 @@ import { FIXTURE_NOW } from './helpers';
 const list = nodes as PublicNode[];
 
 describe('model', () => {
+  it('the_panel_lists_all_bans_in_force_and_fills_up_with_the_latest', () => {
+    const ban = (id: number, extra: Partial<BanRecord> = {}): BanRecord => ({
+      id,
+      ip: '203.x.x.91',
+      node_id: `n-${id}`,
+      at: '2026-11-04T09:00:00Z',
+      votes: [],
+      reverify: false,
+      lifted_by_admin: false,
+      ...extra,
+    });
+    const lifted = { lifted_at: '2026-11-04T10:00:00Z' };
+    const ids = (rows: BanRecord[]) => rows.map((b) => b.id);
+    const log = [ban(9, lifted), ban(8, { reverify: true }), ban(7, lifted), ban(6), ban(5, lifted)];
+
+    expect(ids(panelBans([], log, 2))).toEqual([9, 7]);
+    // A ban in force is not shown twice, and it takes a place of the latest.
+    expect(ids(panelBans([ban(6)], log, 3))).toEqual([9, 7, 6]);
+    // More in force than places: all of them stay, an old one too.
+    expect(ids(panelBans([ban(3), ban(2), ban(1)], log, 2))).toEqual([3, 2, 1]);
+    expect(ids(panelBans([], [], 5))).toEqual([]);
+  });
+
   it('groups_nodes_and_leaves_out_the_rest', () => {
     const extra = ['pending', 'dead', 'pruned'].map((state) => ({ ...list[0], id: `x-${state}`, is_master: false, state }));
     const g = groupNodes([...list, ...(extra as PublicNode[])]);

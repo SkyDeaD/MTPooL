@@ -3,7 +3,7 @@
   import { useClientsLive } from '../lib/clients-live.svelte';
   import { useNow } from '../lib/clock.svelte';
   import { formatSpan, formatWhen } from '../lib/dates';
-  import { buildScheme, otherClientsTotal, secondsUntil, whyText } from '../lib/model';
+  import { buildScheme, otherClientsTotal, panelBans, secondsUntil, whyText } from '../lib/model';
   import type { BanRecord, ClientsRange, ClientsSeries, PublicDomain, StatsSeries } from '../lib/types';
   import BanTable from '../shared/BanTable.svelte';
   import ClientsChart from '../shared/ClientsChart.svelte';
@@ -34,6 +34,7 @@
   const clients = usePolled<ClientsSeries>(() => `/api/v1/stats/clients?range=${range}`);
   const series = usePolled<StatsSeries>(() => '/api/v1/stats/series?range=7d');
   const bans = usePolled<BanRecord[]>(() => '/api/v1/bans?limit=50');
+  const activeBans = usePolled<BanRecord[]>(() => '/api/v1/bans?active=true&limit=200');
   const events = usePolled<EventEntry[]>(() => '/api/v1/admin/events');
 
   const nodes = $derived(data.nodes.data);
@@ -56,7 +57,7 @@
   });
   const bars = $derived<Bar[]>((ser?.buckets ?? []).map((b) => ({ at: Date.parse(b.start_ts), value: b.bans })));
   const chartSeries = $derived(clients.data && clients.data.range === range ? mergeLive(clients.data, live.ticks) : null);
-  const recentBans = $derived((bans.data ?? []).filter((b) => !b.reverify).slice(0, 5));
+  const recentBans = $derived(panelBans(activeBans.data ?? [], bans.data ?? [], 5));
   const known = $derived(new Set((nodes ?? []).map((n) => n.id)));
   const banHref = (id: string) => (known.has(id) ? hrefOf('node', id) : null);
 
@@ -210,7 +211,9 @@
       {#if recentBans.length > 0}
         <BanTable rows={recentBans} href={banHref} compact>
           {#snippet action(ban)}
-            <button class="btn s" type="button" onclick={() => unban(ban.node_id)}>{t('panel.node.unban')}</button>
+            {#if !ban.lifted_at}
+              <button class="btn s" type="button" onclick={() => unban(ban.node_id)}>{t('panel.node.unban')}</button>
+            {/if}
           {/snippet}
         </BanTable>
       {:else}

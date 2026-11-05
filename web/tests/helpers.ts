@@ -60,7 +60,11 @@ export function fakeApi(): FakeApi {
     if (byRange[path]) body = byRange[path][url.searchParams.get('range') ?? ''];
     else if (history) body = nodeHistory;
     else if (one) body = (bodies.nodes as { id: string }[]).find((n) => n.id === one[1]);
-    else body = bodies[path];
+    else if (path === 'bans' && url.searchParams.get('active') === 'true') {
+      body = (bodies.bans as { reverify: boolean; lifted_at?: string | null }[]).filter(
+        (b) => !b.reverify && !b.lifted_at,
+      );
+    } else body = bodies[path];
     if (body === undefined) return new Response('{"code":"not_found"}', { status: 404 });
     const text = JSON.stringify(body);
     const tag = `"${path}-${text.length}"`;
