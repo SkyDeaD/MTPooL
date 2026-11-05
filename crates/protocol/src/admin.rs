@@ -233,7 +233,7 @@ pub struct AdminNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_version: Option<String>,
     /// The conditions that do not hold now: `tcp`, `metrics`, `globalping`, `port`,
-    /// `heartbeat_stale`, `report_stale`.
+    /// `heartbeat_stale`, `report_stale`, `pool_user_taken`.
     pub failed: Vec<String>,
 }
 

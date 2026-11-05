@@ -432,7 +432,7 @@ async fn mtproxyl_reports_a_rollback_that_fails_too() {
 
 #[tokio::test(start_paused = true)]
 async fn mtproxyl_a_failed_step_undoes_what_was_done_and_never_prints_a_secret() {
-    let rig = rig(CONFIG_TOML, None);
+    let rig = rig(CONFIG_TOML, Some(r#"["alice"]"#));
     // `secret add` of the second user fails. The undo is best effort: removing the half-added
     // one may fail too, and the rest still goes through.
     for code in [0, 3, 1, 0, 0, 0] {
@@ -491,6 +491,25 @@ async fn mtproxyl_removes_revoked_pool_users_only() {
         ]
     );
     assert_eq!(rig.pool_users(), Some(vec!["bob".to_owned()]));
+}
+
+#[tokio::test]
+async fn mtproxyl_refuses_a_name_the_owner_holds_with_another_secret() {
+    let rig = rig(CONFIG_TOML, None);
+    let error = rig
+        .engine
+        .apply_config(&desired(&[("owner", BOB)], "pool.example.org"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, EngineError::PoolUserTaken { names } if names == &["owner"]),
+        "{error}"
+    );
+    assert!(rig.cli().is_empty());
+    assert_eq!(rig.pool_users(), None);
+    let health = rig.engine.health().await;
+    assert!(health.ok);
+    assert_eq!(health.reason.as_deref(), Some("pool_user_taken"));
 }
 
 #[tokio::test]

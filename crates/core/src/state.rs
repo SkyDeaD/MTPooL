@@ -156,6 +156,8 @@ pub struct ReportRequest {
     /// them apart; `traffic` then covers the whole engine.
     pub other_traffic: Option<TrafficCounters>,
     pub other_clients: Option<u64>,
+    /// The agent refused the pool's configuration because a name is taken on the node.
+    pub pool_user_taken: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

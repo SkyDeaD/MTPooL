@@ -110,6 +110,9 @@ pub struct HostReport {
     pub disk_total_bytes: u64,
 }
 
+/// The `error` of a report whose node refused the pool's configuration because a name is taken.
+pub const ERROR_POOL_USER_TAKEN: &str = "pool_user_taken";
+
 /// `POST /agent/report`. Fields this version does not name are ignored.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct ReportRequest {
@@ -128,7 +131,8 @@ pub struct ReportRequest {
     /// minute after the registrar's clock.
     #[schema(example = "2026-11-03T12:00:00Z")]
     pub checked_at: String,
-    /// What went wrong on the node, if something did.
+    /// What went wrong on the node, if something did. `pool_user_taken`: the owner holds a user
+    /// under a name of the pool, with another secret, so the pool's configuration is not applied.
     pub error: Option<String>,
 }
 

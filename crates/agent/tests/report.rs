@@ -178,6 +178,18 @@ fn an_engine_that_does_not_answer_is_ok_false() {
 }
 
 #[test]
+fn a_taken_user_name_is_the_error_of_the_report() {
+    let mut input = inputs();
+    input.health = EngineHealth {
+        ok: true,
+        reason: Some("pool_user_taken".into()),
+    };
+    let report = build_report(input);
+    assert_eq!(report.error.as_deref(), Some("pool_user_taken"));
+    assert!(report.metrics.ok, "the engine itself works");
+}
+
+#[test]
 fn user_telemetry_disabled_is_the_error_of_the_report() {
     let mut input = inputs();
     input.health = EngineHealth {

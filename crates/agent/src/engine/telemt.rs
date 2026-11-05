@@ -11,10 +11,11 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mtpool_protocol::agent::{AgentConfig, Dc2Report, MetricsReport};
+use mtpool_protocol::agent::{AgentConfig, Dc2Report, ERROR_POOL_USER_TAKEN, MetricsReport};
 use tokio::time::Instant;
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value};
 
@@ -341,6 +342,10 @@ pub struct TelemtEngine<R, H> {
     unit: String,
     state_dir: PathBuf,
     clock: fn() -> u64,
+    /// The last configuration that got as far as this check was refused because a name is taken.
+    /// A configuration that fails earlier (invalid, or the file cannot be read) leaves it as it
+    /// was. The first sync after a start comes before the first report, so it needs no file.
+    name_taken: AtomicBool,
 }
 
 impl<R: CommandRunner, H: HttpGet> TelemtEngine<R, H> {
@@ -360,6 +365,7 @@ impl<R: CommandRunner, H: HttpGet> TelemtEngine<R, H> {
             unit: unit.into(),
             state_dir,
             clock: now_secs,
+            name_taken: AtomicBool::new(false),
         }
     }
 
@@ -422,6 +428,25 @@ impl<R: CommandRunner, H: HttpGet> TelemtEngine<R, H> {
     fn known_pool_users(&self) -> Option<Vec<String>> {
         let bytes = self.fs.read(&self.pool_users_path()).ok()??;
         Some(PoolState::parse(&bytes)?.users)
+    }
+
+    /// Refuses a configuration that would take a record of the owner's. The answer holds until the
+    /// next configuration, which the agent asks for on every sync, so the owner's fix or a new name
+    /// in the pool's settings ends it without a restart. An empty or unreadable state file knows
+    /// no names, so the pool's own record only passes with its secret unchanged.
+    pub(crate) fn refuse_taken_names(
+        &self,
+        config: &TelemtToml,
+        desired: &DesiredConfig,
+        pool: &PoolState,
+    ) -> Result<()> {
+        let names = taken_names(&config.users(), desired, pool);
+        self.name_taken.store(!names.is_empty(), Ordering::Relaxed);
+        if names.is_empty() {
+            Ok(())
+        } else {
+            Err(EngineError::PoolUserTaken { names })
+        }
     }
 
     pub(crate) fn remember_pool_state(&self, state: &PoolState) {
@@ -602,6 +627,9 @@ impl<R: CommandRunner + 'static, H: HttpGet + 'static> Engine for TelemtEngine<R
         let (ok, reason) = match self.snapshot().await {
             Err(_) => (false, REASON_METRICS_UNREACHABLE),
             Ok(s) if !s.report.ok => (false, REASON_NO_ME_WRITERS),
+            // The engine works: the agent stays in touch, and the pool takes the node out of the
+            // queue because of the report's error.
+            Ok(_) if self.name_taken.load(Ordering::Relaxed) => (true, ERROR_POOL_USER_TAKEN),
             Ok(s) if s.user_telemetry_off => (true, REASON_USER_TELEMETRY_DISABLED),
             Ok(_) => {
                 return EngineHealth {
@@ -618,8 +646,9 @@ impl<R: CommandRunner + 'static, H: HttpGet + 'static> Engine for TelemtEngine<R
 
     async fn apply_config(&self, desired: &DesiredConfig) -> Result<ApplyOutcome> {
         validate(desired)?;
-        let (old_text, _) = self.load()?;
+        let (old_text, config) = self.load()?;
         let before = self.pool_state();
+        self.refuse_taken_names(&config, desired, &before)?;
         let new_text = edit(&old_text, desired, &before)?;
         let after = pool_state_of(desired);
 
@@ -692,6 +721,27 @@ impl<R: CommandRunner + 'static, H: HttpGet + 'static> ConfigSink for TelemtEngi
 // ---------------------------------------------------------------------------------------------
 // Editing telemt.toml
 // ---------------------------------------------------------------------------------------------
+
+/// The names the pool wants that hold another secret in the engine and that the pool did not write.
+/// The same secret is the pool's own record, whatever the case of its digits: an agent that lost
+/// its state file finds it again.
+fn taken_names(
+    have: &[(String, String)],
+    desired: &DesiredConfig,
+    pool: &PoolState,
+) -> Vec<String> {
+    desired
+        .users
+        .iter()
+        .filter(|(name, secret)| {
+            !pool.users.contains(name)
+                && have
+                    .iter()
+                    .any(|(held, old)| held == name && !old.eq_ignore_ascii_case(secret))
+        })
+        .map(|(name, _)| name.clone())
+        .collect()
+}
 
 /// What the pool sends is checked before a byte of the engine's file changes.
 pub(crate) fn validate(desired: &DesiredConfig) -> Result<()> {

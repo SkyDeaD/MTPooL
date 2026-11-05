@@ -63,6 +63,7 @@ describe('model', () => {
 
   it('puts_quarantine_reasons_in_words_and_keeps_a_code_it_does_not_know', () => {
     expect(whyText(['report_stale'])).toBe('нет свежего замера Globalping');
+    expect(whyText(['pool_user_taken'])).toBe('на ноде уже есть пользователь с именем из настроек пула и другим секретом');
     expect(whyText(['tcp', 'something_new'])).toBe('порт не отвечает снаружи, something_new');
     expect(whyText([])).toBe('');
   });

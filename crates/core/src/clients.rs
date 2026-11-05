@@ -181,6 +181,7 @@ mod tests {
             clients: Some(4),
             other_traffic: None,
             other_clients: Some(100),
+            pool_user_taken: false,
         });
         apply(&mut state, report, NOW);
         assert_eq!(client_sample(&state, NOW).total, 4);
@@ -247,6 +248,7 @@ mod tests {
                 clients,
                 other_traffic: None,
                 other_clients: None,
+                pool_user_taken: false,
             });
             apply(&mut state, report, NOW);
         }

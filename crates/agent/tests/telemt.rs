@@ -1059,6 +1059,114 @@ async fn a_user_the_pool_never_wrote_is_never_removed() {
 }
 
 #[tokio::test]
+async fn a_name_the_owner_holds_with_another_secret_is_refused() {
+    let rig = rig(&owner_config(), None);
+    let before = rig.config_text();
+    let error = rig
+        .engine
+        .apply_config(&desired(
+            &[("alice", ALICE), ("owner", BOB)],
+            "pool.example.org",
+        ))
+        .await
+        .unwrap_err();
+
+    // The reason names the user and never a secret.
+    assert!(
+        matches!(&error, EngineError::PoolUserTaken { names } if names == &["owner"]),
+        "{error}"
+    );
+    let said = error.to_string();
+    assert!(said.contains("owner"), "{said}");
+    assert!(!said.contains(BOB) && !said.contains(OWNER), "{said}");
+
+    // Nothing of the pool went in: not the user, not the domain, and telemt was not touched.
+    assert_eq!(rig.config_text(), before);
+    assert_eq!(rig.pool_users(), None);
+    assert!(rig.runner.calls().is_empty());
+
+    // The engine itself is fine: a warning, not a reason for the agent to fall silent.
+    let health = rig.engine.health().await;
+    assert!(health.ok);
+    assert_eq!(health.reason.as_deref(), Some("pool_user_taken"));
+    assert!(rig.engine.metrics().await.unwrap().ok);
+}
+
+#[tokio::test]
+async fn the_refusal_ends_with_the_next_config_that_takes_no_name() {
+    let rig = rig(&owner_config(), None);
+    rig.engine
+        .apply_config(&desired(&[("owner", BOB)], "example.com"))
+        .await
+        .unwrap_err();
+
+    script_restart(&rig.runner);
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "example.com"))
+        .await
+        .unwrap();
+    assert_eq!(outcome, ApplyOutcome::Applied);
+    assert_eq!(rig.engine.health().await.reason, None);
+    assert_eq!(
+        TelemtToml::parse(&rig.config_text()).unwrap().users(),
+        [
+            (
+                "probe".to_owned(),
+                "00112233445566778899aabbccddeeff".to_owned()
+            ),
+            ("owner".to_owned(), OWNER.to_owned()),
+            ("alice".to_owned(), ALICE.to_owned()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_name_with_the_same_secret_is_the_pools_without_a_restart() {
+    // An agent that lost its state file finds what it wrote before.
+    let rig = rig(&owner_config(), None);
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("owner", OWNER)], "example.com"))
+        .await
+        .unwrap();
+    assert_eq!(outcome, ApplyOutcome::Unchanged);
+    assert!(rig.runner.calls().is_empty());
+    assert_eq!(rig.pool_users(), Some(vec!["owner".to_owned()]));
+    assert_eq!(rig.engine.health().await.reason, None);
+}
+
+#[tokio::test]
+async fn the_case_of_a_secret_does_not_make_it_another_one() {
+    // Not refused. The file still takes the pool's spelling, as with any other change.
+    let upper = OWNER.to_uppercase();
+    let rig = rig(&owner_config(), None);
+    script_restart(&rig.runner);
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("owner", &upper)], "example.com"))
+        .await
+        .unwrap();
+    assert_eq!(outcome, ApplyOutcome::Applied);
+    assert_eq!(rig.pool_users(), Some(vec!["owner".to_owned()]));
+    assert_eq!(rig.engine.health().await.reason, None);
+}
+
+#[tokio::test]
+async fn a_name_the_pool_wrote_before_still_rotates() {
+    let rig = rig(&owner_config(), Some(r#"["owner"]"#));
+    script_restart(&rig.runner);
+    let outcome = rig
+        .engine
+        .apply_config(&desired(&[("owner", BOB)], "example.com"))
+        .await
+        .unwrap();
+    assert_eq!(outcome, ApplyOutcome::Applied);
+    assert!(rig.config_text().contains(BOB));
+    assert_eq!(rig.engine.health().await.reason, None);
+}
+
+#[tokio::test]
 async fn apply_noop_when_unchanged_no_restart() {
     let config = format!(
         "{}alice = \"{ALICE}\"\n",

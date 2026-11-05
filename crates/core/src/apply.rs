@@ -623,6 +623,7 @@ fn report(state: &mut PoolState, r: ReportRequest, now: Ts, out: &mut Out) -> An
         settings.latch_fail_threshold,
         settings.latch_ok_threshold,
     );
+    node.health.pool_user_taken = r.pool_user_taken;
     match r.globalping {
         Vote::Clear => {
             node.health.gp = GpStatus::Ok { at: now };
@@ -1397,6 +1398,7 @@ mod tests {
                 clients: None,
                 other_traffic: None,
                 other_clients: None,
+                pool_user_taken: false,
             }))
         }
 
@@ -1704,6 +1706,7 @@ mod tests {
             clients: None,
             other_traffic: None,
             other_clients: None,
+            pool_user_taken: false,
         }));
         assert_eq!(effects, [Effect::Reply(reply_id, Reply::Stale)]);
         assert_eq!(p.state, before);
@@ -1774,6 +1777,7 @@ mod tests {
                 clients,
                 other_traffic: None,
                 other_clients: None,
+                pool_user_taken: false,
             }))
         };
         let effects = send(&mut p, 1000, 2000, Some(4));
@@ -1827,6 +1831,7 @@ mod tests {
             clients,
             other_traffic: other.map(counters),
             other_clients,
+            pool_user_taken: false,
         }))
     }
 
@@ -2027,6 +2032,7 @@ mod tests {
             clients: Some(12),
             other_traffic: None,
             other_clients: None,
+            pool_user_taken: false,
         }));
         p.advance(SEC);
         p.run(Command::Tick);

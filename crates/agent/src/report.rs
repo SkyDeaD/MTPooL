@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mtpool_protocol::agent::{
-    AgentConfig, Dc2Report, GpReport, HostReport, MetricsReport, ReportRequest,
+    AgentConfig, Dc2Report, ERROR_POOL_USER_TAKEN, GpReport, HostReport, MetricsReport,
+    ReportRequest,
 };
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::Instant;
@@ -87,8 +88,12 @@ pub fn build_report(inputs: ReportInputs) -> ReportRequest {
     } else {
         with_all_users_summed(metrics)
     };
-    let error = (inputs.health.reason.as_deref() == Some(REASON_USER_TELEMETRY_DISABLED))
-        .then(|| REASON_USER_TELEMETRY_DISABLED.to_owned());
+    let error = inputs
+        .health
+        .reason
+        .as_deref()
+        .filter(|reason| [REASON_USER_TELEMETRY_DISABLED, ERROR_POOL_USER_TAKEN].contains(reason))
+        .map(str::to_owned);
     ReportRequest {
         ip: inputs.ip,
         port: inputs.port,

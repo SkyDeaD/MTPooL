@@ -462,6 +462,7 @@ impl<R: CommandRunner + 'static, H: HttpGet + 'static> Engine for MtProxyLEngine
         telemt::validate(desired)?;
         let (_, config) = self.reader.load()?;
         let before = self.reader.pool_state();
+        self.reader.refuse_taken_names(&config, desired, &before)?;
         let after = telemt::pool_state_of(desired);
 
         let steps = Self::plan(&config, desired, &before)?;
