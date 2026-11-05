@@ -184,6 +184,11 @@ async fn install_says_when_the_pool_has_no_release_yet() {
         run.output
     );
     assert!(
+        run.output.contains("выключено самообновление"),
+        "it says what to do when nothing fetches a release:\n{}",
+        run.output
+    );
+    assert!(
         node.node_id().await.unwrap().is_none(),
         "the node did not enroll"
     );

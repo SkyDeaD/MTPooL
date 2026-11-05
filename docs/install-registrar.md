@@ -75,7 +75,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://pool.example.com/releases/manif
 journalctl -u mtpool-registrar -n 100 --no-pager
 ```
 
-Без строки `MTPOOL_RELEASE_REPO` в `/etc/mtpool/registrar.env` самообновление выключено, и релиз сам не появится. Положите его вручную, манифест последним. Версия должна быть не новее регистратора: `mtpool-registrar version` покажет его версию. Манифест новее регистратора установщик нод не примет, а служба обновления попробует заменить бинарник.
+Без строки `MTPOOL_RELEASE_REPO` в `/etc/mtpool/registrar.env` самообновление выключено, и релиз сам не появится. Положите его вручную, манифест последним. Версия должна быть не новее регистратора: `mtpool-registrar version` покажет его версию. Манифест новее регистратора установщик нод не примет. Служба обновления попробует заменить бинарник, не найдёт его в каталоге и навсегда отклонит эту версию.
 
 ```bash
 version=<версия регистратора>
@@ -83,9 +83,11 @@ base=https://github.com/SkyDeaD/MTPooL/releases/download/v$version
 cd /var/lib/mtpool/releases
 for file in mtpool-agent-x86_64-unknown-linux-musl mtpool-agent-aarch64-unknown-linux-musl \
     manifest.json.minisig manifest.json; do
-    sudo runuser -u mtpool -- curl -fsSL -o "$file" "$base/$file"
+    sudo runuser -u mtpool -- curl -fsSL -o "$file" "$base/$file" || break
 done
 ```
+
+Если цикл прервался с ошибкой, запустите его снова: манифест скачивается последним, поэтому до этого установщик нод его не увидит.
 
 ## Настройка пула
 
