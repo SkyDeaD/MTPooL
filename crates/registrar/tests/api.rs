@@ -273,6 +273,19 @@ fn traffic(store: &Store, node: &str, at: i64, from_client: u64, to_client: u64)
         at: Ts(at),
         from_client,
         to_client,
+        other_from_client: 0,
+        other_to_client: 0,
+    });
+}
+
+fn other_traffic(store: &Store, node: &str, at: i64, from_client: u64, to_client: u64) {
+    store.send(PersistOp::Traffic {
+        node: node_id(node),
+        at: Ts(at),
+        from_client: 0,
+        to_client: 0,
+        other_from_client: from_client,
+        other_to_client: to_client,
     });
 }
 
@@ -787,6 +800,9 @@ async fn empty_pool_returns_empty_lists_not_500() {
         "traffic_ingress_bytes": 0,
         "traffic_egress_bytes": 0,
         "traffic_total_bytes": 0,
+        "other_traffic_ingress_bytes": 0,
+        "other_traffic_egress_bytes": 0,
+        "other_traffic_total_bytes": 0,
     });
     let summary = get(&env, "/api/v1/stats/summary").await;
     assert_eq!(summary.status, StatusCode::OK, "{}", summary.body);
@@ -1034,6 +1050,38 @@ async fn bans_newest_first_with_paging_and_fields() {
 }
 
 #[tokio::test]
+async fn stats_keep_the_traffic_of_node_owners_apart() {
+    let env = env(pool());
+    traffic(&env.store, "alpha-00001", NOW - 3_600_000, 100, 200);
+    other_traffic(&env.store, "alpha-00001", NOW - 3_500_000, 30, 40);
+    other_traffic(&env.store, "alpha-00001", NOW - 90_000_000, 7, 8);
+    env.store.flush().unwrap();
+
+    let summary = get(&env, "/api/v1/stats/summary?range=24h").await.json();
+    assert_eq!(summary["kpi"]["traffic_ingress_bytes"], 100);
+    assert_eq!(summary["kpi"]["traffic_egress_bytes"], 200);
+    assert_eq!(summary["kpi"]["traffic_total_bytes"], 300);
+    assert_eq!(summary["kpi"]["other_traffic_ingress_bytes"], 30);
+    assert_eq!(summary["kpi"]["other_traffic_egress_bytes"], 40);
+    assert_eq!(summary["kpi"]["other_traffic_total_bytes"], 70);
+
+    let series = get(&env, "/api/v1/stats/series?range=24h").await.json();
+    let buckets = series["buckets"].as_array().unwrap();
+    let sum = |key: &str| {
+        buckets
+            .iter()
+            .map(|bucket| bucket[key].as_i64().unwrap())
+            .sum::<i64>()
+    };
+    assert_eq!(sum("traffic_total_bytes"), 300);
+    assert_eq!(sum("other_traffic_total_bytes"), 70);
+
+    let month = get(&env, "/api/v1/stats/summary?range=30d").await.json();
+    assert_eq!(month["kpi"]["traffic_total_bytes"], 300);
+    assert_eq!(month["kpi"]["other_traffic_total_bytes"], 85);
+}
+
+#[tokio::test]
 async fn stats_count_bans_traffic_and_reasons() {
     let env = env(pool());
     seed_history(&env);
@@ -1055,6 +1103,9 @@ async fn stats_count_bans_traffic_and_reasons() {
             "traffic_ingress_bytes": 1200,
             "traffic_egress_bytes": 4800,
             "traffic_total_bytes": 6000,
+            "other_traffic_ingress_bytes": 0,
+            "other_traffic_egress_bytes": 0,
+            "other_traffic_total_bytes": 0,
         })
     );
     assert_eq!(
@@ -1112,6 +1163,9 @@ async fn stats_count_bans_traffic_and_reasons() {
                     "traffic_ingress_bytes": 1000,
                     "traffic_egress_bytes": 4000,
                     "traffic_total_bytes": 5000,
+                    "other_traffic_ingress_bytes": 0,
+                    "other_traffic_egress_bytes": 0,
+                    "other_traffic_total_bytes": 0,
                 })
             ),
             23 => assert_eq!(
@@ -1124,6 +1178,9 @@ async fn stats_count_bans_traffic_and_reasons() {
                     "traffic_ingress_bytes": 200,
                     "traffic_egress_bytes": 800,
                     "traffic_total_bytes": 1000,
+                    "other_traffic_ingress_bytes": 0,
+                    "other_traffic_egress_bytes": 0,
+                    "other_traffic_total_bytes": 0,
                 })
             ),
             _ => {

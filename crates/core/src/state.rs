@@ -226,12 +226,15 @@ pub enum PersistOp {
         node: NodeId,
         stats: NodeStats,
     },
-    /// Bytes since the previous report; the store adds them to its aggregates.
+    /// Bytes since the previous report; the store adds them to its aggregates. `other_*` are the
+    /// users of the node's owner, kept apart from the pool's.
     Traffic {
         node: NodeId,
         at: Ts,
         from_client: u64,
         to_client: u64,
+        other_from_client: u64,
+        other_to_client: u64,
     },
     /// A judged sensor round with the evidence of every vote.
     RecordRound {

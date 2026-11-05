@@ -1770,12 +1770,24 @@ export interface components {
             bans: number;
             /**
              * Format: int64
-             * @description Bytes from the nodes to clients.
+             * @description Bytes from the nodes to clients of the node owners' own users. Not part of `traffic_*`.
+             */
+            other_traffic_egress_bytes: number;
+            /**
+             * Format: int64
+             * @description Bytes from clients of the node owners' own users to the nodes. Not part of `traffic_*`.
+             */
+            other_traffic_ingress_bytes: number;
+            /** Format: int64 */
+            other_traffic_total_bytes: number;
+            /**
+             * Format: int64
+             * @description Bytes from the nodes to the pool's clients.
              */
             traffic_egress_bytes: number;
             /**
              * Format: int64
-             * @description Bytes from clients to the nodes.
+             * @description Bytes from the pool's clients to the nodes.
              */
             traffic_ingress_bytes: number;
             /** Format: int64 */
