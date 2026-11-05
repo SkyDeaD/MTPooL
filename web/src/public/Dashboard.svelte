@@ -3,6 +3,7 @@
   import { formatBytes } from '../lib/format';
   import { t, tp } from '../lib/i18n';
   import { reasonLabel } from '../lib/model';
+  import { useClientsLive } from '../lib/clients-live.svelte';
   import { useResource } from '../lib/resource.svelte';
   import type { BanRecord, PublicNode, StatsRange, StatsSeries, StatsSummary } from '../lib/types';
   import BanTable from '../shared/BanTable.svelte';
@@ -21,6 +22,14 @@
   const series = useResource<StatsSeries>(() => `/api/v1/stats/series?range=${range}`, fetchFn);
   const bans = useResource<BanRecord[]>(() => '/api/v1/bans?limit=50', fetchFn);
   const nodes = useResource<PublicNode[]>(() => '/api/v1/nodes', fetchFn);
+
+  // A new ban shows at once; the stream says something changed and the page reads again.
+  useClientsLive(() => {
+    summary.refresh();
+    series.refresh();
+    bans.refresh();
+    nodes.refresh();
+  });
 
   const sum = $derived(summary.data && summary.data.range === range ? summary.data : null);
   const ser = $derived(series.data && series.data.range === range ? series.data : null);

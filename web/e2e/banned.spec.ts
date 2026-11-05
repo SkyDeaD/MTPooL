@@ -42,15 +42,13 @@ test('banned: it is in the ban history and the journal of the panel', async ({ p
   await expect(page.locator('main').getByText(bannedId()).first()).toBeVisible();
 });
 
-test('banned: a row of the ban history opens the node page with the unban button', async ({ page }) => {
+test('banned: the record is gone, the ban history keeps the name and the unban button', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openPanel(page, '#/overview');
   const row = page.locator('table.list tbody tr', { hasText: bannedId() });
   await expect(row).toBeVisible();
-  await row.getByText(bannedId()).click();
-  await expect(page).toHaveURL(new RegExp(`#/nodes/${bannedId()}$`));
-  await expect(page.locator('main h1').first()).toHaveText(bannedId());
-  await expect(page.getByRole('button', { name: 'Снять бан' })).toBeVisible();
+  await expect(row.getByRole('link', { name: bannedId() })).toHaveCount(0);
+  await expect(row.getByRole('button', { name: 'Снять бан' })).toBeVisible();
 });
 
 test('banned: the public statistics page has no trace of it', async ({ page }) => {

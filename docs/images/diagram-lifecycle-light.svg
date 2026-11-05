@@ -25,7 +25,7 @@
 <text x="662" y="56" font-size="18" font-weight="400" fill="#475062" text-anchor="middle">условие нарушено</text>
 <text x="662" y="132" font-size="18" font-weight="400" fill="#475062" text-anchor="middle">снова в норме</text>
 <text x="115.0" y="340.0" font-size="24" font-weight="600" fill="#12161f" text-anchor="middle">Banned</text>
-<text x="115.0" y="368.0" font-size="17" font-weight="400" fill="#475062" text-anchor="middle">IP заблокирован</text>
+<text x="115.0" y="368.0" font-size="17" font-weight="400" fill="#475062" text-anchor="middle">запись удалена</text>
 <text x="480.0" y="340.0" font-size="24" font-weight="600" fill="#12161f" text-anchor="middle">Dead</text>
 <text x="480.0" y="368.0" font-size="17" font-weight="400" fill="#475062" text-anchor="middle">не отвечает</text>
 <text x="845.0" y="340.0" font-size="24" font-weight="600" fill="#12161f" text-anchor="middle">Pruned</text>
@@ -36,6 +36,6 @@
 <text x="494" y="264" font-size="18" font-weight="400" fill="#475062" text-anchor="start">10 минут</text>
 <text x="831" y="240" font-size="18" font-weight="400" fill="#475062" text-anchor="end">нет решения</text>
 <text x="831" y="264" font-size="18" font-weight="400" fill="#475062" text-anchor="end">60 минут</text>
-<text x="84" y="162" font-size="18" font-weight="400" fill="#475062" text-anchor="start">reverify</text>
-<text x="84" y="186" font-size="18" font-weight="400" fill="#475062" text-anchor="start">или разбан</text>
+<text x="84" y="162" font-size="18" font-weight="400" fill="#475062" text-anchor="start">регистрация после</text>
+<text x="84" y="186" font-size="18" font-weight="400" fill="#475062" text-anchor="start">reverify или разбана</text>
 </svg>

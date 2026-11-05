@@ -61,11 +61,26 @@ pub struct PublicNode {
     pub is_master: bool,
     /// The domains the node is master of.
     pub domains: Vec<String>,
-    /// Clients connected to the node, as its last report said; absent until it reported one.
+    /// Clients of the pool's users on the node, as its last report said; absent until it reported
+    /// one. A client is a unique address the engine counts for the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clients: Option<u64>,
+    /// Clients of the owner's own users on the node, counted apart from `clients`. Absent when
+    /// there are none or it is not known (an agent that does not tell them apart): nothing to
+    /// show either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_clients: Option<u64>,
+    /// Bytes of the owner's own users on the node since the pool began to count them apart, both
+    /// directions together. Not part of the pool's traffic. Absent when there are none or it is
+    /// not known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_traffic_bytes: Option<u64>,
     /// The conditions the pool watches on the node.
     pub checks: NodeChecks,
+    /// Why the node entered quarantine: `tcp`, `metrics`, `globalping`, `port`, `heartbeat_stale`,
+    /// `report_stale` (no confirmed measurement for too long). Absent in other states.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quarantine_reasons: Vec<String>,
     /// Place in the queue for a master slot, from 1: only for a healthy node that is not a
     /// master.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -406,6 +421,22 @@ pub struct ClientsPoint {
     pub total: u64,
     /// Clients of each domain that had a number in the step.
     pub domains: BTreeMap<String, u64>,
+}
+
+/// One frame `clients` of the live stream: the numbers of the pool right now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LiveClients {
+    /// RFC 3339, UTC: when the frame was made.
+    pub at: String,
+    /// Clients of the whole pool: its users on the nodes in the pool.
+    pub total: u64,
+    /// Clients of each domain with a known number.
+    pub domains: BTreeMap<String, u64>,
+    /// Clients of the pool's users on each node in the pool with a known number.
+    pub nodes: BTreeMap<String, u64>,
+    /// The owner's own users on each node that has any. They are not in the numbers above.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub other_nodes: BTreeMap<String, u64>,
 }
 
 /// What an event mark on the chart stands for.

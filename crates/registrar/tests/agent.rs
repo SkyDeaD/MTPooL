@@ -14,8 +14,8 @@ use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use common::*;
 use mtpool_core::{
-    GpStatus, NodeRecord, NodeState, OwnerId, PoolState, ProxyUser, SensorVote, Settings,
-    Tombstone, Ts, Vote,
+    Command, GpStatus, IpBlock, NodeRecord, NodeState, OwnerId, PoolState, ProxyUser, SensorKind,
+    SensorVote, Settings, Tombstone, Ts, Vote,
 };
 use mtpool_protocol::problem::Problem;
 use mtpool_protocol::rfc3339;
@@ -33,6 +33,7 @@ const SECRET: &str = "00112233445566778899aabbccddeeff";
 const LIMIT: usize = 256 * 1024;
 /// The address `healthy_node` gives its nodes.
 const ALPHA_IP: &str = "45.33.1.5";
+const PEER_ADMIN: &str = "198.51.100.7";
 
 /// A verifier whose answer the test sets. With a gate it waits for `release` first.
 struct FakeVerifier {
@@ -394,20 +395,211 @@ async fn enroll_respects_owner_limit() {
 
 #[tokio::test]
 async fn enroll_limit_counts_only_live_nodes_of_the_owner() {
-    let mut banned = node_at("gone-00003", [45, 33, 1, 7], NodeState::Banned);
-    banned.owner = OwnerId(1);
+    let mut gone = node_at("gone-00003", [45, 33, 1, 7], NodeState::Dead);
+    gone.owner = OwnerId(1);
     let mut mine = alpha();
     mine.owner = OwnerId(1);
-    let env = env(pool(vec![banned, mine]));
+    let env = env(pool(vec![gone, mine]));
     let me = owner(&env, "me", 2);
     assert_eq!(me, OwnerId(1));
     let enroll_token = enroll_token(&env, me);
 
-    // One live node and one banned: the banned one does not count.
+    // One live node and one dead: the dead one does not count.
     let ok = enroll(&env, &enroll_token, "203.0.113.21", "fresh").await;
     assert_eq!(ok.status, StatusCode::OK, "{}", ok.body);
     let full = enroll(&env, &enroll_token, "203.0.113.22", "late").await;
     assert_problem(&full, StatusCode::FORBIDDEN, "owner_limit");
+}
+
+/// The way from a confirmed ban to the node coming back, as the agent and the admin see it.
+#[tokio::test]
+async fn a_ban_takes_the_record_and_the_token_and_the_unban_works_without_them() {
+    let mut node = alpha();
+    node.state = NodeState::Quarantine;
+    node.owner = OwnerId(1);
+    let generation = node.generation;
+    let env = env(pool(vec![node]));
+    let me = owner(&env, "me", 2);
+    assert_eq!(me, OwnerId(1));
+    let enroll_with = enroll_token(&env, me);
+    let node_tok = node_token(&env, "alpha-00001");
+    let admin = token(&env, TokenKind::Admin, None, None);
+
+    let blocked = SensorVote {
+        vote: Vote::Blocked,
+        evidence: json!(null),
+    };
+    env.actor
+        .send(Command::RoundDone {
+            node: node_id("alpha-00001"),
+            generation,
+            votes: vec![
+                (SensorKind::Globalping, blocked.clone()),
+                (SensorKind::Cheburcheck, blocked),
+            ],
+        })
+        .await
+        .unwrap();
+    wait_until_gone(&env, "alpha-00001").await;
+    env.store.flush().unwrap();
+
+    assert_eq!(
+        count(&env, "SELECT count(*) FROM tokens WHERE kind = 'node'"),
+        0
+    );
+    assert_eq!(count(&env, "SELECT count(*) FROM bans"), 1);
+    let beat = post(&env, "/api/v1/agent/heartbeat", ALPHA_IP, &node_tok, None).await;
+    assert_problem(&beat, StatusCode::UNAUTHORIZED, "unauthorized");
+
+    // The pause of the first ban: the agent enrolling at once does not reach the sensors.
+    let early = enroll(&env, &enroll_with, ALPHA_IP, "alpha").await;
+    assert_eq!(
+        early.status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "{}",
+        early.body
+    );
+    assert_eq!(node_count(&env).await, 0);
+
+    let lifted = post(
+        &env,
+        "/api/v1/admin/nodes/alpha-00001/unban",
+        PEER_ADMIN,
+        &admin,
+        None,
+    )
+    .await;
+    assert_eq!(lifted.status, StatusCode::OK, "{}", lifted.body);
+    let blocks = env.actor.inspect(|s| s.blocks.len()).await.unwrap();
+    assert_eq!(blocks, 0);
+
+    let back = enroll(&env, &enroll_with, ALPHA_IP, "alpha").await;
+    assert_eq!(back.status, StatusCode::OK, "{}", back.body);
+    let again = post(
+        &env,
+        "/api/v1/admin/nodes/alpha-00001/unban",
+        PEER_ADMIN,
+        &admin,
+        None,
+    )
+    .await;
+    assert_problem(&again, StatusCode::NOT_FOUND, "not_found");
+}
+
+async fn wait_until_gone(env: &Env, name: &str) {
+    for _ in 0..200 {
+        if node_of(env, name).await.is_none() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{name} still has a record");
+}
+
+/// A node of `me` that last spoke `silent_sec` seconds ago.
+fn silent_node(name: &str, ip: [u8; 4], me: OwnerId, silent_sec: i64) -> NodeRecord {
+    let mut n = node_at(name, ip, NodeState::Healthy);
+    n.owner = me;
+    n.health.last_heartbeat = Ts(NOW - silent_sec * 1000);
+    n
+}
+
+#[tokio::test]
+async fn a_full_limit_gives_way_only_after_the_silence_of_a_node() {
+    let me = OwnerId(1);
+    let env = env(pool(vec![
+        silent_node("old-00001", [45, 33, 1, 5], me, 0),
+        silent_node("new-00002", [45, 33, 1, 6], me, 0),
+    ]));
+    assert_eq!(owner(&env, "me", 2), me);
+    let enrolling = enroll_token(&env, me);
+
+    let live = enroll(&env, &enrolling, "203.0.113.41", "third").await;
+    assert_problem(&live, StatusCode::FORBIDDEN, "owner_limit");
+
+    // Both silent now, past the TTL and the restart grace of the same length.
+    env.clock.fetch_add(61_000, Ordering::SeqCst);
+    let after = enroll(&env, &enrolling, "203.0.113.41", "third").await;
+    assert_eq!(after.status, StatusCode::OK, "{}", after.body);
+    let body = after.json();
+    assert_eq!(body["replaced"], "new-00002", "ties go by the id: {body}");
+    assert_eq!(
+        node_of(&env, "new-00002").await.unwrap().state,
+        NodeState::Dead
+    );
+    assert_eq!(
+        node_of(&env, "old-00001").await.unwrap().state,
+        NodeState::Healthy
+    );
+}
+
+#[tokio::test]
+async fn silence_from_before_a_restart_evicts_nobody_until_the_heartbeats_had_time() {
+    let me = OwnerId(1);
+    let env = env(pool(vec![silent_node(
+        "old-00001",
+        [45, 33, 1, 5],
+        me,
+        300,
+    )]));
+    assert_eq!(owner(&env, "me", 1), me);
+    let enrolling = enroll_token(&env, me);
+
+    let early = enroll(&env, &enrolling, "203.0.113.42", "next").await;
+    assert_problem(&early, StatusCode::FORBIDDEN, "owner_limit");
+
+    env.clock.fetch_add(60_000, Ordering::SeqCst);
+    let due = enroll(&env, &enrolling, "203.0.113.42", "next").await;
+    assert_eq!(due.status, StatusCode::OK, "{}", due.body);
+}
+
+#[tokio::test]
+async fn the_same_address_at_a_full_limit_is_a_replacement() {
+    let me = OwnerId(1);
+    let env = env(pool(vec![silent_node("old-00001", [45, 33, 1, 5], me, 0)]));
+    assert_eq!(owner(&env, "me", 1), me);
+    let enrolling = enroll_token(&env, me);
+
+    let resp = enroll(&env, &enrolling, ALPHA_IP, "fresh").await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert_eq!(resp.json()["replaced"], "old-00001");
+}
+
+#[tokio::test]
+async fn a_blocked_address_at_a_full_limit_is_refused_and_evicts_nobody() {
+    let me = OwnerId(1);
+    let mut state = pool(vec![silent_node("old-00001", [45, 33, 1, 5], me, 300)]);
+    state.blocks.push(IpBlock {
+        ip: std::net::Ipv4Addr::new(203, 0, 113, 43),
+        node_id: node_id("gone-00002"),
+        blocked_at: Ts(NOW),
+        next_reverify_at: Some(Ts(NOW + 900_000)),
+        owner: Some(me),
+    });
+    let env = env(state);
+    assert_eq!(owner(&env, "me", 1), me);
+    let enrolling = enroll_token(&env, me);
+    env.clock.fetch_add(60_000, Ordering::SeqCst);
+
+    let paused = enroll(&env, &enrolling, "203.0.113.43", "next").await;
+    assert_eq!(
+        paused.status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "{}",
+        paused.body
+    );
+    assert_eq!(
+        node_of(&env, "old-00001").await.unwrap().state,
+        NodeState::Healthy
+    );
+
+    env.clock.fetch_add(900_000, Ordering::SeqCst);
+    let due = enroll(&env, &enrolling, "203.0.113.43", "next").await;
+    assert_problem(&due, StatusCode::FORBIDDEN, "owner_limit");
+    assert_eq!(
+        node_of(&env, "old-00001").await.unwrap().state,
+        NodeState::Healthy
+    );
 }
 
 #[tokio::test]
@@ -808,13 +1000,23 @@ async fn node_token_cannot_act_for_other_node() {
         let resp = post(&env, path, ALPHA_IP, &token_a, Some(body)).await;
         assert_problem(&resp, StatusCode::BAD_REQUEST, "bad_request");
     }
+    // A report ignores what it does not know, so naming a node there changes nothing: the numbers
+    // go to the node of the token.
     let mut named = report_at(NOW + 9_000, no_data());
     named["node_id"] = json!("beta-00002");
-    assert_problem(
-        &report(&env, &token_a, named).await,
-        StatusCode::BAD_REQUEST,
-        "bad_request",
-    );
+    let resp = report(&env, &token_a, named).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    let stats_of = |name: &'static str| {
+        let actor = env.actor.clone();
+        async move {
+            actor
+                .inspect(move |s| s.stats.get(&node_id(name)).cloned())
+                .await
+                .unwrap()
+        }
+    };
+    assert!(stats_of("alpha-00001").await.is_some());
+    assert_eq!(stats_of("beta-00002").await, None, "beta was not touched");
     let beta = node_of(&env, "beta-00002").await.unwrap();
     assert_eq!(beta.health.last_heartbeat, Ts(NOW), "beta was not touched");
 
@@ -908,14 +1110,25 @@ async fn report_limit_256kib() {
 }
 
 #[tokio::test]
+async fn report_ignores_what_a_later_agent_may_add() {
+    let env = env(pool(vec![alpha()]));
+    let token = node_token(&env, "alpha-00001");
+
+    let mut top = report_at(NOW, no_data());
+    top["from_a_later_version"] = json!(1);
+    let mut metrics = report_at(NOW, no_data());
+    metrics["metrics"]["from_a_later_version"] = json!(1);
+    for body in [top, metrics] {
+        let resp = report(&env, &token, body).await;
+        assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    }
+}
+
+#[tokio::test]
 async fn report_unknown_fields_rejected() {
     let env = env(pool(vec![alpha()]));
     let token = node_token(&env, "alpha-00001");
 
-    let mut top = report_at(NOW, measured("m-1"));
-    top["extra"] = json!(1);
-    let mut metrics = report_at(NOW, measured("m-2"));
-    metrics["metrics"]["extra"] = json!(1);
     let mut gp = report_at(NOW, measured("m-3"));
     gp["gp"]["extra"] = json!(1);
     let mut kind = report_at(NOW, measured("m-4"));
@@ -926,7 +1139,7 @@ async fn report_unknown_fields_rejected() {
     host["host"]["extra"] = json!(1);
     let mut missing = report_at(NOW, no_data());
     missing.as_object_mut().unwrap().remove("metrics");
-    for body in [top, metrics, gp, kind, dc2, host, missing] {
+    for body in [gp, kind, dc2, host, missing] {
         let resp = report(&env, &token, body.clone()).await;
         assert_problem(&resp, StatusCode::BAD_REQUEST, "bad_request");
     }
@@ -1338,6 +1551,70 @@ async fn report_feeds_traffic_and_clients() {
     assert_eq!(stats.clients, Some(3));
 }
 
+/// One report that tells the pool's users from the others.
+fn split_report(pool: (u64, u64), other: (u64, u64), other_clients: u64) -> Value {
+    let mut body = report_at(NOW, no_data());
+    body["metrics"]["from_client_total"] = json!(pool.0);
+    body["metrics"]["to_client_total"] = json!(pool.1);
+    body["metrics"]["other_from_client_total"] = json!(other.0);
+    body["metrics"]["other_to_client_total"] = json!(other.1);
+    body["metrics"]["other_clients"] = json!(other_clients);
+    body
+}
+
+#[tokio::test]
+async fn report_keeps_the_owners_users_apart() {
+    let env = env(pool(vec![alpha()]));
+    let token = node_token(&env, "alpha-00001");
+
+    // An agent that sums all users, then the updated one: its lower counter is no reset.
+    let mut before = report_at(NOW, no_data());
+    before["metrics"]["from_client_total"] = json!(50_000);
+    before["metrics"]["to_client_total"] = json!(90_000);
+    for body in [
+        before,
+        split_report((1_000, 2_000), (49_000, 88_000), 4),
+        split_report((1_500, 2_900), (49_010, 88_020), 6),
+    ] {
+        let resp = report(&env, &token, body).await;
+        assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    }
+    let stats = env
+        .actor
+        .inspect(|s| s.stats.get(&node_id("alpha-00001")).cloned())
+        .await
+        .unwrap()
+        .expect("stats");
+    assert_eq!((stats.from_client_total, stats.to_client_total), (500, 900));
+    assert_eq!(
+        (stats.other_from_client_total, stats.other_to_client_total),
+        (10, 20)
+    );
+    assert_eq!((stats.clients, stats.other_clients), (Some(3), Some(6)));
+}
+
+#[tokio::test]
+async fn an_engine_that_is_not_serving_moves_no_counter_of_the_owners_users() {
+    let env = env(pool(vec![alpha()]));
+    let token = node_token(&env, "alpha-00001");
+    let first = report(&env, &token, split_report((1, 2), (3, 4), 1)).await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.body);
+
+    let mut down = split_report((0, 0), (0, 0), 1);
+    down["metrics"]["ok"] = json!(false);
+    let resp = report(&env, &token, down).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+
+    let stats = env
+        .actor
+        .inspect(|s| s.stats.get(&node_id("alpha-00001")).cloned())
+        .await
+        .unwrap()
+        .expect("stats");
+    assert_eq!(stats.counters.unwrap().from_client, 1);
+    assert_eq!(stats.other_counters.unwrap().from_client, 3);
+}
+
 // ----- config --------------------------------------------------------------------------------
 
 #[tokio::test]
@@ -1371,7 +1648,8 @@ async fn config_returns_users_sni_port_intervals() {
                 "metrics_sec": 30,
                 "sync_sec": 90
             },
-            "antiscan": true
+            "antiscan": true,
+            "report_other_users": true
         })
     );
 

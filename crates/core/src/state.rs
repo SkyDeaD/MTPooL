@@ -28,6 +28,10 @@ pub struct PoolState {
     pub assignments: Assignments,
     pub dns: BTreeMap<String, DnsState>,
     pub srmd: SrmdState,
+    /// No enrollment evicts a silent node before this time. Heartbeats are written in batches, so
+    /// after a restart the last ones are missing and a live node would look silent. Not stored:
+    /// the state owner sets it on start.
+    pub evictions_from: Option<Ts>,
 }
 
 impl PoolState {
@@ -42,13 +46,26 @@ impl PoolState {
 /// What an agent reports besides the health conditions.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeStats {
-    /// The last cumulative counters seen: the base of the next delta.
+    /// The last cumulative counters of the pool's users seen: the base of the next delta. From an
+    /// agent that does not tell the users apart they cover the whole engine.
     pub counters: Option<TrafficCounters>,
-    /// Bytes counted since registration.
+    /// Bytes of the pool's users counted since registration.
     pub from_client_total: u64,
     pub to_client_total: u64,
-    /// Clients connected to the node, as the last report said.
+    /// Clients of the pool's users on the node, as the last report said.
     pub clients: Option<u64>,
+    /// The last cumulative counters of the other users of the engine. `Some` says that `counters`
+    /// holds the pool's users alone.
+    #[serde(default)]
+    pub other_counters: Option<TrafficCounters>,
+    /// Bytes of the other users counted since the agent began to tell them apart.
+    #[serde(default)]
+    pub other_from_client_total: u64,
+    #[serde(default)]
+    pub other_to_client_total: u64,
+    /// Clients of the other users, as the last report said.
+    #[serde(default)]
+    pub other_clients: Option<u64>,
     /// Uptime of the last 30 days in hundredths of a percent (9997 is 99.97 %). Kept in
     /// memory only: the registrar recomputes it from the stored samples.
     #[serde(skip)]
@@ -110,6 +127,8 @@ pub struct EnrollRequest {
     pub ip: Ipv4Addr,
     pub port: u16,
     pub engine: EngineKind,
+    /// How many nodes the owner may have; `None`: any number.
+    pub limit: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,8 +149,13 @@ pub struct ReportRequest {
     /// The verified Globalping result: `Clear` is a success, `Blocked` a failure, `Abstain`
     /// no data (a 429 or a measurement that could not be verified).
     pub globalping: Vote,
+    /// The counters of the pool's users.
     pub traffic: Option<TrafficCounters>,
     pub clients: Option<u64>,
+    /// The counters of the other users of the engine. `None` from an agent that does not tell
+    /// them apart; `traffic` then covers the whole engine.
+    pub other_traffic: Option<TrafficCounters>,
+    pub other_clients: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,6 +214,7 @@ pub enum Durability {
 #[derive(Debug, Clone, PartialEq)]
 pub enum PersistOp {
     UpsertNode(NodeRecord),
+    /// The record, its stats and its node token go. Samples, rounds, bans and events stay.
     DeleteNode(NodeId),
     NodeHealth {
         node: NodeId,
@@ -222,6 +247,9 @@ pub enum PersistOp {
         at: Ts,
         votes: Vec<(SensorKind, Vote)>,
         reverify: bool,
+        /// When the banned node registered: the record goes with the ban, and how long the node
+        /// lived is still asked of it. A failed reverify has none, its record is a new attempt.
+        node_registered_at: Option<Ts>,
     },
     /// The ban of an IP ended: a clean reverify round, or an admin.
     LiftBan {
@@ -278,6 +306,9 @@ pub enum EventKind {
     /// A reverify round did not prove the IP clean. For the event log of the panel only: the
     /// agent registers again every few minutes, a webhook for each would be noise.
     NodeReverifyFailed,
+    /// A heartbeat came from another address and the node starts over there. For the event log
+    /// of the panel only.
+    NodeIpChanged,
     NodeDead,
     NodePruned,
     BanLifted,
@@ -314,6 +345,9 @@ pub struct Event {
     pub kind: EventKind,
     pub at: Ts,
     pub node: Option<NodeId>,
+    /// The owner of `node`, when the event was made with its record in hand. The record may be
+    /// gone by the time a worker handles the event: a ban removes it in the same `apply`.
+    pub owner: Option<OwnerId>,
     pub domain: Option<String>,
     pub detail: Value,
 }
@@ -327,12 +361,18 @@ pub enum Reply {
     Enrolled {
         node: NodeId,
         generation: Generation,
-        /// Another node on the same IP that this one displaced.
+        /// The node that gave way: another one on the same IP or, if none, a silent node of the
+        /// owner that was holding the last place.
         replaced: Option<NodeId>,
         /// The IP was blocked: a decisive round decides.
         reverify: bool,
     },
     /// 429 with `Retry-After`.
+    /// The owner is at its limit and has no silent node to give way.
+    OwnerLimit {
+        limit: i64,
+        current: usize,
+    },
     EnrollRejected {
         retry_after_sec: u32,
         reason: RejectReason,

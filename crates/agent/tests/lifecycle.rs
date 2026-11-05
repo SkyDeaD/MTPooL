@@ -270,22 +270,33 @@ async fn http_403_terminate_stops_reports_leaves_engine_retries_15min() {
 
     // The next heartbeat is refused with the terminate document.
     let t1 = t0 + secs(15);
-    assert_eq!(lifecycle.step(t1).await, Step::Wait(TERMINATED_RETRY));
+    // It wakes once per heartbeat interval to look at its address.
+    assert_eq!(lifecycle.step(t1).await, Step::Wait(secs(15)));
     assert_eq!(lifecycle.phase(), AgentPhase::Terminated);
     let sent = h.total_requests().await;
 
     // Before 15 minutes pass nothing is sent: no heartbeat, no report, no sync.
     assert_eq!(
         lifecycle.step(t1 + secs(14 * 60)).await,
-        Step::Wait(secs(60))
+        Step::Wait(secs(15))
+    );
+    assert_eq!(
+        lifecycle.step(t1 + TERMINATED_RETRY - secs(5)).await,
+        Step::Wait(secs(5)),
+        "the retry is not late for the looks"
     );
     assert_eq!(h.total_requests().await, sent);
 
     // At 15 minutes the agent tries to enroll, and is refused again.
     assert_eq!(
         lifecycle.step(t1 + TERMINATED_RETRY).await,
-        Step::Wait(TERMINATED_RETRY)
+        Step::Wait(secs(15))
     );
+    assert_eq!(
+        lifecycle.step(t1 + TERMINATED_RETRY + secs(1)).await,
+        Step::Wait(secs(14))
+    );
+    assert_eq!(h.hits(ENROLL).await, 1, "the next try is 15 minutes away");
     assert_eq!(lifecycle.phase(), AgentPhase::Terminated);
     assert_eq!(h.hits(ENROLL).await, 1);
     assert_eq!(
@@ -357,11 +368,13 @@ async fn http_429_silent_until_retry_after() {
     let mut lifecycle = h.lifecycle();
 
     let t0 = Instant::now();
-    assert_eq!(lifecycle.step(t0).await, Step::Wait(secs(120)));
+    // It wakes once per heartbeat interval to look at its address.
+    assert_eq!(lifecycle.step(t0).await, Step::Wait(secs(15)));
     assert_eq!(lifecycle.phase(), AgentPhase::Silent);
 
     // Silent: nothing is sent while the time has not passed.
-    assert_eq!(lifecycle.step(t0 + secs(60)).await, Step::Wait(secs(60)));
+    assert_eq!(lifecycle.step(t0 + secs(60)).await, Step::Wait(secs(15)));
+    assert_eq!(lifecycle.step(t0 + secs(110)).await, Step::Wait(secs(10)));
     assert_eq!(lifecycle.phase(), AgentPhase::Silent);
     assert_eq!(h.total_requests().await, 1);
 
@@ -394,7 +407,7 @@ async fn http_429_while_enrolling_returns_to_enrolling() {
     .await;
     let mut lifecycle = h.lifecycle();
     let t0 = Instant::now();
-    assert_eq!(lifecycle.step(t0).await, Step::Wait(secs(30)));
+    assert_eq!(lifecycle.step(t0).await, Step::Wait(secs(15)));
     assert_eq!(lifecycle.phase(), AgentPhase::Silent);
     lifecycle.step(t0 + secs(30)).await;
     assert_eq!(lifecycle.phase(), AgentPhase::Active);
@@ -413,7 +426,13 @@ async fn http_429_without_retry_after_waits_a_minute() {
     )
     .await;
     let mut lifecycle = h.lifecycle();
-    assert_eq!(lifecycle.step(Instant::now()).await, Step::Wait(secs(60)));
+    let t0 = Instant::now();
+    assert_eq!(lifecycle.step(t0).await, Step::Wait(secs(15)));
+    assert_eq!(lifecycle.phase(), AgentPhase::Silent);
+    assert_eq!(lifecycle.step(t0 + secs(50)).await, Step::Wait(secs(10)));
+    assert_eq!(h.hits(HEARTBEAT).await, 1);
+    lifecycle.step(t0 + secs(60)).await;
+    assert_eq!(h.hits(HEARTBEAT).await, 2);
 }
 
 #[test]

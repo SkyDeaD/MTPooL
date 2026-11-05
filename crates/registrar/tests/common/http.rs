@@ -15,6 +15,7 @@ use axum::http::{HeaderMap, Request, StatusCode, header};
 use mtpool_core::{GpStatus, NodeRecord, NodeState, OwnerId, PoolState, ProxyUser, Settings, Ts};
 use mtpool_protocol::problem::Problem;
 use mtpool_registrar::actor::{Actor, ActorHandle, ActorOptions, Clock};
+use mtpool_registrar::api::live::{LiveFan, LiveOptions};
 use mtpool_registrar::api::stream::EventFan;
 use mtpool_registrar::api::webhook_url::{ResolveFuture, Resolver};
 use mtpool_registrar::auth::tokens::{self, NewToken, TokenKind};
@@ -66,6 +67,7 @@ pub struct Env {
     pub actor: ActorHandle,
     pub clock: Arc<AtomicI64>,
     pub events: EventFan,
+    pub live: LiveFan,
     pub resolver: Arc<FakeResolver>,
     /// The Globalping settings the verifier and the sensor read.
     pub gp_settings: SharedSettings,
@@ -141,15 +143,29 @@ pub fn env(state: PoolState) -> Env {
 }
 
 pub fn env_with_keepalive(state: PoolState, keepalive: Duration) -> Env {
+    env_with(state, keepalive, LiveOptions::default())
+}
+
+/// An environment whose public stream sends its ticks by `options`.
+pub fn env_with_live(state: PoolState, options: LiveOptions) -> Env {
+    let env = env_with(state, Duration::from_secs(15), options);
+    let shared = Arc::clone(&env.clock);
+    let clock: Clock = Arc::new(move || Ts(shared.load(Ordering::SeqCst)));
+    tokio::spawn(env.live.clone().run(env.actor.clone(), clock));
+    env
+}
+
+fn env_with(state: PoolState, keepalive: Duration, options: LiveOptions) -> Env {
     let (dir, store) = open_store();
     let clock = Arc::new(AtomicI64::new(NOW));
     let shared = Arc::clone(&clock);
     let clock_fn: Clock = Arc::new(move || Ts(shared.load(Ordering::SeqCst)));
     let events = EventFan::with_keepalive(keepalive);
+    let live = LiveFan::with_options(options);
     let actor = Actor::spawn_with(
         state,
         store.clone(),
-        vec![Arc::new(events.clone())],
+        vec![Arc::new(events.clone()), Arc::new(live.clone())],
         ActorOptions {
             clock: Arc::clone(&clock_fn),
             ..ActorOptions::default()
@@ -159,6 +175,7 @@ pub fn env_with_keepalive(state: PoolState, keepalive: Duration) -> Env {
     let gp_settings: SharedSettings = Arc::new(ArcSwap::from_pointee(Default::default()));
     let state = AppState::with_clock(store.clone(), actor.clone(), actor.snapshots(), clock_fn)
         .with_events(events.clone())
+        .with_live(live.clone())
         .with_resolver(resolver.clone())
         .with_gp_settings(gp_settings.clone());
     let rollouts = state.rollouts.clone();
@@ -169,6 +186,7 @@ pub fn env_with_keepalive(state: PoolState, keepalive: Duration) -> Env {
         actor,
         clock,
         events,
+        live,
         resolver,
         gp_settings,
         rollouts,

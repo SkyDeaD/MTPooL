@@ -324,11 +324,42 @@ describe('node page', () => {
     expect(text()).toContain(t('panel.node.hint'));
   });
 
-  it('banned_node_has_unban_and_votes', async () => {
-    start('#/nodes/iota-p6q1c');
+  it('every_ban_in_force_can_be_lifted_and_a_lifted_one_cannot', async () => {
+    const row = (id: number, lifted: boolean, reverify = false) => ({
+      id,
+      ip: '203.x.x.91',
+      node_id: `node-${id}`,
+      at: '2026-11-04T09:00:00Z',
+      votes: [],
+      reverify,
+      lifted_at: lifted ? '2026-11-04T10:00:00Z' : null,
+      lifted_by_admin: lifted,
+    });
+    // The oldest ban in force is far below the rows the panel shows as the latest.
+    const rows = [
+      ...Array.from({ length: 7 }, (_, i) => row(100 - i, true)),
+      row(50, true, true),
+      row(10, false),
+    ];
+    api.pub.set('bans', rows);
+    start('#/overview');
     await login();
-    expect(button(t('panel.node.unban'))).toBeTruthy();
-    expect(button(t('panel.node.recheck'))).toBeUndefined();
+    const buttons = [...document.querySelectorAll('button')].filter((b) => b.textContent?.trim() === t('panel.node.unban'));
+    expect(buttons.map((b) => b.closest('tr')?.textContent?.includes('node-10'))).toEqual([true]);
+    const rowsShown = document.querySelectorAll('table.list tbody tr');
+    expect([...rowsShown].some((r) => r.textContent?.includes('node-100'))).toBe(true);
+  });
+
+  it('a_ban_is_lifted_from_the_ban_history', async () => {
+    start('#/overview');
+    await login();
+    const unban = button(t('panel.node.unban'));
+    expect(unban).toBeTruthy();
+    const row = unban!.closest('tr')!;
+    unban!.click();
+    await settle();
+    expect(api.writes().some((w) => w.startsWith('POST /admin/nodes/') && w.endsWith('/unban'))).toBe(true);
+    expect(row.textContent).toBeTruthy();
   });
 });
 
@@ -485,9 +516,9 @@ describe('settings limits follow the server', () => {
 });
 
 describe('journal days', () => {
-  it('a_day_turns_at_midnight_moscow_time_whatever_the_browser_zone', () => {
-    const lateEvening = Date.parse('2026-11-03T19:13:00Z'); // 22:13 in Moscow
-    const afterMidnight = Date.parse('2026-11-03T21:30:00Z'); // 00:30 in Moscow
+  it('a_day_turns_at_midnight_in_the_zone_of_the_browser', () => {
+    const lateEvening = new Date(2026, 10, 3, 23, 30).getTime();
+    const afterMidnight = new Date(2026, 10, 4, 0, 30).getTime();
     expect(dayOf(lateEvening)).not.toBe(dayOf(afterMidnight));
     expect(dayOf(lateEvening)).toBe('3 нояб.');
   });

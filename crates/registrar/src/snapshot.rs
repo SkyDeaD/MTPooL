@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use mtpool_core::{
-    EngineKind, GpStatus, NodeId, NodeRecord, NodeState as CoreState, PoolState, RecordValue,
-    build_proxy_link, mask_ip, next_round_at, queue_positions,
+    EngineKind, GpStatus, LiveCounts, NodeId, NodeRecord, NodeState as CoreState, PoolState,
+    RecordValue, build_proxy_link, live_counts, mask_ip, next_round_at, queue_positions,
 };
 use mtpool_protocol::public::{
     DnsRecord, DnsRecordType, Engine, GlobalpingCheck, NodeChecks, NodeState, ProxyLink,
@@ -33,6 +33,8 @@ pub struct Snapshot {
     pub link_index: BTreeMap<String, String>,
     /// How many masters each configured domain has now (0 for a domain without one).
     pub master_counts: BTreeMap<String, usize>,
+    /// The numbers of the live stream, so that it never has to ask the state owner.
+    pub live: LiveCounts,
 }
 
 fn node_state(state: CoreState) -> NodeState {
@@ -126,6 +128,13 @@ impl<'a> View<'a> {
             is_master: !domains.is_empty(),
             domains,
             clients: stats.and_then(|s| s.clients),
+            other_clients: stats.and_then(|s| s.other_clients).filter(|n| *n > 0),
+            other_traffic_bytes: stats
+                .map(|s| {
+                    s.other_from_client_total
+                        .saturating_add(s.other_to_client_total)
+                })
+                .filter(|n| *n > 0),
             checks: NodeChecks {
                 tcp: n.health.tcp.up,
                 metrics: n.health.metrics.up,
@@ -136,6 +145,14 @@ impl<'a> View<'a> {
                     GpStatus::NoData { .. } => GlobalpingCheck::NoData,
                 },
             },
+            quarantine_reasons: n
+                .quarantine_reasons
+                .iter()
+                .filter_map(|c| match serde_json::to_value(c) {
+                    Ok(serde_json::Value::String(name)) => Some(name),
+                    _ => None,
+                })
+                .collect(),
             queue_position: self.queue.get(&n.id).copied(),
             master_since: self.since_of.get(n.id.as_str()).map(|at| rfc3339(*at)),
             rotates_at,
@@ -228,6 +245,7 @@ impl Snapshot {
                 .iter()
                 .map(|d| (d.clone(), state.assignments.0.get(d).map_or(0, Vec::len)))
                 .collect(),
+            live: live_counts(state),
         }
     }
 }
@@ -334,6 +352,30 @@ mod tests {
     }
 
     #[test]
+    fn the_owners_users_show_only_when_there_is_something_to_show() {
+        let n = node("alpha-00001", T0);
+        let id = n.id.clone();
+        let mut state = pool(settings(0), vec![n]);
+        let stats = state.stats.entry(id.clone()).or_default();
+        stats.other_clients = Some(0);
+        let doc = Snapshot::build(&state).node_docs["alpha-00001"].clone();
+        assert_eq!((doc.other_clients, doc.other_traffic_bytes), (None, None));
+        let json = serde_json::to_value(&doc).unwrap();
+        assert!(json.get("other_clients").is_none());
+        assert!(json.get("other_traffic_bytes").is_none());
+
+        let stats = state.stats.entry(id).or_default();
+        stats.other_clients = Some(7);
+        stats.other_from_client_total = 100;
+        stats.other_to_client_total = 900;
+        let doc = Snapshot::build(&state).node_docs["alpha-00001"].clone();
+        assert_eq!(
+            (doc.other_clients, doc.other_traffic_bytes),
+            (Some(7), Some(1000))
+        );
+    }
+
+    #[test]
     fn a_node_carries_its_counters_and_checks() {
         let mut n = node("alpha-00001", T0);
         n.health.tcp.up = true;
@@ -348,6 +390,8 @@ mod tests {
         let doc = &snapshot.node_docs["alpha-00001"];
         assert_eq!(doc.clients, Some(12));
         assert_eq!(doc.availability_bp, Some(9997));
+        assert_eq!(doc.other_clients, None);
+        assert_eq!(doc.other_traffic_bytes, None);
         assert!(doc.checks.tcp);
         assert!(!doc.checks.metrics);
         assert_eq!(doc.checks.globalping, GlobalpingCheck::NoData);

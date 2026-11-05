@@ -255,6 +255,7 @@ impl Writer {
             kind: EventKind::StoreError,
             at,
             node: None,
+            owner: None,
             domain: None,
             detail: json!({ "error": error }),
         };
@@ -374,6 +375,8 @@ fn apply_op(conn: &Connection, op: &PersistOp) -> Result<(), StoreError> {
                 .execute([id.as_str()])?;
             conn.prepare_cached("DELETE FROM node_stats WHERE node = ?1")?
                 .execute([id.as_str()])?;
+            conn.prepare_cached("DELETE FROM tokens WHERE kind = 'node' AND node_id = ?1")?
+                .execute([id.as_str()])?;
         }
         PersistOp::NodeHealth { node, health } => {
             conn.prepare_cached("UPDATE nodes SET health = ?2 WHERE id = ?1")?
@@ -437,9 +440,11 @@ fn apply_op(conn: &Connection, op: &PersistOp) -> Result<(), StoreError> {
             at,
             votes,
             reverify,
+            node_registered_at,
         } => {
             conn.prepare_cached(
-                "INSERT INTO bans(ip, node, at, votes, reverify) VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO bans(ip, node, at, votes, reverify, node_registered_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )?
             .execute(params![
                 ip.to_string(),
@@ -447,6 +452,7 @@ fn apply_op(conn: &Connection, op: &PersistOp) -> Result<(), StoreError> {
                 at.0,
                 to_json("ban votes", votes)?,
                 reverify,
+                node_registered_at.map(|t| t.0),
             ])?;
         }
         PersistOp::LiftBan { ip, at, admin } => {
@@ -458,16 +464,18 @@ fn apply_op(conn: &Connection, op: &PersistOp) -> Result<(), StoreError> {
         }
         PersistOp::UpsertIpBlock(b) => {
             conn.prepare_cached(
-                "INSERT INTO ip_blocks(ip, node_id, blocked_at, next_reverify_at) \
-                 VALUES (?1, ?2, ?3, ?4) \
+                "INSERT INTO ip_blocks(ip, node_id, blocked_at, next_reverify_at, owner) \
+                 VALUES (?1, ?2, ?3, ?4, ?5) \
                  ON CONFLICT(ip) DO UPDATE SET node_id = excluded.node_id, \
-                 blocked_at = excluded.blocked_at, next_reverify_at = excluded.next_reverify_at",
+                 blocked_at = excluded.blocked_at, next_reverify_at = excluded.next_reverify_at, \
+                 owner = excluded.owner",
             )?
             .execute(params![
                 b.ip.to_string(),
                 b.node_id.as_str(),
                 b.blocked_at.0,
                 b.next_reverify_at.map(|t| t.0),
+                b.owner.map(|o| o.0),
             ])?;
         }
         PersistOp::DeleteIpBlock { ip } => {

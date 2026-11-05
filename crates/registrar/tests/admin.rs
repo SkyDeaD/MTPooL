@@ -8,7 +8,7 @@ use std::time::Duration;
 use axum::http::StatusCode;
 use common::http::*;
 use http_body_util::BodyExt;
-use mtpool_core::NodeState;
+use mtpool_core::{IpBlock, NodeState, PersistOp, Ts};
 use mtpool_registrar::auth::tokens::TokenKind;
 use serde_json::{Value, json};
 
@@ -557,7 +557,10 @@ async fn stream_sends_events_and_keepalive_with_no_buffer_header() {
             .starts_with("text/event-stream")
     );
     assert_eq!(header("x-accel-buffering").as_deref(), Some("no"));
-    assert_eq!(header("cache-control").as_deref(), Some("no-cache"));
+    assert_eq!(
+        header("cache-control").as_deref(),
+        Some("no-cache, no-transform")
+    );
 
     let mut body = response.into_body();
     let mut seen = String::new();
@@ -612,10 +615,149 @@ async fn stream_requires_an_admin_token() {
 }
 
 #[tokio::test]
+async fn token_list_names_the_node_and_filters_by_kind() {
+    let env = env(pool(vec![alpha()]));
+    let admin = admin_token(&env);
+    let a = owner(&env, "a", 5);
+    token(&env, TokenKind::Enroll, Some(a));
+    mtpool_registrar::auth::tokens::issue(
+        &env.store,
+        mtpool_registrar::auth::tokens::NewToken {
+            kind: TokenKind::Node,
+            owner: None,
+            node: Some(alpha().id),
+            expires_at: None,
+            scope: String::new(),
+        },
+    )
+    .unwrap();
+
+    let all = get(&env, "/api/v1/admin/tokens", &admin).await.json();
+    assert_eq!(all.as_array().unwrap().len(), 3, "{all}");
+    assert_eq!(all[0]["kind"], "node");
+    assert_eq!(all[0]["node_id"], "alpha-00001");
+    assert!(all[1].get("node_id").is_none(), "{all}");
+
+    let nodes = get(&env, "/api/v1/admin/tokens?kind=node", &admin)
+        .await
+        .json();
+    assert_eq!(nodes.as_array().unwrap().len(), 1, "{nodes}");
+    assert_eq!(nodes[0]["node_id"], "alpha-00001");
+
+    let scoped = get(
+        &env,
+        &format!("/api/v1/admin/tokens?kind=enroll&owner={}", a.0),
+        &admin,
+    )
+    .await
+    .json();
+    assert_eq!(scoped.as_array().unwrap().len(), 1, "{scoped}");
+
+    let none = get(&env, "/api/v1/admin/tokens?kind=bot", &admin)
+        .await
+        .json();
+    assert_eq!(none, json!([]));
+
+    let bad = get(&env, "/api/v1/admin/tokens?kind=nope", &admin).await;
+    assert_problem(&bad, StatusCode::BAD_REQUEST, "bad_request");
+}
+
+#[tokio::test]
+async fn a_quarantined_node_says_why_and_when_it_was_last_measured() {
+    let mut sick = alpha();
+    sick.state = NodeState::Quarantine;
+    sick.quarantine_reasons = vec![
+        mtpool_core::FailedCondition::ReportStale,
+        mtpool_core::FailedCondition::Tcp,
+    ];
+    sick.health.last_report = Ts(NOW - 90_000);
+    let mut fresh = beta();
+    fresh.health.last_report = Ts(0);
+    let env = env(pool(vec![sick, fresh]));
+    let admin = admin_token(&env);
+
+    let body = get(&env, "/api/v1/admin/nodes/alpha-00001", &admin)
+        .await
+        .json();
+    assert_eq!(
+        body["quarantine_reasons"],
+        json!(["report_stale", "tcp"]),
+        "{body}"
+    );
+    assert_eq!(
+        body["last_report_at"],
+        mtpool_protocol::rfc3339(NOW - 90_000)
+    );
+    let public = get(&env, "/api/v1/nodes/alpha-00001", "").await.json();
+    assert_eq!(
+        public["quarantine_reasons"],
+        json!(["report_stale", "tcp"]),
+        "{public}"
+    );
+    assert!(public.get("last_report_at").is_none(), "{public}");
+
+    let body = get(&env, "/api/v1/admin/nodes/beta-00002", &admin)
+        .await
+        .json();
+    assert!(body.get("quarantine_reasons").is_none(), "{body}");
+    assert!(body.get("last_report_at").is_none(), "{body}");
+}
+
+/// The ban log names every node that failed on an address; the block only the first of them.
+/// Whichever row the admin starts from, the ban of that address is what gets lifted.
+#[tokio::test]
+async fn unban_works_from_the_id_of_any_open_row_of_the_ban_log() {
+    let mut state = pool(vec![alpha()]);
+    state.blocks.push(IpBlock {
+        ip: beta().ip,
+        node_id: beta().id,
+        blocked_at: Ts(NOW),
+        next_reverify_at: Some(Ts(NOW + 900_000)),
+        owner: Some(mtpool_core::OwnerId(2)),
+    });
+    let env = env(state);
+    let admin = admin_token(&env);
+    env.store.send(PersistOp::RecordBan {
+        ip: beta().ip,
+        node: mtpool_core::NodeId::parse("again-00003").unwrap(),
+        at: Ts(NOW),
+        votes: vec![],
+        reverify: true,
+        node_registered_at: None,
+    });
+    env.store.flush().unwrap();
+
+    let unban = post(&env, "/api/v1/admin/nodes/again-00003/unban", &admin, None).await;
+    assert_eq!(unban.status, StatusCode::OK, "{}", unban.body);
+    let blocks = env.actor.inspect(|s| s.blocks.clone()).await.unwrap();
+    assert!(blocks.is_empty());
+
+    env.store.flush().unwrap();
+    let rows = get(&env, "/api/v1/bans", &admin).await.json();
+    assert!(!rows[0]["lifted_at"].is_null(), "{rows}");
+    let events = get(&env, "/api/v1/admin/events?kind=ban_lifted", &admin)
+        .await
+        .json();
+    assert_eq!(events[0]["node"], "beta-00002", "{events}");
+    assert_eq!(events[0]["detail"], json!({ "admin": true }), "{events}");
+
+    // Lifted: the row names nothing to lift any more.
+    let again = post(&env, "/api/v1/admin/nodes/again-00003/unban", &admin, None).await;
+    assert_problem(&again, StatusCode::NOT_FOUND, "not_found");
+}
+
+#[tokio::test]
 async fn node_actions_domains_and_events() {
-    let mut banned = beta();
-    banned.state = NodeState::Banned;
-    let env = env(pool(vec![alpha(), banned]));
+    // A ban leaves a block and no record.
+    let mut state = pool(vec![alpha()]);
+    state.blocks.push(IpBlock {
+        ip: beta().ip,
+        node_id: beta().id,
+        blocked_at: Ts(NOW),
+        next_reverify_at: None,
+        owner: None,
+    });
+    let env = env(state);
     let admin = admin_token(&env);
 
     // Unknown node, a node that is not banned, a node that is banned.
@@ -639,6 +781,8 @@ async fn node_actions_domains_and_events() {
     assert_problem(&healthy, StatusCode::CONFLICT, "not_recheckable");
     let unban = post(&env, "/api/v1/admin/nodes/beta-00002/unban", &admin, None).await;
     assert_eq!(unban.status, StatusCode::OK, "{}", unban.body);
+    let again = post(&env, "/api/v1/admin/nodes/beta-00002/unban", &admin, None).await;
+    assert_problem(&again, StatusCode::NOT_FOUND, "not_found");
 
     // The events table has the lift.
     env.store.flush().unwrap();
@@ -750,6 +894,7 @@ fn log(env: &Env, kind: mtpool_core::EventKind, at: i64, detail: Value) {
         kind,
         at: mtpool_core::Ts(at),
         node: None,
+        owner: None,
         domain: None,
         detail,
     });
@@ -933,6 +1078,7 @@ async fn status_shows_sensors_dns_and_counters() {
             at: mtpool_core::Ts(at),
             votes: vec![(SensorKind::Globalping, Vote::Blocked)],
             reverify,
+            node_registered_at: None,
         });
     };
     ban(NOW - 1_000, false);

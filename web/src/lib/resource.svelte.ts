@@ -2,7 +2,7 @@
 //
 // `data` is the last good answer and stays when a later request fails; `stale` says that the
 // latest request did fail, so the page can tell the reader the numbers are old.
-import { createPoller, PollError } from './poll';
+import { createPoller, PollError, type Poller } from './poll';
 
 export interface Resource<T> {
   readonly data: T | null;
@@ -14,6 +14,8 @@ export interface Resource<T> {
   readonly updatedAt: number | null;
   /** The HTTP status of the last failed request; null after an answer or a network failure. */
   readonly status: number | null;
+  /** Asks now: something changed and the next poll is too far off. */
+  refresh(): void;
 }
 
 // Each public tab is a page of its own, so without this it starts empty every time. The last answers
@@ -45,6 +47,7 @@ export function useResource<T>(url: () => string, fetchFn?: typeof fetch): Resou
   let settled = $state(false);
   let updatedAt = $state<number | null>(null);
   let status = $state<number | null>(null);
+  let current: Poller | null = null;
 
   $effect(() => {
     const path = url();
@@ -76,10 +79,17 @@ export function useResource<T>(url: () => string, fetchFn?: typeof fetch): Resou
       },
     });
     poller.start();
-    return () => poller.stop();
+    current = poller;
+    return () => {
+      current = null;
+      poller.stop();
+    };
   });
 
   return {
+    refresh() {
+      current?.refresh();
+    },
     get data() {
       return data;
     },

@@ -52,6 +52,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (5, include_str!("../../migrations/0005_rollouts.sql")),
     (6, include_str!("../../migrations/0006_client_samples.sql")),
     (7, include_str!("../../migrations/0007_node_samples.sql")),
+    (8, include_str!("../../migrations/0008_record_cleanup.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -87,6 +88,9 @@ pub enum StoreError {
     /// Writes since the previous `flush` (or the first one) that were lost; the first error.
     #[error("{failed} write(s) failed, the first: {first}")]
     WriteFailed { failed: usize, first: String },
+    /// The copy of the database for a rollback could not be made or taken back.
+    #[error("database copy: {0}")]
+    Copy(String),
     #[error("the store writer is not running")]
     WriterStopped,
 }
@@ -234,7 +238,7 @@ impl Store {
             .map_err(|e| classify(path, e))?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        migrate(&mut conn)?;
+        migrate_keeping_a_copy(path, &mut conn)?;
 
         let mut readers = Vec::with_capacity(READ_POOL_SIZE);
         for _ in 0..READ_POOL_SIZE {
@@ -446,8 +450,65 @@ fn check_integrity(path: &Path, conn: &Connection) -> Result<(), StoreError> {
     }
 }
 
+/// How long after a migration the build before it may still take the database back. A rollback
+/// happens within a minute or two of an update: after the watch of the new build nothing rolls it
+/// back. Whoever starts an old build later would lose everything written since, so they restore
+/// by hand.
+const UNDO_WINDOW: Duration = Duration::from_secs(10 * 60);
+
+/// Goes back to the database this build knows when a newer build migrated it moments ago and was
+/// rolled back: the copy kept before the migration replaces the migrated database. `true` when it
+/// did; what the newer build wrote in between is lost. Call under the serving lock, before
+/// [`Store::open`], which refuses a newer database in every other case.
+pub fn undo_newer_schema(path: &Path) -> Result<bool, StoreError> {
+    undo_schema(path, latest_version(), UNDO_WINDOW)
+}
+
+fn undo_schema(path: &Path, supported: i64, window: Duration) -> Result<bool, StoreError> {
+    if !path.is_file() {
+        return Ok(false);
+    }
+    // A file that cannot be read is for `Store::open` to explain.
+    let found = Connection::open(path)
+        .ok()
+        .and_then(|conn| stored_version(&conn).ok());
+    if !found.is_some_and(|found| found > supported) {
+        return Ok(false);
+    }
+    let copy = crate::backup::before_migration(path, supported);
+    let age = std::fs::metadata(&copy)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|at| at.elapsed().ok());
+    if !age.is_some_and(|age| age < window) {
+        return Ok(false);
+    }
+    crate::backup::take_back_before_migration(path, supported)
+        .map_err(|e| StoreError::Copy(e.to_string()))?;
+    Ok(true)
+}
+
 fn latest_version() -> i64 {
     MIGRATIONS.last().map_or(0, |(v, _)| *v)
+}
+
+/// A migrated database does not open in the build before it, so a rollback needs the one from
+/// before the migration. Without the copy the migration does not happen: the failed start leaves
+/// the database as it was, which is safe for that build too. Other processes wait, so none of
+/// them takes the half-migrated database for an old one and copies it; a new database has nothing
+/// to keep.
+fn migrate_keeping_a_copy(path: &Path, conn: &mut Connection) -> Result<(), StoreError> {
+    if stored_version(conn)? >= latest_version() {
+        return migrate(conn);
+    }
+    let _others_wait =
+        crate::backup::lock_for_migration(path).map_err(|e| StoreError::Copy(e.to_string()))?;
+    let current = stored_version(conn)?;
+    if current != 0 && current < latest_version() {
+        crate::backup::keep_before_migration(path, current)
+            .map_err(|e| StoreError::Copy(e.to_string()))?;
+    }
+    migrate(conn)
 }
 
 /// Applies every migration above the stored version, each in its own transaction. The version

@@ -40,7 +40,9 @@
     "state": "healthy",
     "state_since": "2026-10-30T12:00:00Z",
     "id": "alpha-k3m2q",
-    "ip": "203.x.x.11"
+    "ip": "203.x.x.11",
+    "other_clients": 40,
+    "other_traffic_bytes": 3221225472
   },
   {
     "availability_bp": 9941,
@@ -192,6 +194,10 @@
     "state": "quarantine",
     "state_since": "2026-11-04T10:30:00Z",
     "id": "theta-m1d7z",
-    "ip": "203.x.x.17"
+    "ip": "203.x.x.17",
+    "quarantine_reasons": [
+      "metrics",
+      "globalping"
+    ]
   }
 ]

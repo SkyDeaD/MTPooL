@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use common::*;
 use mtpool_agent::dead_kill::{DEAD_AFTER, verdict};
-use mtpool_agent::lifecycle::{AgentPhase, Health, ReportSource, Step, Watch};
+use mtpool_agent::lifecycle::{AgentPhase, Health, RETIRE_TIMEOUT, ReportSource, Step, Watch};
 use mtpool_agent::local_health::{LocalHealth, LocalTcp, PortCheck, check_once};
 use mtpool_protocol::agent::ReportRequest;
 use tokio::time::Instant;
@@ -161,18 +161,22 @@ struct Run {
 }
 
 async fn run(retire_status: u16) -> Run {
-    use mtpool_agent::lifecycle::{DetectedEngine, Hooks, Lifecycle, StaticEngine};
+    let retire = ResponseTemplate::new(retire_status).set_body_json(serde_json::json!({}));
+    let beat = ResponseTemplate::new(200).set_body_json(serde_json::json!({}));
+    run_with(retire, beat).await
+}
+
+async fn run_with(retire: ResponseTemplate, heartbeat: ResponseTemplate) -> Run {
     let h = Harness::new().await;
     h.enrolled();
-    h.ok("POST", HEARTBEAT).await;
+    run_on(h, retire, heartbeat).await
+}
+
+async fn run_on(h: Harness, retire: ResponseTemplate, heartbeat: ResponseTemplate) -> Run {
+    use mtpool_agent::lifecycle::{DetectedEngine, Hooks, Lifecycle, StaticEngine};
+    h.mock("POST", HEARTBEAT, heartbeat, false).await;
     h.ok("POST", REPORT).await;
-    h.mock(
-        "POST",
-        RETIRE,
-        ResponseTemplate::new(retire_status).set_body_json(serde_json::json!({})),
-        false,
-    )
-    .await;
+    h.mock("POST", RETIRE, retire, false).await;
     h.mock(
         "GET",
         CONFIG,
@@ -341,4 +345,176 @@ async fn ip_change_triggers_reenroll() {
     assert_eq!(r.h.hits(ENROLL).await, 1);
     assert_eq!(r.h.get("node_token").as_deref(), Some(NEW_NODE_TOKEN));
     assert_eq!(*r.source.enrolled.lock().unwrap(), 1);
+}
+
+// ----- the address changes ---------------------------------------------------------------------
+
+/// The path of every request, in order.
+async fn sent(r: &Run) -> Vec<String> {
+    r.h.server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|request| request.url.path().to_owned())
+        .collect()
+}
+
+fn paused(seconds: u64) -> ResponseTemplate {
+    ResponseTemplate::new(429)
+        .insert_header("Retry-After", seconds.to_string())
+        .set_body_json(problem_body(429, "rate_limited"))
+}
+
+fn retire_ok() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(serde_json::json!({}))
+}
+
+#[tokio::test]
+async fn a_new_address_leaves_the_old_record_before_enrolling() {
+    let mut r = run(200).await;
+    let t0 = Instant::now();
+    r.lifecycle.step(t0).await;
+    r.source.ip_changed.store(true, Ordering::SeqCst);
+    r.lifecycle.step(t0 + secs(30)).await;
+    r.lifecycle.step(t0 + secs(30)).await;
+
+    let paths = sent(&r).await;
+    let retire = paths.iter().position(|p| p == RETIRE).expect("retired");
+    let enroll = paths.iter().position(|p| p == ENROLL).expect("enrolled");
+    assert!(retire < enroll, "{paths:?}");
+    assert_eq!(r.lifecycle.phase(), AgentPhase::Active);
+}
+
+#[tokio::test]
+async fn a_failing_retire_does_not_hold_up_the_new_enrollment() {
+    let mut r = run(500).await;
+    let t0 = Instant::now();
+    r.lifecycle.step(t0).await;
+    r.source.ip_changed.store(true, Ordering::SeqCst);
+    r.lifecycle.step(t0 + secs(30)).await;
+    assert_eq!(r.h.hits(RETIRE).await, 1, "tried once, no second attempt");
+    r.lifecycle.step(t0 + secs(30)).await;
+    assert_eq!(r.h.hits(ENROLL).await, 1);
+    assert_eq!(r.lifecycle.phase(), AgentPhase::Active);
+}
+
+#[tokio::test]
+async fn a_retire_that_does_not_answer_holds_up_the_enrollment_only_briefly() {
+    let hanging = retire_ok().set_delay(secs(60));
+    let beat = ResponseTemplate::new(200).set_body_json(serde_json::json!({}));
+    let mut r = run_with(hanging, beat).await;
+    let t0 = Instant::now();
+    r.lifecycle.step(t0).await;
+    r.source.ip_changed.store(true, Ordering::SeqCst);
+
+    let started = std::time::Instant::now();
+    r.lifecycle.step(t0 + secs(30)).await;
+    assert!(
+        started.elapsed() < RETIRE_TIMEOUT + secs(2),
+        "took {:?}",
+        started.elapsed()
+    );
+    r.lifecycle.step(t0 + secs(30)).await;
+    assert_eq!(r.lifecycle.phase(), AgentPhase::Active);
+}
+
+#[tokio::test]
+async fn a_silent_node_enrolls_at_once_on_a_new_address() {
+    let mut r = run_with(retire_ok(), paused(3600)).await;
+    let t0 = Instant::now();
+    assert_eq!(r.lifecycle.step(t0).await, Step::Wait(secs(15)));
+    assert_eq!(r.lifecycle.phase(), AgentPhase::Silent);
+    let before = sent(&r).await.len();
+
+    // Nothing has changed: it looks, says nothing, waits.
+    assert_eq!(r.lifecycle.step(t0 + secs(15)).await, Step::Wait(secs(15)));
+    assert_eq!(sent(&r).await.len(), before);
+    assert_eq!(r.lifecycle.phase(), AgentPhase::Silent);
+
+    r.source.ip_changed.store(true, Ordering::SeqCst);
+    assert_eq!(
+        r.lifecycle.step(t0 + secs(30)).await,
+        Step::Wait(Duration::ZERO)
+    );
+    assert_eq!(r.h.hits(RETIRE).await, 1);
+    r.lifecycle.step(t0 + secs(30)).await;
+    assert_eq!(r.h.hits(ENROLL).await, 1);
+    assert_eq!(r.lifecycle.phase(), AgentPhase::Active);
+}
+
+#[tokio::test]
+async fn a_silent_node_looks_no_more_often_than_it_would_beat() {
+    let mut r = run_with(retire_ok(), paused(3600)).await;
+    let t0 = Instant::now();
+    r.lifecycle.step(t0).await;
+
+    // The look of this interval is still ahead: the flag stays where it is.
+    r.source.ip_changed.store(true, Ordering::SeqCst);
+    assert_eq!(r.lifecycle.step(t0 + secs(5)).await, Step::Wait(secs(10)));
+    assert_eq!(r.lifecycle.phase(), AgentPhase::Silent);
+    assert!(r.source.ip_changed.load(Ordering::SeqCst));
+
+    r.lifecycle.step(t0 + secs(15)).await;
+    assert_eq!(r.lifecycle.phase(), AgentPhase::Enrolling);
+}
+
+#[tokio::test]
+async fn a_short_silence_ends_on_time() {
+    let mut r = run_with(retire_ok(), paused(5)).await;
+    let t0 = Instant::now();
+    assert_eq!(r.lifecycle.step(t0).await, Step::Wait(secs(5)));
+    assert_eq!(r.lifecycle.phase(), AgentPhase::Silent);
+    r.lifecycle.step(t0 + secs(5)).await;
+    assert_eq!(r.h.hits(HEARTBEAT).await, 2);
+}
+
+#[tokio::test]
+async fn a_terminated_node_enrolls_at_once_on_a_new_address_and_does_not_retire() {
+    let terminate = ResponseTemplate::new(403).set_body_json(terminate_body());
+    let mut r = run_with(retire_ok(), terminate).await;
+    let t0 = Instant::now();
+    assert_eq!(r.lifecycle.step(t0).await, Step::Wait(secs(15)));
+    assert_eq!(r.lifecycle.phase(), AgentPhase::Terminated);
+
+    r.source.ip_changed.store(true, Ordering::SeqCst);
+    assert_eq!(
+        r.lifecycle.step(t0 + secs(15)).await,
+        Step::Wait(Duration::ZERO)
+    );
+    assert_eq!(
+        r.h.hits(RETIRE).await,
+        0,
+        "the registrar has ended it already"
+    );
+    r.lifecycle.step(t0 + secs(15)).await;
+    assert_eq!(r.h.hits(ENROLL).await, 1);
+    assert_eq!(r.lifecycle.phase(), AgentPhase::Active);
+    assert_eq!(r.h.get("node_token").as_deref(), Some(NEW_NODE_TOKEN));
+}
+
+#[tokio::test]
+async fn a_node_silent_while_enrolling_enrolls_at_once_on_a_new_address() {
+    let h = Harness::new().await;
+    h.fresh();
+    // The address is under a pause: the first attempt is refused for an hour.
+    h.mock(
+        "POST",
+        ENROLL,
+        paused(3600).set_body_json(problem_body(429, "enroll_paused")),
+        true,
+    )
+    .await;
+    let beat = ResponseTemplate::new(200).set_body_json(serde_json::json!({}));
+    let mut r = run_on(h, retire_ok(), beat).await;
+    let t0 = Instant::now();
+    r.lifecycle.step(t0).await;
+    assert_eq!(r.lifecycle.phase(), AgentPhase::Silent);
+
+    r.source.ip_changed.store(true, Ordering::SeqCst);
+    r.lifecycle.step(t0 + secs(15)).await;
+    assert_eq!(r.h.hits(RETIRE).await, 0, "no record to leave");
+    r.lifecycle.step(t0 + secs(15)).await;
+    assert_eq!(r.h.hits(ENROLL).await, 2);
+    assert_eq!(r.lifecycle.phase(), AgentPhase::Active);
 }

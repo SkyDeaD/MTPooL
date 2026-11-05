@@ -39,6 +39,7 @@ async fn healthz_200_always() {
         kind: EventKind::StoreError,
         at: Ts(1),
         node: None,
+        owner: None,
         domain: None,
         detail: serde_json::Value::Null,
     });
@@ -57,6 +58,7 @@ async fn readyz_503_when_store_unhealthy() {
         kind: EventKind::StoreError,
         at: Ts(1),
         node: None,
+        owner: None,
         domain: None,
         detail: serde_json::Value::Null,
     });

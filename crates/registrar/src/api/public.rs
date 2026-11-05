@@ -10,16 +10,20 @@ use axum::response::Response;
 use mtpool_core::{NodeId, mask_ip};
 use mtpool_protocol::problem::Problem;
 use mtpool_protocol::public::{
-    BanRecord, BanVote, LastRound, LastVote, NodeHistory, NodeHistoryBucket, ProxyLink,
-    PublicDomain, PublicNode, Verdict, Vote,
+    BanRecord, BanVote, LastRound, LastVote, LiveClients, NodeHistory, NodeHistoryBucket,
+    ProxyLink, PublicDomain, PublicNode, Verdict, Vote,
 };
 use mtpool_protocol::rfc3339;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
 use super::{ApiError, RawQuery, json, qr, query_map, tagged};
+use crate::auth::middleware::ClientIp;
 use crate::server::AppState;
 use crate::store::{BUCKET_SEC, node_history};
+
+/// What a client refused a stream waits before it tries again, in seconds.
+const BUSY_RETRY_SEC: u64 = 60;
 
 const DEFAULT_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 200;
@@ -100,12 +104,31 @@ pub async fn list_nodes(State(app): State<AppState>, headers: HeaderMap) -> Resp
 
 #[utoipa::path(
     get,
+    path = "/api/v1/stream",
+    tag = "public",
+    responses(
+        (status = 200, description = "Server-sent events: `event: clients` with the numbers of the pool at once and every 5 seconds, `event: changed` with an empty document when the pool has changed and the lists are worth reading again", body = LiveClients, content_type = "text/event-stream"),
+        (status = 429, description = "Too many open streams or requests", body = Problem, content_type = "application/problem+json",
+            headers(("Retry-After" = u64, description = "Seconds to wait before trying again")))
+    )
+)]
+pub async fn live_stream(
+    State(app): State<AppState>,
+    ClientIp(ip): ClientIp,
+) -> Result<Response, ApiError> {
+    app.live
+        .subscribe(app.actor.clone(), (app.clock)(), ip)
+        .ok_or_else(|| ApiError::rate_limited(BUSY_RETRY_SEC))
+}
+
+#[utoipa::path(
+    get,
     path = "/api/v1/nodes/{id}",
     tag = "public",
     params(("id" = String, Path, description = "Node id", example = "alpha-a1b2c")),
     responses(
         (status = 200, description = "The node with its latest sensor round", body = PublicNode),
-        (status = 404, description = "No such node", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "No such node. A banned node has no record, see /api/v1/bans", body = Problem, content_type = "application/problem+json"),
         (status = 429, description = "Too many requests", body = Problem, content_type = "application/problem+json",
             headers(("Retry-After" = u64, description = "Seconds until the limit window ends"))),
     )
@@ -139,7 +162,7 @@ const HISTORY_BUCKETS: i64 = 96;
     params(("id" = String, Path, description = "Node id", example = "alpha-a1b2c")),
     responses(
         (status = 200, description = "The last 96 buckets of 15 minutes that have samples, oldest first", body = NodeHistory),
-        (status = 404, description = "No such node", body = Problem, content_type = "application/problem+json"),
+        (status = 404, description = "No such node. A banned node has no record, see /api/v1/bans", body = Problem, content_type = "application/problem+json"),
         (status = 429, description = "Too many requests", body = Problem, content_type = "application/problem+json",
             headers(("Retry-After" = u64, description = "Seconds until the limit window ends"))),
     )
@@ -312,6 +335,7 @@ pub async fn link_qr(
     params(
         ("limit" = Option<i64>, Query, description = "Entries to return, 1 to 200 (default 50)"),
         ("before" = Option<i64>, Query, description = "Only entries with an id below this one: the id of the last entry of the previous page"),
+        ("active" = Option<bool>, Query, description = "`true`: only bans still in force, without their failed re-checks"),
     ),
     responses(
         (status = 200, description = "The ban log, newest first", body = Vec<BanRecord>),
@@ -340,7 +364,14 @@ pub async fn list_bans(State(app): State<AppState>, query: RawQuery) -> Result<R
                 .map_err(|_| ApiError::bad_request("before must be a ban id."))?,
         ),
     };
-    let bans = read(&app, move |conn| bans_page(conn, limit, before)).await?;
+    let active = match query.get("active").map(String::as_str) {
+        None | Some("false") => false,
+        Some("true") => true,
+        Some(_) => {
+            return Err(ApiError::bad_request("active must be true or false."));
+        }
+    };
+    let bans = read(&app, move |conn| bans_page(conn, limit, before, active)).await?;
     Ok(json(serde_json::to_string(&bans).expect("bans serialize")))
 }
 
@@ -348,6 +379,7 @@ fn bans_page(
     conn: &Connection,
     limit: i64,
     before: Option<i64>,
+    active: bool,
 ) -> rusqlite::Result<Vec<BanRecord>> {
     // `gap` looks at the previous ban that is not a re-check, whatever the page holds.
     let mut statement = conn.prepare_cached(
@@ -355,18 +387,16 @@ fn bans_page(
              SELECT id, LAG(at) OVER (ORDER BY at, id) AS prev_at FROM bans WHERE reverify = 0
          )
          SELECT b.id, b.ip, b.node, b.at, b.votes, b.reverify, b.lifted_at, b.lifted_by_admin,
-                CASE WHEN b.reverify = 0 AND n.id IS NOT NULL
-                     THEN (b.at - CAST(json_extract(n.record, '$.registered_at') AS INTEGER)) / 1000
-                END,
+                (b.at - b.node_registered_at) / 1000,
                 (b.at - r.prev_at) / 1000
          FROM bans b
-         LEFT JOIN nodes n ON n.id = b.node
          LEFT JOIN real r ON r.id = b.id
          WHERE (?1 IS NULL OR b.id < ?1)
+           AND (?3 = 0 OR (b.reverify = 0 AND b.lifted_at IS NULL))
          ORDER BY b.id DESC
          LIMIT ?2",
     )?;
-    let rows = statement.query_map(rusqlite::params![before, limit], |r| {
+    let rows = statement.query_map(rusqlite::params![before, limit, active], |r| {
         let ip: String = r.get(1)?;
         let votes: String = r.get(4)?;
         let lifted_at: Option<i64> = r.get(6)?;

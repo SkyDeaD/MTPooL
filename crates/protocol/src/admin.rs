@@ -46,6 +46,9 @@ pub struct TokenMeta {
     pub kind: String,
     pub prefix: String,
     pub owner_id: Option<i64>,
+    /// The node of a `node` token. The token goes with the node's record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
     pub scope: String,
     /// RFC 3339, UTC.
     pub created_at: String,
@@ -222,6 +225,10 @@ pub struct AdminNode {
     /// RFC 3339, UTC: the last heartbeat; absent if none came.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_heartbeat: Option<String>,
+    /// RFC 3339, UTC: the last confirmed measurement; absent if none came since the node's last
+    /// new check began.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_report_at: Option<String>,
     /// The agent version from the rollout record; absent until the node has polled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_version: Option<String>,

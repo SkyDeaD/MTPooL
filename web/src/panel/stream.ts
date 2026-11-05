@@ -9,6 +9,7 @@ export type StreamState = 'connecting' | 'live' | 'down' | 'unsupported';
 
 export const STREAM_KINDS = [
   'node_registered',
+  'node_ip_changed',
   'node_quarantined',
   'node_recovered',
   'node_banned',

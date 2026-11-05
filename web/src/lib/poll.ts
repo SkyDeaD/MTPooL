@@ -18,6 +18,8 @@ export interface PollerOptions<T> {
 export interface Poller {
   start(): void;
   stop(): void;
+  /** Asks now, without waiting for the interval. */
+  refresh(): void;
 }
 
 export class PollError extends Error {
@@ -73,6 +75,9 @@ export function createPoller<T>(options: PollerOptions<T>): Poller {
   }
 
   return {
+    refresh() {
+      if (running && !document.hidden) void tick();
+    },
     start() {
       if (running) return;
       running = true;

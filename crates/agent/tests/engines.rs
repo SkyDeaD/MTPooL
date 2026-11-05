@@ -22,6 +22,7 @@ use mtpool_protocol::agent::{AgentConfig, AgentUser, Intervals};
 
 const METRICS: &str = include_str!("fixtures/telemt/metrics.txt");
 const DCS: &str = include_str!("fixtures/telemt/dcs.json");
+const METRICS_USERS: &str = include_str!("fixtures/mtproxyl/metrics_users.txt");
 const CONFIG_TOML: &str = include_str!("fixtures/mtproxyl/config.toml");
 const SETTINGS: &str = include_str!("fixtures/mtproxyl/settings.conf");
 
@@ -754,9 +755,64 @@ async fn mtproxyl_refuses_what_it_cannot_apply_before_running_anything() {
     assert!(rig.runner.calls().is_empty());
 }
 
+/// A real MTProxyL node under load, with the pool's user and the owner's one.
+#[tokio::test]
+async fn mtproxyl_counts_the_pools_user_of_the_recorded_answer() {
+    let rig = rig_with(CONFIG_TOML, SETTINGS, Some(r#"["POOL"]"#), |_| {
+        let http = ScriptedHttp::new();
+        http.always(METRICS_URL, ok(METRICS_USERS));
+        http
+    });
+    let report = rig.engine.metrics().await.unwrap();
+    assert_eq!(report.from_client_total, 641_765_116);
+    assert_eq!(report.to_client_total, 20_564_997_756);
+    assert_eq!(report.clients, Some(11));
+    // The owner's user has no octets series at all: that is zero, not a fault.
+    assert_eq!(report.other_from_client_total, Some(0));
+    assert_eq!(report.other_to_client_total, Some(0));
+    assert_eq!(report.other_clients, Some(0));
+}
+
+/// The same recording before the pool's users are known.
+#[tokio::test]
+async fn mtproxyl_counts_nothing_of_the_recorded_answer_without_the_list() {
+    let rig = rig_with(CONFIG_TOML, SETTINGS, None, |_| {
+        let http = ScriptedHttp::new();
+        http.always(METRICS_URL, ok(METRICS_USERS));
+        http
+    });
+    let report = rig.engine.metrics().await.unwrap();
+    assert_eq!(report.from_client_total, 0);
+    assert_eq!(report.to_client_total, 0);
+    assert_eq!(report.clients, None);
+    assert_eq!(report.other_from_client_total, None);
+}
+
+/// MEKO runs telemt: the same recording, the same split.
+#[tokio::test]
+async fn meko_counts_by_the_same_list() {
+    let fs = Arc::new(MemFs::new());
+    put(&fs, MEKO_CONFIG, CONFIG_TOML);
+    put(&fs, POOL_USERS, r#"["POOL"]"#);
+    let http = ScriptedHttp::new();
+    http.always(METRICS_URL, ok(METRICS_USERS));
+    let engine = MekoEngine::new(
+        MEKO_CONFIG.into(),
+        "telemt.service",
+        STATE_DIR.into(),
+        Arc::new(ScriptedRunner::new()),
+        fs,
+        Arc::new(http),
+    );
+    let report = engine.metrics().await.unwrap();
+    assert_eq!(report.from_client_total, 641_765_116);
+    assert_eq!(report.clients, Some(11));
+    assert_eq!(report.other_clients, Some(0));
+}
+
 #[tokio::test]
 async fn mtproxyl_reads_its_metrics_port_and_dc2_like_telemt() {
-    let rig = rig(CONFIG_TOML, None);
+    let rig = rig(CONFIG_TOML, Some(r#"["probe"]"#));
     assert_eq!(rig.engine.kind(), EngineKind::MtProxyL);
     assert_eq!(rig.engine.port(), Some(443));
     let report = rig.engine.metrics().await.unwrap();
@@ -831,6 +887,7 @@ async fn mtproxyl_is_a_sink_for_the_registrars_config() {
             sync_sec: 60,
         },
         antiscan: true,
+        report_other_users: false,
     };
     rig.engine.apply(&config).await;
     assert_eq!(rig.cli().last().map(String::as_str), Some("restart"));

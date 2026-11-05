@@ -1,22 +1,28 @@
 <script lang="ts">
   import { formatDay, formatHour, formatNumber, formatSecond, formatWhen } from '../lib/dates';
-  import { t } from '../lib/i18n';
+  import { t, tp } from '../lib/i18n';
   import { countTicks, monotonePath, niceStep, round1 } from '../lib/chart';
   import type { ClientsRange, ClientsSeries } from '../lib/types';
   import Icon from './Icon.svelte';
   import Seg from './Seg.svelte';
 
-  // The clients of the pool over time. The line is drawn from the points the API sent and, on the
-  // 10 minute range, its head moves on between two polls: the picture runs one step behind real
-  // time, so the head always sits between known values and never guesses ahead.
+  // The clients of the pool over time. The line is drawn from the points it was given and, on the
+  // 10 minute range, its head moves on between two of them: the picture runs `delayMs` behind real
+  // time (one step of the series when no stream feeds it), so the head always sits between known
+  // values and never guesses ahead.
   let {
     series,
     range,
     onrange,
+    delayMs,
+    other = 0,
   }: {
     series: ClientsSeries | null;
     range: ClientsRange;
     onrange: (range: ClientsRange) => void;
+    delayMs?: number;
+    /** The owner's own users of the nodes now. They are not on the chart. */
+    other?: number;
   } = $props();
 
   // The line is drawn anew only in answer to the reader, never because a page opened.
@@ -32,7 +38,6 @@
   const REST = '_rest';
   const SPAN_MS: Record<ClientsRange, number> = { '10m': 600e3, '1h': 3600e3, '24h': 864e5, '7d': 6048e5 };
   const TICK_MS: Record<ClientsRange, number> = { '10m': 120e3, '1h': 600e3, '24h': 144e5, '7d': 864e5 };
-  const MOSCOW_OFFSET_MS = 3 * 3600e3;
   const MT = 14;
   const MB = 22;
 
@@ -64,7 +69,7 @@
   const live = $derived(range === '10m' && !reduced && pts.length > 1);
   const lastAt = $derived(pts.length > 0 ? pts[pts.length - 1].at : 0);
   // The right edge of the picture. Live, it follows the clock one step behind the newest point.
-  const tEnd = $derived(live ? Math.min(nowMs - stepMs, lastAt) : lastAt);
+  const tEnd = $derived(live ? Math.min(nowMs - (delayMs ?? stepMs), lastAt) : lastAt);
   const t0 = $derived(tEnd - SPAN_MS[range]);
 
   const phone = $derived(width < 520);
@@ -116,7 +121,9 @@
   const xTicks = $derived.by(() => {
     const iv = TICK_MS[range] * (phone ? 2 : 1);
     const out: { x: number; label: string }[] = [];
-    for (let at = Math.floor((t0 + MOSCOW_OFFSET_MS) / iv) * iv - MOSCOW_OFFSET_MS; at <= tEnd && out.length < 10; at += iv) {
+    // Ticks fall on round hours of the reader's clock.
+    const zone = -new Date(t0).getTimezoneOffset() * 60_000;
+    for (let at = Math.floor((t0 + zone) / iv) * iv - zone; at <= tEnd && out.length < 10; at += iv) {
       const x = X(at);
       if (x < ml + 16 || x > width - mr - 10) continue;
       out.push({ x, label: range === '7d' ? formatDay(at) : formatHour(at) });
@@ -221,7 +228,8 @@
     if (nowTotal === null) return '';
     const from = pts.find((p) => p.at >= lastAt - SPAN_MS[range]) ?? pts[0];
     const d = nowTotal - from.total;
-    return `${d > 0 ? '+' : d < 0 ? '−' : ''}${formatNumber(Math.abs(d))} ${t(`clients.of.${range}`)}`;
+    if (d === 0) return `${t('clients.same')} ${t(`clients.of.${range}`)}`;
+    return `${d > 0 ? '+' : '−'}${formatNumber(Math.abs(d))} ${t(`clients.of.${range}`)}`;
   });
 
   // Where the pointer is, the nearest point.
@@ -294,6 +302,9 @@
       <span class="l">{t('clients.title')}</span>
       <span class="v">{nowTotal === null ? '—' : formatNumber(nowTotal)}</span>
       <span class="s">{delta}</span>
+      {#if other > 0}
+        <span class="s" title={t('clients.otherHint')}>{t('clients.otherPool', { n: other, word: tp('unit.ownClient', other) })}</span>
+      {/if}
     </div>
     <span class="sp"></span>
     <div class="row w">
@@ -375,7 +386,11 @@
       </div>
     {/if}
     <div class="cft">
-      <span class="faint xs">{t('clients.footer')}</span>
+      <div class="mlg xs">
+        <span><i></i>{t('clients.mark.master_change')}</span>
+        <span><i class="warn"></i>{t('clients.mark.fold')}</span>
+        <span><i class="bad"></i>{t('clients.mark.ban')}</span>
+      </div>
       <details class="cct">
         <summary class="xs"><Icon name="chev" cls="chev" />{t('clients.table')}</summary>
         {#if tableRows.length > 0}

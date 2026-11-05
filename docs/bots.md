@@ -7,7 +7,7 @@
 - Адрес: `https://pool.example.com/api/v1/...`. JSON, время в RFC 3339 UTC.
 - Ошибки приходят как `application/problem+json` с постоянным полем `code`.
 - Публичные ответы имеют `ETag` и отвечают 304 на повторный запрос с `If-None-Match`. Лимит частоты по IP: при превышении 429 и заголовок `Retry-After`.
-- Публичные маршруты работают без токена. Адреса нод в них скрыты: `203.x.x.113`. Забаненные ноды в списке `GET /nodes` не показываются, страница ноды их отдаёт.
+- Публичные маршруты работают без токена. Адреса нод в них скрыты: `203.x.x.113`. У забаненной ноды записи нет: `GET /nodes` и `GET /me/nodes` её не показывают, `GET /nodes/{id}` отвечает 404, сведения о бане в `GET /bans`.
 - Маршруты `/me` требуют токен бота: заголовок `Authorization: Bearer <токен>`. Токен выпускает администратор (`kind: "bot"`, владелец обязателен). Токен показывается один раз.
 
 ## Что вызывать
@@ -19,14 +19,16 @@
 | доступность и клиенты ноды за сутки | `GET /api/v1/nodes/{id}/history` |
 | домены, мастера, клиенты | `GET /api/v1/domains` |
 | прокси-ссылки и QR-код | `GET /api/v1/links`, `GET /api/v1/links/{id}/qr.svg` |
-| история банов | `GET /api/v1/bans` |
+| история банов | `GET /api/v1/bans`; с `active=true` только действующие |
 | KPI и ряды | `GET /api/v1/stats/summary`, `GET /api/v1/stats/series` |
 | свой профиль | `GET /api/v1/me` |
 | свои ноды с полным IP | `GET /api/v1/me/nodes` |
 | вывести свою ноду | `POST /api/v1/me/nodes/{id}/retire` |
 | внеочередной раунд сенсоров | `POST /api/v1/me/nodes/{id}/recheck` (лимит: при превышении 429 `rate_limited`; 409 `not_recheckable`, если проверять сейчас нечего) |
 
-Состояние ноды в поле `state`: `pending`, `healthy`, `quarantine`, `banned`, `dead`, `pruned`. Поле `last_round` содержит вердикт (`confirmed`, `clean`, `undecided`) и голоса сенсоров (`blocked`, `clear`, `abstain` с причиной). Готовый вердикт и голоса не нужно пересчитывать на стороне бота.
+Поля `clients` у нод и доменов, `/stats/*` и `/nodes/{id}/history` считают только пользователей пула. Пользователи владельца ноды идут отдельно: `other_clients` и `other_traffic_bytes` у ноды. Если этих полей нет, показывать нечего: их либо ноль, либо агент ноды их ещё не различает. В точках истории, записанных до обновления агента, осталась сумма по всем пользователям движка.
+
+Состояние ноды в поле `state`: `pending`, `healthy`, `quarantine`, `dead`, `pruned`. Значение `banned` осталось в схеме API, но запись забаненной ноды удаляется сразу. Записи `dead` и `pruned` удаляются через 24 часа. Ноду в карантине сопровождает `quarantine_reasons`: `tcp`, `metrics`, `globalping`, `port`, `heartbeat_stale`, `report_stale` (нет подтверждённого замера дольше `report_max_age_sec`). Поле `last_round` содержит вердикт (`confirmed`, `clean`, `undecided`) и голоса сенсоров (`blocked`, `clear`, `abstain` с причиной). Готовый вердикт и голоса не нужно пересчитывать на стороне бота.
 
 Пример: свои ноды.
 
@@ -34,6 +36,18 @@
 curl -s https://pool.example.com/api/v1/me/nodes \
   -H "Authorization: Bearer $MTPOOL_BOT_TOKEN" | jq '.[] | {id, state, ip, port}'
 ```
+
+## Заменить сервер
+
+1. Снимите старую ноду: `POST /api/v1/me/nodes/{id}/retire`. Её место сразу свободно.
+2. Установите агент на новом сервере с токеном регистрации. Он зарегистрируется сам.
+
+```bash
+curl -s -X POST https://pool.example.com/api/v1/me/nodes/alpha-a1b2c/retire \
+  -H "Authorization: Bearer $MTPOOL_BOT_TOKEN"
+```
+
+Без бота тоже можно. Если лимит нод занят, молчащая нода вытесняется автоматически: новая нода входит, когда старая молчит 60 секунд (`heartbeat_ttl_sec`). До этого новый сервер получает `403 owner_limit`, а его агент повторяет попытку с растущей паузой, не больше 5 минут. Если сервер остался на прежнем IP, старая нода уступает ему место сразу.
 
 ## События (webhooks)
 
@@ -44,8 +58,8 @@ curl -s https://pool.example.com/api/v1/me/nodes \
 | `node.registered` | нода зарегистрирована |
 | `node.quarantined` | нода ушла в карантин |
 | `node.recovered` | нода вернулась из карантина |
-| `node.banned` | нода забанена |
-| `node.dead` | нода признана мёртвой |
+| `node.banned` | нода забанена; её запись уже удалена, причины смотрите в `GET /api/v1/bans` |
+| `node.dead` | нода признана мёртвой, снята или вытеснена; `detail` может содержать `replaced_by` и `reason` (`silent`: уступила место, молчала дольше всех) |
 | `node.pruned` | нода убрана без решения |
 | `ban.lifted` | бан снят |
 | `master.changed` | сменился мастер домена |
@@ -166,7 +180,7 @@ printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex
 | `GET /statistics/api/node?id=` | `GET /api/v1/nodes/{id}` |
 | `GET /proxylinks` | `GET /api/v1/links` |
 | `GET /dashboard/api` | `GET /api/v1/stats/summary`, `GET /api/v1/stats/series` |
-| `healthy`, `in_quarantine`, `globalping_ok` | `state`: `pending`, `healthy`, `quarantine`, `banned`, `dead`, `pruned` |
+| `healthy`, `in_quarantine`, `globalping_ok` | `state`: `pending`, `healthy`, `quarantine`, `dead`, `pruned` |
 | `ip` с маской, поиск по октетам | `GET /api/v1/me/nodes` с полным IP по токену бота |
 | опрос раз в 45 секунд | webhook `node.banned` и `node.recovered` |
 | 2 из 3 на стороне бота | готовый вердикт и голоса в `last_round` |

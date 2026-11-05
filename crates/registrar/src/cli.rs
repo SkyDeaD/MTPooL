@@ -206,10 +206,18 @@ async fn serve(config: Config) -> Result<(), String> {
         other => other.to_string(),
     })?;
     tracing::info!(db = %path.display(), version = env!("CARGO_PKG_VERSION"), "starting");
-    let store = tokio::task::spawn_blocking(move || Store::open(&path))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
+    let store = tokio::task::spawn_blocking(move || {
+        if crate::store::undo_newer_schema(&path)? {
+            tracing::warn!(
+                db = %path.display(),
+                "a newer build migrated this database and was rolled back: went back to the copy from before the migration"
+            );
+        }
+        Store::open(&path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
     let listener = server::bind(&config)
         .await
         .map_err(|e| format!("cannot listen on {}: {e}", config.listen))?;

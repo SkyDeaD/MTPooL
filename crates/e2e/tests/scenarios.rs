@@ -51,10 +51,12 @@ async fn one_vote_no_ban_two_votes_ban() {
 
     // The second independent sensor agrees.
     set_sensors(&stand, &[("cheburcheck", "blocked")]).await;
-    stand
-        .wait_state_in(&id, &["banned"], secs(60))
-        .await
-        .expect("two Blocked votes ban the node");
+    wait_banned(&stand, &id, secs(60)).await;
+    assert_eq!(
+        stand.node_state(&id).await.unwrap(),
+        None,
+        "a banned node has no record"
+    );
     let bans = stand.bans().await.unwrap();
     assert_eq!(bans.len(), 1, "{bans:?}");
     assert_eq!(bans[0]["node_id"], json!(id), "{bans:?}");
@@ -123,14 +125,9 @@ async fn all_sensors_down_no_ban_then_pruned() {
         "a ban without any vote"
     );
     stand
-        .wait_state_in(&id, &["pruned", "banned"], secs(150))
+        .wait_state_in(&id, &["pruned"], secs(150))
         .await
-        .expect("the node leaves quarantine");
-    assert_eq!(
-        stand.node_state(&id).await.unwrap().as_deref(),
-        Some("pruned"),
-        "it is pruned, not banned"
-    );
+        .expect("the node leaves quarantine and is pruned, not banned");
     assert!(stand.bans().await.unwrap().is_empty());
 }
 
@@ -224,13 +221,9 @@ async fn stopped_engine_dead_not_banned() {
 
     node.stop_engine().await.expect("the engine stops");
     stand
-        .wait_state_in(&id, &["dead", "banned"], secs(120))
+        .wait_state_in(&id, &["dead"], secs(120))
         .await
         .expect("the node leaves the pool");
-    assert_eq!(
-        stand.node_state(&id).await.unwrap().as_deref(),
-        Some("dead")
-    );
     assert!(stand.bans().await.unwrap().is_empty());
     assert!(
         stand
@@ -396,8 +389,8 @@ async fn db_write_error_visible_in_readyz() {
 #[ignore = "needs Docker; run with --ignored"]
 async fn reverify_clean_lifts_dirty_keeps() {
     let stand = Stand::up().await.expect("the stand comes up");
-    let (node, id) = enroll_healthy(&stand, 1, "node-one").await;
-    settings(&stand, json!({"reverify_pause_sec": 5})).await;
+    let (_node, id) = enroll_healthy(&stand, 1, "node-one").await;
+    settings(&stand, json!({"reverify_pause_sec": 10})).await;
 
     // Two sensors say blocked: the node is banned.
     set_sensors(
@@ -405,16 +398,11 @@ async fn reverify_clean_lifts_dirty_keeps() {
         &[("globalping", "blocked"), ("cheburcheck", "blocked")],
     )
     .await;
-    stand
-        .wait_state_in(&id, &["banned"], secs(90))
-        .await
-        .expect("two Blocked votes ban the node");
+    wait_banned(&stand, &id, secs(90)).await;
 
-    // The address is clean again. The agent asks the pool for a place once more.
+    // The address is clean again. The agent lost its token with the record and, the pause over,
+    // asks the pool for a place by itself.
     set_sensors(&stand, &[("globalping", "ok"), ("cheburcheck", "ok")]).await;
-    node.forget_enrollment()
-        .await
-        .expect("the agent enrolls again");
     eventually("the ban is lifted", secs(90), || async {
         match stand.events(Some("ban_lifted"), None).await {
             Ok(events) if !events.is_empty() => Ok(()),
@@ -438,14 +426,8 @@ async fn reverify_clean_lifts_dirty_keeps() {
         &[("globalping", "blocked"), ("cheburcheck", "blocked")],
     )
     .await;
-    stand
-        .wait_state_in(&new_id, &["banned"], secs(90))
-        .await
-        .expect("the second ban");
+    wait_banned(&stand, &new_id, secs(90)).await;
     set_sensors(&stand, &[("cheburcheck", "ok")]).await;
-    node.forget_enrollment()
-        .await
-        .expect("the agent enrolls again");
     eventually("the reverify fails", secs(90), || async {
         match stand.events(Some("node_reverify_failed"), None).await {
             Ok(events) if !events.is_empty() => Ok(()),
@@ -457,13 +439,14 @@ async fn reverify_clean_lifts_dirty_keeps() {
     .unwrap_or_else(|e| panic!("{e}"));
     let bans = stand.bans().await.unwrap();
     // The failed re-check is written to the ban log as a row of its own (`reverify: true`) that
-    // keeps the dirty verdict; the first ban stays the only lifted one.
-    assert_eq!(bans.len(), 3, "{bans:?}");
+    // keeps the dirty verdict; the first ban stays the only lifted one. The agent keeps asking
+    // after each pause, so there may be more re-checks by now.
+    assert!(bans.len() >= 3, "{bans:?}");
     let open: Vec<_> = bans.iter().filter(|b| b["lifted_at"].is_null()).collect();
     assert_eq!(
         open.len(),
-        2,
-        "the second ban and the failed re-check stay: {bans:?}"
+        bans.len() - 1,
+        "the second ban and the failed re-checks stay: {bans:?}"
     );
     let recheck = open
         .iter()
@@ -481,6 +464,19 @@ async fn reverify_clean_lifts_dirty_keeps() {
         1,
         "only the clean reverify lifted a ban: {lifted:?}"
     );
+}
+
+/// Waits for the ban of the node. It has no state to wait for: the record goes with the ban.
+async fn wait_banned(stand: &Stand, id: &str, within: std::time::Duration) {
+    eventually("two Blocked votes ban the node", within, || async {
+        match stand.events(Some("node_banned"), Some(id)).await {
+            Ok(events) if !events.is_empty() => Ok(()),
+            Ok(_) => Err("no node_banned event yet".to_owned()),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+    .unwrap_or_else(|e| panic!("{e}"));
 }
 
 /// The id of a healthy node of the pool that is not `old`.

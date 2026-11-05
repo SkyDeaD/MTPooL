@@ -15,11 +15,11 @@ use serde_json::{Value, json};
 use crate::dns::{DnsState, RecordValue, backoff};
 use crate::health::{GpStatus, younger_than};
 use crate::lifecycle::{
-    EnrollDecision, EnrollInput, IpBlock, LifecycleEvent, NodeRecord, RoundResult, Tombstone,
-    apply_round, decide_enroll, needs_sensors, next_round_at, record_prune, reset_tombstones,
-    tick_node, unban,
+    EnrollDecision, EnrollInput, IpBlock, LifecycleEvent, NodeRecord, RoundResult, SlotDecision,
+    SlotRequest, Tombstone, apply_round, decide_enroll, decide_slot, needs_sensors, next_round_at,
+    record_expired, record_prune, reset_tombstones, tick_node, unban, unban_by_node,
 };
-use crate::selection::select;
+use crate::selection::{Assignments, select};
 use crate::settings::Settings;
 use crate::srmd::{SrmdAction, SrmdError, rebalance, release, set_clients, take};
 use crate::state::{
@@ -28,7 +28,7 @@ use crate::state::{
     SrmdManualRequest, TerminateReason,
 };
 use crate::traffic::traffic_delta;
-use crate::types::{Generation, NodeId, NodeState, Ts};
+use crate::types::{Generation, NodeId, NodeState, OwnerId, Ts};
 use crate::votes::{AbstainReason, RoundVerdict, SensorKind, SensorVote, Vote, judge_round};
 
 type Out = Vec<Effect>;
@@ -103,6 +103,8 @@ pub fn apply(state: &mut PoolState, command: Command, now: Ts) -> Vec<Effect> {
             &tombstones,
             &state.tombstones,
         );
+        // Last, so that a crash between the writes never leaves a ban without its block.
+        forget_expired(state, now, &mut out);
     }
     if let Some((id, reply)) = answer {
         out.push(Effect::Reply(id, reply));
@@ -128,13 +130,87 @@ fn emit(
         kind,
         at: now,
         node: node.cloned(),
+        owner: None,
         domain: domain.map(str::to_owned),
         detail,
     }));
 }
 
-fn emit_node(out: &mut Out, now: Ts, kind: EventKind, node: &NodeId, detail: Value) {
-    emit(out, now, kind, Some(node), None, detail);
+fn emit_node(out: &mut Out, now: Ts, kind: EventKind, node: &NodeRecord, detail: Value) {
+    emit_owned(out, now, kind, &node.id, Some(node.owner), None, detail);
+}
+
+/// An event with the owner of the node written in, for when the record is about to go.
+fn emit_owned(
+    out: &mut Out,
+    now: Ts,
+    kind: EventKind,
+    node: &NodeId,
+    owner: Option<OwnerId>,
+    domain: Option<&str>,
+    detail: Value,
+) {
+    out.push(Effect::Emit(Event {
+        kind,
+        at: now,
+        node: Some(node.clone()),
+        owner,
+        domain: domain.map(str::to_owned),
+        detail,
+    }));
+}
+
+/// Removes the records that have no reason to stay. See `record_expired`.
+fn forget_expired(state: &mut PoolState, now: Ts, out: &mut Out) {
+    let expired: Vec<NodeId> = state
+        .nodes
+        .values()
+        .filter(|n| record_expired(n, now))
+        .map(|n| n.id.clone())
+        .collect();
+    for id in expired {
+        forget(state, &id, now, out);
+    }
+}
+
+/// The record goes for good. A master gives up its slots here, while its owner is known; the
+/// next tick fills them and plans DNS as for any master that left.
+fn forget(state: &mut PoolState, id: &NodeId, now: Ts, out: &mut Out) {
+    let owner = state.nodes.get(id).map(|n| n.owner);
+    let Assignments(assignments) = &mut state.assignments;
+    for (domain, slots) in assignments.iter_mut() {
+        let before = slots.len();
+        slots.retain(|slot| slot.node != *id);
+        if slots.len() == before {
+            continue;
+        }
+        emit_owned(
+            out,
+            now,
+            EventKind::MasterChanged,
+            id,
+            owner,
+            Some(domain),
+            json!({ "added": null, "removed": id }),
+        );
+        persist(
+            out,
+            if slots.is_empty() {
+                PersistOp::DeleteMasters {
+                    domain: domain.clone(),
+                }
+            } else {
+                PersistOp::SetMasters {
+                    domain: domain.clone(),
+                    slots: slots.clone(),
+                }
+            },
+        );
+    }
+    assignments.retain(|_, slots| !slots.is_empty());
+    state.nodes.remove(id);
+    state.stats.remove(id);
+    persist(out, PersistOp::DeleteNode(id.clone()));
 }
 
 /// A record that is still in the pool: not `Banned`, `Dead` or `Pruned`.
@@ -155,8 +231,7 @@ fn terminate_reason(state: NodeState) -> Option<TerminateReason> {
 }
 
 fn kill(node: &mut NodeRecord, now: Ts) {
-    node.state = NodeState::Dead;
-    node.state_since = now;
+    node.enter_final(NodeState::Dead, now);
 }
 
 fn votes_json(votes: &[(SensorKind, Vote)]) -> Value {
@@ -210,14 +285,14 @@ fn announce(
     for event in events {
         match event {
             LifecycleEvent::Registered => {
-                emit_node(out, now, EventKind::NodeRegistered, &node.id, json!({}));
+                emit_node(out, now, EventKind::NodeRegistered, node, json!({}));
             }
             LifecycleEvent::Quarantined { reason } => {
                 emit_node(
                     out,
                     now,
                     EventKind::NodeQuarantined,
-                    &node.id,
+                    node,
                     json!({ "reason": reason }),
                 );
             }
@@ -225,7 +300,7 @@ fn announce(
                 reset_tombstones(tombstones, node);
                 // The first move from `Pending` into the queue is not a recovery.
                 if before == NodeState::Quarantine {
-                    emit_node(out, now, EventKind::NodeRecovered, &node.id, json!({}));
+                    emit_node(out, now, EventKind::NodeRecovered, node, json!({}));
                 }
             }
             LifecycleEvent::Banned { votes } => {
@@ -237,13 +312,14 @@ fn announce(
                         at: now,
                         votes: votes.clone(),
                         reverify: false,
+                        node_registered_at: Some(node.registered_at),
                     },
                 );
                 emit_node(
                     out,
                     now,
                     EventKind::NodeBanned,
-                    &node.id,
+                    node,
                     json!({ "votes": votes_json(&votes) }),
                 );
             }
@@ -259,6 +335,7 @@ fn announce(
                         at: now,
                         votes,
                         reverify: true,
+                        node_registered_at: None,
                     },
                 );
                 // Not `NodeBanned`: the agent registers again every few minutes from a
@@ -267,7 +344,7 @@ fn announce(
                     out,
                     now,
                     EventKind::NodeReverifyFailed,
-                    &node.id,
+                    node,
                     json!({ "retry_after_sec": retry_after_sec }),
                 );
             }
@@ -276,13 +353,13 @@ fn announce(
                     out,
                     now,
                     EventKind::NodeDead,
-                    &node.id,
+                    node,
                     json!({ "reason": "unreachable" }),
                 );
             }
             LifecycleEvent::Pruned => {
                 record_prune(tombstones, node, now);
-                emit_node(out, now, EventKind::NodePruned, &node.id, json!({}));
+                emit_node(out, now, EventKind::NodePruned, node, json!({}));
             }
             LifecycleEvent::BanLifted => {
                 persist(
@@ -293,7 +370,7 @@ fn announce(
                         admin: false,
                     },
                 );
-                emit_node(out, now, EventKind::BanLifted, &node.id, json!({}));
+                emit_node(out, now, EventKind::BanLifted, node, json!({}));
             }
         }
     }
@@ -367,6 +444,36 @@ fn enroll(state: &mut PoolState, r: EnrollRequest, now: Ts, out: &mut Out) -> An
     // Another node on this IP gives way: one live record per IP. The same id enrolling again
     // is not a displaced node, its record is replaced below.
     let displaced = old_on_ip.filter(|old| *old != r.node_id);
+    let slot = decide_slot(
+        &SlotRequest {
+            node_id: &r.node_id,
+            owner: r.owner,
+            limit: r.limit,
+            displaced: displaced.as_ref(),
+            may_evict: !reverify && state.evictions_from.is_none_or(|from| from <= now),
+        },
+        state.nodes.values(),
+        now,
+        &state.settings,
+    );
+    let evicted = match slot {
+        SlotDecision::Free => None,
+        SlotDecision::Evict(silent) => Some(silent),
+        SlotDecision::Full { limit, current } => {
+            return (r.reply, Reply::OwnerLimit { limit, current });
+        }
+    };
+    if let Some(old) = evicted.as_ref().and_then(|id| state.nodes.get_mut(id)) {
+        kill(old, now);
+        persist(out, PersistOp::UpsertNode(old.clone()));
+        emit_node(
+            out,
+            now,
+            EventKind::NodeDead,
+            old,
+            json!({ "replaced_by": r.node_id, "reason": "silent" }),
+        );
+    }
     if let Some(old) = displaced.as_ref().and_then(|id| state.nodes.get_mut(id)) {
         kill(old, now);
         persist(out, PersistOp::UpsertNode(old.clone()));
@@ -374,10 +481,11 @@ fn enroll(state: &mut PoolState, r: EnrollRequest, now: Ts, out: &mut Out) -> An
             out,
             now,
             EventKind::NodeDead,
-            &old.id,
+            old,
             json!({ "replaced_by": r.node_id }),
         );
     }
+    let replaced = displaced.or(evicted);
 
     let make = if reverify {
         NodeRecord::new_reverify
@@ -397,21 +505,6 @@ fn enroll(state: &mut PoolState, r: EnrollRequest, now: Ts, out: &mut Out) -> An
         record = record.replacing(previous);
     }
 
-    if reverify {
-        // The banned record of this IP is what the new node proves wrong: it goes.
-        let gone: Vec<NodeId> = state
-            .nodes
-            .values()
-            .filter(|n| n.state == NodeState::Banned && n.ip == r.ip && n.id != r.node_id)
-            .map(|n| n.id.clone())
-            .collect();
-        for id in gone {
-            state.nodes.remove(&id);
-            state.stats.remove(&id);
-            persist(out, PersistOp::DeleteNode(id));
-        }
-    }
-
     let generation = record.generation;
     persist(out, PersistOp::UpsertNode(record.clone()));
     state.stats.insert(r.node_id.clone(), NodeStats::default());
@@ -426,8 +519,8 @@ fn enroll(state: &mut PoolState, r: EnrollRequest, now: Ts, out: &mut Out) -> An
         out,
         now,
         EventKind::NodeRegistered,
-        &r.node_id,
-        json!({ "reverify": reverify, "replaced": displaced }),
+        &record,
+        json!({ "reverify": reverify, "replaced": replaced, "ip": r.ip.to_string() }),
     );
     // A reverify node starts its decisive round with the first measurement of the agent, which
     // the agent makes right after registering (see `report`); the tick is the fallback.
@@ -437,7 +530,7 @@ fn enroll(state: &mut PoolState, r: EnrollRequest, now: Ts, out: &mut Out) -> An
         Reply::Enrolled {
             node: r.node_id,
             generation,
-            replaced: displaced,
+            replaced,
             reverify,
         },
     )
@@ -480,9 +573,17 @@ fn heartbeat(state: &mut PoolState, r: HeartbeatRequest, now: Ts, out: &mut Out)
         }
         Some(EnrollDecision::Accept) => {
             // A new IP is a new check: the node starts over as `Pending`.
+            let from = node.ip;
             node.change_ip(r.ip, now);
             node.health.last_heartbeat = now;
             persist(out, PersistOp::UpsertNode(node.clone()));
+            emit_node(
+                out,
+                now,
+                EventKind::NodeIpChanged,
+                node,
+                json!({ "from": from.to_string(), "to": r.ip.to_string() }),
+            );
         }
         Some(_) => {
             // The new address may not enroll: blocked, paused, or taken by another node.
@@ -492,7 +593,7 @@ fn heartbeat(state: &mut PoolState, r: HeartbeatRequest, now: Ts, out: &mut Out)
                 out,
                 now,
                 EventKind::NodeDead,
-                &node.id,
+                node,
                 json!({ "reason": "address_refused" }),
             );
             return (r.reply, Reply::Terminate(TerminateReason::AddressRefused));
@@ -545,12 +646,16 @@ fn report(state: &mut PoolState, r: ReportRequest, now: Ts, out: &mut Out) -> An
         },
     );
 
-    if r.traffic.is_some() || r.clients.is_some() {
+    if r.traffic.is_some() || r.clients.is_some() || r.other_clients.is_some() {
         let entry = stats.entry(r.node.clone()).or_default();
         if let Some(counters) = r.traffic {
+            // An agent that tells the pool's users from the others reports another number than
+            // one that sums them all. When that changes, a counter going up or down says nothing
+            // about traffic: the reading only sets the base, like the first one ever does.
+            let same_kind = r.other_traffic.is_some() == entry.other_counters.is_some();
             // The first reading only sets the base: what came before the registrar looked
             // is not traffic of this pool.
-            if let Some(previous) = entry.counters {
+            if let Some(previous) = entry.counters.filter(|_| same_kind) {
                 let from = traffic_delta(previous.from_client, counters.from_client);
                 let to = traffic_delta(previous.to_client, counters.to_client);
                 entry.from_client_total = entry.from_client_total.saturating_add(from);
@@ -568,9 +673,24 @@ fn report(state: &mut PoolState, r: ReportRequest, now: Ts, out: &mut Out) -> An
                 }
             }
             entry.counters = Some(counters);
+            if let (Some(previous), Some(current)) = (entry.other_counters, r.other_traffic) {
+                entry.other_from_client_total = entry
+                    .other_from_client_total
+                    .saturating_add(traffic_delta(previous.from_client, current.from_client));
+                entry.other_to_client_total = entry
+                    .other_to_client_total
+                    .saturating_add(traffic_delta(previous.to_client, current.to_client));
+            }
+            entry.other_counters = r.other_traffic;
+            if r.other_traffic.is_none() {
+                entry.other_clients = None;
+            }
         }
         if r.clients.is_some() {
             entry.clients = r.clients;
+        }
+        if r.other_clients.is_some() {
+            entry.other_clients = r.other_clients;
         }
         persist(
             out,
@@ -666,7 +786,7 @@ fn round_done(
         out,
         now,
         EventKind::SensorRound,
-        &n.id,
+        n,
         json!({ "verdict": verdict, "votes": votes_json(&result.votes) }),
     );
     announce(out, tombstones, n, before.state, events, now);
@@ -685,35 +805,60 @@ fn retire(state: &mut PoolState, a: NodeAction, now: Ts, out: &mut Out) -> Answe
             out,
             now,
             EventKind::NodeDead,
-            &node.id,
+            node,
             json!({ "retired": true }),
         );
     }
     (a.reply, Reply::Ok)
 }
 
+/// Lifts the ban whether or not the record is still there: a banned node has none, its block
+/// remembers the id.
 fn admin_unban(state: &mut PoolState, a: NodeAction, now: Ts, out: &mut Out) -> Answer {
     let PoolState { nodes, blocks, .. } = state;
-    let Some(node) = nodes.get_mut(&a.node) else {
+    let known = nodes.contains_key(&a.node) || blocks.iter().any(|b| b.node_id == a.node);
+    if !known {
         return (a.reply, Reply::UnknownNode);
-    };
-    if unban(node, blocks, now).is_empty() {
+    }
+    let mut owner = None;
+    let mut lifted = Vec::new();
+    if let Some(node) = nodes.get_mut(&a.node) {
+        owner = Some(node.owner);
+        if !unban(node, blocks, now).is_empty() {
+            persist(out, PersistOp::UpsertNode(node.clone()));
+            lifted.push(node.ip);
+        }
+    }
+    let (by_id, released) = unban_by_node(&a.node, nodes, blocks);
+    for id in released {
+        if let Some(node) = nodes.get(&id) {
+            persist(out, PersistOp::UpsertNode(node.clone()));
+        }
+    }
+    for block in by_id {
+        owner = owner.or(block.owner);
+        lifted.push(block.ip);
+    }
+    if lifted.is_empty() {
         return (a.reply, Reply::Refused(Refusal::NotBanned));
     }
-    persist(out, PersistOp::UpsertNode(node.clone()));
-    persist(
-        out,
-        PersistOp::LiftBan {
-            ip: node.ip,
-            at: now,
-            admin: true,
-        },
-    );
-    emit_node(
+    for ip in lifted {
+        persist(
+            out,
+            PersistOp::LiftBan {
+                ip,
+                at: now,
+                admin: true,
+            },
+        );
+    }
+    emit_owned(
         out,
         now,
         EventKind::BanLifted,
-        &node.id,
+        &a.node,
+        owner,
+        None,
         json!({ "admin": true }),
     );
     (a.reply, Reply::Ok)
@@ -1091,14 +1236,14 @@ fn dns_done(
         Ok(()) => {
             entry.applied = Some(entry.desired.clone());
             entry.retries = 0;
-            emit(
-                out,
-                now,
-                EventKind::DnsApplied,
-                None,
-                Some(domain),
-                json!({}),
-            );
+            let detail = match &entry.desired {
+                RecordValue::A(addresses) => json!({
+                    "records": addresses.len(),
+                    "addresses": addresses.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                }),
+                RecordValue::Cname(target) => json!({ "records": 1, "target": target }),
+            };
+            emit(out, now, EventKind::DnsApplied, None, Some(domain), detail);
         }
         Err(message) => {
             let wait = backoff(entry.retries);
@@ -1131,7 +1276,7 @@ mod tests {
 
     use super::*;
     use crate::dns::RecordValue;
-    use crate::health::GpStatus;
+    use crate::health::{FailedCondition, GpStatus};
     use crate::lifecycle::{IpBlock, RejectReason};
     use crate::selection::Slot;
     use crate::settings::Settings;
@@ -1208,6 +1353,7 @@ mod tests {
                 ip: addr,
                 port: 443,
                 engine: EngineKind::Telemt,
+                limit: None,
             }))
         }
 
@@ -1249,6 +1395,8 @@ mod tests {
                 globalping: gp,
                 traffic: None,
                 clients: None,
+                other_traffic: None,
+                other_clients: None,
             }))
         }
 
@@ -1417,13 +1565,17 @@ mod tests {
                 .any(|op| matches!(op, PersistOp::RecordRound { .. }))
         );
 
-        // Quarantine to Banned.
+        // Quarantine to Banned: the block stays, the record goes.
         p.quarantine("n1");
         let effects = p.round("n1", &blocked());
-        assert_eq!(p.state_of("n1"), NodeState::Banned);
+        assert!(!p.state.nodes.contains_key(&id("n1")));
         assert_eq!(
             kinds(&effects),
-            [EventKind::SensorRound, EventKind::NodeBanned]
+            [
+                EventKind::SensorRound,
+                EventKind::NodeBanned,
+                EventKind::MasterChanged
+            ]
         );
         assert!(
             persists(&effects)
@@ -1431,13 +1583,14 @@ mod tests {
                 .any(|op| matches!(op, PersistOp::UpsertIpBlock(b) if b.ip == ip(1)))
         );
 
-        // Banned to Pending by an admin.
+        // An admin lifts the ban; the agent enrolls again by itself.
         let action = p.node_action("n1");
         let effects = p.run(Command::AdminUnban(action));
-        assert_eq!(p.state_of("n1"), NodeState::Pending);
         assert_eq!(kinds(&effects), [EventKind::BanLifted]);
         assert!(matches!(reply(&effects), Reply::Ok));
         assert!(p.state.blocks.is_empty());
+        p.enroll("n1", ip(1));
+        assert_eq!(p.state_of("n1"), NodeState::Pending);
 
         // Pending to Dead: no heartbeat for the dead timer.
         p.advance(SEC);
@@ -1549,6 +1702,8 @@ mod tests {
             globalping: Vote::Blocked,
             traffic: None,
             clients: None,
+            other_traffic: None,
+            other_clients: None,
         }));
         assert_eq!(effects, [Effect::Reply(reply_id, Reply::Stale)]);
         assert_eq!(p.state, before);
@@ -1617,6 +1772,8 @@ mod tests {
                     to_client: to,
                 }),
                 clients,
+                other_traffic: None,
+                other_clients: None,
             }))
         };
         let effects = send(&mut p, 1000, 2000, Some(4));
@@ -1646,6 +1803,213 @@ mod tests {
         );
     }
 
+    /// One report of the kind `other` says: `None` is an agent that does not tell the users apart.
+    fn traffic_report(
+        p: &mut Pool,
+        pool: (u64, u64),
+        other: Option<(u64, u64)>,
+        clients: Option<u64>,
+        other_clients: Option<u64>,
+    ) -> Vec<Effect> {
+        let reply = p.rid();
+        let generation = p.generation("n1");
+        let counters = |(from_client, to_client)| TrafficCounters {
+            from_client,
+            to_client,
+        };
+        p.run(Command::Report(ReportRequest {
+            reply,
+            node: id("n1"),
+            generation,
+            metrics_ok: true,
+            globalping: Vote::Clear,
+            traffic: Some(counters(pool)),
+            clients,
+            other_traffic: other.map(counters),
+            other_clients,
+        }))
+    }
+
+    fn deltas(effects: &[Effect]) -> Vec<(u64, u64)> {
+        persists(effects)
+            .iter()
+            .filter_map(|op| match op {
+                PersistOp::Traffic {
+                    from_client,
+                    to_client,
+                    ..
+                } => Some((*from_client, *to_client)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn pool_with_node() -> Pool {
+        let mut p = Pool::new();
+        p.enroll("n1", ip(1));
+        p
+    }
+
+    #[test]
+    fn the_first_report_that_tells_users_apart_only_sets_the_base() {
+        let mut p = pool_with_node();
+        // An older agent: the counter holds every user of the engine.
+        traffic_report(&mut p, (9_000, 90_000), None, Some(50), None);
+        let effects = traffic_report(&mut p, (9_100, 90_200), None, Some(51), None);
+        assert_eq!(deltas(&effects), [(100, 200)]);
+
+        // The updated agent counts the pool's users alone: the counter is lower, but nothing was
+        // reset and nothing has to be added.
+        let effects = traffic_report(
+            &mut p,
+            (1_000, 2_000),
+            Some((8_200, 88_400)),
+            Some(5),
+            Some(46),
+        );
+        assert_eq!(deltas(&effects), []);
+        let stats = &p.state.stats[&id("n1")];
+        assert_eq!((stats.from_client_total, stats.to_client_total), (100, 200));
+        assert_eq!(
+            (stats.other_from_client_total, stats.other_to_client_total),
+            (0, 0)
+        );
+        assert_eq!((stats.clients, stats.other_clients), (Some(5), Some(46)));
+
+        // From here on each side has its own deltas.
+        let effects = traffic_report(&mut p, (1_010, 2_020), Some((8_230, 88_440)), None, None);
+        assert_eq!(deltas(&effects), [(10, 20)]);
+        let stats = &p.state.stats[&id("n1")];
+        assert_eq!((stats.from_client_total, stats.to_client_total), (110, 220));
+        assert_eq!(
+            (stats.other_from_client_total, stats.other_to_client_total),
+            (30, 40)
+        );
+        assert_eq!(
+            (stats.clients, stats.other_clients),
+            (Some(5), Some(46)),
+            "no number in a report keeps the last value"
+        );
+    }
+
+    #[test]
+    fn a_real_reset_after_the_change_is_still_counted() {
+        let mut p = pool_with_node();
+        traffic_report(&mut p, (9_000, 90_000), None, None, None);
+        traffic_report(&mut p, (1_000, 2_000), Some((8_000, 88_000)), None, None);
+        traffic_report(&mut p, (1_100, 2_100), Some((8_100, 88_100)), None, None);
+
+        // The engine restarted: every counter starts from zero again.
+        let effects = traffic_report(&mut p, (30, 40), Some((5, 6)), None, None);
+        assert_eq!(deltas(&effects), [(30, 40)]);
+        let stats = &p.state.stats[&id("n1")];
+        assert_eq!(
+            (stats.from_client_total, stats.to_client_total),
+            (100 + 30, 100 + 40)
+        );
+        assert_eq!(
+            (stats.other_from_client_total, stats.other_to_client_total),
+            (100 + 5, 100 + 6)
+        );
+    }
+
+    #[test]
+    fn a_node_whose_first_report_tells_users_apart_starts_from_that_base() {
+        let mut p = pool_with_node();
+        let effects = traffic_report(
+            &mut p,
+            (1_000, 2_000),
+            Some((8_000, 88_000)),
+            Some(1),
+            Some(2),
+        );
+        assert_eq!(deltas(&effects), []);
+        let effects = traffic_report(
+            &mut p,
+            (1_001, 2_002),
+            Some((8_003, 88_004)),
+            Some(1),
+            Some(2),
+        );
+        assert_eq!(deltas(&effects), [(1, 2)]);
+        let stats = &p.state.stats[&id("n1")];
+        assert_eq!(
+            (stats.other_from_client_total, stats.other_to_client_total),
+            (3, 4)
+        );
+    }
+
+    #[test]
+    fn an_agent_rolled_back_to_one_that_sums_all_users_makes_no_spike() {
+        let mut p = pool_with_node();
+        traffic_report(
+            &mut p,
+            (1_000, 2_000),
+            Some((8_000, 88_000)),
+            Some(5),
+            Some(46),
+        );
+        traffic_report(
+            &mut p,
+            (1_100, 2_100),
+            Some((8_100, 88_100)),
+            Some(5),
+            Some(46),
+        );
+
+        // The old agent's counter holds the owner's users too: far above the pool's alone.
+        let effects = traffic_report(&mut p, (9_300, 90_300), None, Some(51), None);
+        assert_eq!(deltas(&effects), []);
+        let stats = &p.state.stats[&id("n1")];
+        assert_eq!((stats.from_client_total, stats.to_client_total), (100, 100));
+        assert_eq!(
+            stats.other_clients, None,
+            "nobody says how many there are any more"
+        );
+        assert_eq!(stats.other_counters, None);
+        assert_eq!(
+            (stats.other_from_client_total, stats.other_to_client_total),
+            (100, 100),
+            "what was counted stays"
+        );
+
+        // The old agent goes on with plain deltas, and the new one comes back without a spike.
+        let effects = traffic_report(&mut p, (9_310, 90_320), None, None, None);
+        assert_eq!(deltas(&effects), [(10, 20)]);
+        let effects = traffic_report(&mut p, (1_200, 2_200), Some((8_110, 88_120)), None, None);
+        assert_eq!(deltas(&effects), []);
+        assert_eq!(p.state.stats[&id("n1")].from_client_total, 110);
+    }
+
+    #[test]
+    fn a_report_without_the_split_before_the_pool_users_are_known_makes_no_spike() {
+        let mut p = pool_with_node();
+        // The agent knows no pool users yet: zeros and no split.
+        traffic_report(&mut p, (0, 0), None, None, None);
+        // The real counters arrive with the first report that tells the users apart.
+        let effects = traffic_report(&mut p, (20_000, 30_000), Some((1, 2)), Some(7), Some(0));
+        assert_eq!(deltas(&effects), []);
+        assert_eq!(p.state.stats[&id("n1")].from_client_total, 0);
+
+        // A later moment without the list (a lost state file) changes nothing either.
+        traffic_report(&mut p, (0, 0), None, None, None);
+        let effects = traffic_report(&mut p, (20_010, 30_010), Some((1, 2)), None, None);
+        assert_eq!(deltas(&effects), []);
+        assert_eq!(p.state.stats[&id("n1")].from_client_total, 0);
+    }
+
+    #[test]
+    fn stats_stored_before_the_split_load_as_an_agent_that_does_not_split() {
+        let stored = r#"{"counters":{"from_client":7,"to_client":8},"from_client_total":1,"to_client_total":2,"clients":3}"#;
+        let stats: NodeStats = serde_json::from_str(stored).unwrap();
+        assert_eq!(stats.other_counters, None);
+        assert_eq!(stats.other_clients, None);
+        assert_eq!(
+            (stats.other_from_client_total, stats.other_to_client_total),
+            (0, 0)
+        );
+    }
+
     #[test]
     fn domain_clients_are_kept_while_srmd_is_off() {
         let mut p = Pool::new();
@@ -1661,6 +2025,8 @@ mod tests {
             globalping: Vote::Clear,
             traffic: None,
             clients: Some(12),
+            other_traffic: None,
+            other_clients: None,
         }));
         p.advance(SEC);
         p.run(Command::Tick);
@@ -1694,6 +2060,7 @@ mod tests {
             node_id: id("old"),
             blocked_at: p.now,
             next_reverify_at: None,
+            owner: None,
         });
         let effects = p.beat_from("n1", ip(9));
         assert_eq!(p.state_of("n1"), NodeState::Dead);
@@ -1724,23 +2091,23 @@ mod tests {
         let mut p = Pool::new();
         p.make_healthy("n1", ip(1));
         p.quarantine("n1");
-        p.round("n1", &blocked());
-        assert_eq!(p.state_of("n1"), NodeState::Banned);
-
-        let effects = p.enroll("n2", ip(1));
-        assert!(matches!(
-            reply(&effects),
-            Reply::Enrolled { reverify: true, .. }
-        ));
+        let effects = p.round("n1", &blocked());
         assert!(
             !p.state.nodes.contains_key(&id("n1")),
-            "the banned record of the IP is dropped"
+            "the banned record is dropped at once"
         );
         assert!(
             persists(&effects)
                 .iter()
                 .any(|op| matches!(op, PersistOp::DeleteNode(n) if *n == id("n1")))
         );
+
+        p.advance(900 * SEC);
+        let effects = p.enroll("n2", ip(1));
+        assert!(matches!(
+            reply(&effects),
+            Reply::Enrolled { reverify: true, .. }
+        ));
         assert!(
             !effects.iter().any(|e| matches!(e, Effect::RunRound { .. })),
             "the round waits for the measurement of the agent"
@@ -1773,7 +2140,8 @@ mod tests {
         p.make_healthy("n1", ip(1));
         p.quarantine("n1");
         p.round("n1", &blocked());
-        assert_eq!(p.state_of("n1"), NodeState::Banned);
+        assert!(!p.state.nodes.contains_key(&id("n1")));
+        p.advance(900 * SEC);
         p.enroll("n2", ip(1));
         assert!(p.state.nodes[&id("n2")].reverify);
         p
@@ -1873,7 +2241,7 @@ mod tests {
             .expect("the failed reverify is recorded");
         assert!(matches!(
             record,
-            PersistOp::RecordBan { ip: a, node, reverify: true, votes, .. }
+            PersistOp::RecordBan { ip: a, node, reverify: true, votes, node_registered_at: None, .. }
                 if *a == ip(1) && *node == id("n2") && votes.len() == 2
         ));
     }
@@ -1883,6 +2251,7 @@ mod tests {
         let mut p = Pool::new();
         p.make_healthy("n1", ip(1));
         p.quarantine("n1");
+        let registered_at = p.state.nodes[&id("n1")].registered_at;
         let effects = p.round("n1", &blocked());
         let record = persists(&effects)
             .into_iter()
@@ -1890,10 +2259,11 @@ mod tests {
             .expect("the ban is recorded");
         assert!(matches!(
             record,
-            PersistOp::RecordBan { ip: a, node, at, votes, reverify: false }
+            PersistOp::RecordBan { ip: a, node, at, votes, reverify: false, node_registered_at }
                 if *a == ip(1)
                     && *node == id("n1")
                     && *at == p.now
+                    && *node_registered_at == Some(registered_at)
                     && votes[..] == [
                         (SensorKind::Globalping, Vote::Blocked),
                         (SensorKind::Cheburcheck, Vote::Blocked),
@@ -2324,5 +2694,639 @@ mod tests {
         );
         let effects = p.beat("n1");
         assert!(matches!(effects.last(), Some(Effect::Reply(..))));
+    }
+
+    fn event_of(effects: &[Effect], kind: EventKind) -> &Event {
+        effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::Emit(ev) if ev.kind == kind => Some(ev),
+                _ => None,
+            })
+            .expect("the event")
+    }
+
+    fn deletes(effects: &[Effect], name: &str) -> bool {
+        persists(effects)
+            .iter()
+            .any(|op| matches!(op, PersistOp::DeleteNode(n) if *n == id(name)))
+    }
+
+    // ----- the journal ------------------------------------------------------------------------
+
+    #[test]
+    fn a_heartbeat_from_a_new_address_says_where_from_and_where_to() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.advance(SEC);
+        let effects = p.beat_from("n1", ip(9));
+        let event = event_of(&effects, EventKind::NodeIpChanged);
+        assert_eq!(event.node, Some(id("n1")));
+        assert_eq!(event.owner, Some(OwnerId(1)));
+        assert_eq!(
+            event.detail,
+            json!({ "from": ip(1).to_string(), "to": ip(9).to_string() })
+        );
+        assert_eq!(EventKind::NodeIpChanged.webhook_name(), None);
+    }
+
+    #[test]
+    fn a_heartbeat_from_the_same_address_and_a_refused_new_one_change_nothing_to_tell() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.make_healthy("n2", ip(2));
+        p.advance(SEC);
+        assert!(!kinds(&p.beat("n1")).contains(&EventKind::NodeIpChanged));
+        let refused = p.beat_from("n1", ip(2));
+        assert_eq!(kinds(&refused), [EventKind::NodeDead]);
+    }
+
+    #[test]
+    fn node_registered_names_the_address() {
+        let mut p = Pool::new();
+        let effects = p.enroll("n1", ip(1));
+        assert_eq!(
+            event_of(&effects, EventKind::NodeRegistered).detail["ip"],
+            ip(1).to_string()
+        );
+    }
+
+    #[test]
+    fn dns_applied_says_what_was_written() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        let generation = p.state.dns[DOMAIN].generation;
+        let effects = p.run(Command::DnsDone {
+            domain: DOMAIN.to_owned(),
+            generation,
+            result: Ok(()),
+        });
+        assert_eq!(
+            event_of(&effects, EventKind::DnsApplied).detail,
+            json!({ "records": 1, "addresses": [ip(1).to_string()] })
+        );
+
+        let entry = p.state.dns.get_mut(DOMAIN).unwrap();
+        entry.desired = RecordValue::Cname("target.example.com".to_owned());
+        let generation = entry.generation;
+        let effects = p.run(Command::DnsDone {
+            domain: DOMAIN.to_owned(),
+            generation,
+            result: Ok(()),
+        });
+        assert_eq!(
+            event_of(&effects, EventKind::DnsApplied).detail,
+            json!({ "records": 1, "target": "target.example.com" })
+        );
+    }
+
+    #[test]
+    fn a_node_remembers_why_it_is_in_quarantine_until_it_leaves() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.quarantine("n1");
+        assert_eq!(
+            p.state.nodes[&id("n1")].quarantine_reasons,
+            [FailedCondition::Globalping]
+        );
+
+        // A new address is a new check: it starts with no verdict.
+        p.advance(SEC);
+        p.beat_from("n1", ip(9));
+        assert!(p.state.nodes[&id("n1")].quarantine_reasons.is_empty());
+    }
+
+    #[test]
+    fn the_reasons_go_when_the_node_recovers_or_ends() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.quarantine("n1");
+        p.state.nodes.get_mut(&id("n1")).unwrap().suspected = false;
+        p.advance(SEC);
+        p.beat("n1");
+        p.report("n1", Vote::Clear);
+        p.run(Command::Tick);
+        assert_eq!(p.state_of("n1"), NodeState::Healthy);
+        assert!(p.state.nodes[&id("n1")].quarantine_reasons.is_empty());
+
+        p.quarantine("n1");
+        let action = p.node_action("n1");
+        p.run(Command::Retire(action));
+        assert_eq!(p.state_of("n1"), NodeState::Dead);
+        assert!(p.state.nodes[&id("n1")].quarantine_reasons.is_empty());
+    }
+
+    #[test]
+    fn a_record_stored_before_the_reasons_existed_still_loads() {
+        let mut p = Pool::new();
+        p.enroll("n1", ip(1));
+        let mut stored = serde_json::to_value(&p.state.nodes[&id("n1")]).unwrap();
+        stored.as_object_mut().unwrap().remove("quarantine_reasons");
+        let loaded: NodeRecord = serde_json::from_value(stored).unwrap();
+        assert!(loaded.quarantine_reasons.is_empty());
+    }
+
+    // ----- the owner limit ------------------------------------------------------------------
+
+    impl Pool {
+        fn enroll_limited(&mut self, name: &str, addr: Ipv4Addr, limit: i64) -> Vec<Effect> {
+            let reply = self.rid();
+            self.run(Command::Enroll(EnrollRequest {
+                reply,
+                node_id: id(name),
+                owner: OwnerId(1),
+                ip: addr,
+                port: 443,
+                engine: EngineKind::Telemt,
+                limit: Some(limit),
+            }))
+        }
+
+        /// Two live nodes of the owner, of which `n1` went silent first and `n2` after it.
+        fn two_silent(&mut self) {
+            self.enroll("n1", ip(1));
+            self.advance(SEC);
+            self.enroll("n2", ip(2));
+            self.advance(61 * SEC);
+        }
+    }
+
+    #[test]
+    fn a_full_limit_with_a_silent_node_lets_the_new_one_in_and_ends_the_longest_silent() {
+        let mut p = Pool::new();
+        p.two_silent();
+        let effects = p.enroll_limited("n3", ip(3), 2);
+
+        assert_eq!(p.state_of("n1"), NodeState::Dead);
+        assert_eq!(p.state_of("n2"), NodeState::Pending);
+        assert_eq!(p.state_of("n3"), NodeState::Pending);
+        assert_eq!(
+            event_of(&effects, EventKind::NodeDead).detail,
+            json!({ "replaced_by": id("n3"), "reason": "silent" })
+        );
+        assert_eq!(event_of(&effects, EventKind::NodeDead).node, Some(id("n1")));
+        assert!(
+            persists(&effects)
+                .iter()
+                .any(|op| matches!(op, PersistOp::UpsertNode(r) if r.id == id("n1") && r.state == NodeState::Dead))
+        );
+        assert!(matches!(
+            reply(&effects),
+            Reply::Enrolled { replaced: Some(old), .. } if *old == id("n1")
+        ));
+    }
+
+    #[test]
+    fn a_full_limit_of_live_nodes_refuses_and_changes_nothing() {
+        let mut p = Pool::new();
+        p.enroll("n1", ip(1));
+        p.advance(SEC);
+        p.enroll("n2", ip(2));
+        p.advance(58 * SEC);
+        let before = p.state.clone();
+        let effects = p.enroll_limited("n3", ip(3), 2);
+
+        assert_eq!(
+            *reply(&effects),
+            Reply::OwnerLimit {
+                limit: 2,
+                current: 2
+            }
+        );
+        assert_eq!(p.state, before);
+        assert!(persists(&effects).is_empty());
+        assert!(kinds(&effects).is_empty());
+    }
+
+    #[test]
+    fn a_node_is_silent_only_from_the_end_of_the_heartbeat_ttl() {
+        let mut p = Pool::new();
+        p.enroll("n1", ip(1));
+        p.advance(59 * SEC);
+        let early = p.enroll_limited("n2", ip(2), 1);
+        assert!(matches!(reply(&early), Reply::OwnerLimit { .. }));
+        p.advance(SEC);
+        let due = p.enroll_limited("n2", ip(2), 1);
+        assert!(matches!(reply(&due), Reply::Enrolled { .. }));
+    }
+
+    #[test]
+    fn a_heartbeat_keeps_a_node_from_being_silent() {
+        let mut p = Pool::new();
+        p.two_silent();
+        p.beat("n1");
+        let effects = p.enroll_limited("n3", ip(3), 2);
+        assert_eq!(p.state_of("n1"), NodeState::Pending);
+        assert_eq!(p.state_of("n2"), NodeState::Dead);
+        assert_eq!(event_of(&effects, EventKind::NodeDead).node, Some(id("n2")));
+    }
+
+    #[test]
+    fn the_same_ip_at_a_full_limit_is_a_replacement_and_ends_nobody_else() {
+        let mut p = Pool::new();
+        p.two_silent();
+        let effects = p.enroll_limited("n3", ip(2), 2);
+
+        assert_eq!(p.state_of("n1"), NodeState::Pending, "n1 keeps its place");
+        assert_eq!(p.state_of("n2"), NodeState::Dead);
+        assert_eq!(p.state_of("n3"), NodeState::Pending);
+        assert_eq!(
+            event_of(&effects, EventKind::NodeDead).detail,
+            json!({ "replaced_by": id("n3") }),
+            "the node gave way to its address, not for being silent"
+        );
+    }
+
+    #[test]
+    fn the_same_ip_at_a_full_limit_needs_no_silent_node() {
+        let mut p = Pool::new();
+        p.enroll("n1", ip(1));
+        let effects = p.enroll_limited("n2", ip(1), 1);
+        assert_eq!(p.state_of("n1"), NodeState::Dead);
+        assert!(matches!(
+            reply(&effects),
+            Reply::Enrolled { replaced: Some(old), .. } if *old == id("n1")
+        ));
+    }
+
+    #[test]
+    fn taking_the_address_of_another_owner_still_needs_a_place_of_ones_own() {
+        let mut p = Pool::new();
+        p.enroll("n1", ip(1));
+        p.state.nodes.get_mut(&id("n1")).unwrap().owner = OwnerId(2);
+        let effects = p.enroll_limited("n2", ip(1), 0);
+        assert!(matches!(reply(&effects), Reply::OwnerLimit { .. }));
+        assert_eq!(
+            p.state_of("n1"),
+            NodeState::Pending,
+            "a refused enrollment takes nothing from anybody"
+        );
+    }
+
+    #[test]
+    fn a_blocked_address_at_a_full_limit_evicts_nobody() {
+        let mut p = Pool::new();
+        p.two_silent();
+        let block = |at: Option<Ts>, p: &mut Pool| {
+            p.state.blocks = vec![IpBlock {
+                ip: ip(9),
+                node_id: id("old"),
+                blocked_at: Ts(0),
+                next_reverify_at: at,
+                owner: None,
+            }];
+        };
+
+        // Within the pause: the pause is the answer, whatever the limit.
+        block(Some(Ts(p.now.0 + 900 * SEC)), &mut p);
+        let paused = p.enroll_limited("n3", ip(9), 2);
+        assert!(matches!(reply(&paused), Reply::EnrollRejected { .. }));
+
+        // The pause is over: a decisive round would need a place, and a node that may turn out
+        // blocked again does not get one at the cost of another.
+        block(None, &mut p);
+        let due = p.enroll_limited("n3", ip(9), 2);
+        assert!(matches!(reply(&due), Reply::OwnerLimit { .. }));
+
+        assert_eq!(p.state_of("n1"), NodeState::Pending);
+        assert_eq!(p.state_of("n2"), NodeState::Pending);
+    }
+
+    #[test]
+    fn a_blocked_address_with_a_free_place_goes_to_its_round() {
+        let mut p = Pool::new();
+        p.state.blocks.push(IpBlock {
+            ip: ip(9),
+            node_id: id("old"),
+            blocked_at: Ts(0),
+            next_reverify_at: None,
+            owner: None,
+        });
+        let effects = p.enroll_limited("n1", ip(9), 1);
+        assert!(matches!(
+            reply(&effects),
+            Reply::Enrolled { reverify: true, .. }
+        ));
+    }
+
+    #[test]
+    fn a_limit_lowered_below_the_nodes_evicts_nobody() {
+        let mut p = Pool::new();
+        p.two_silent();
+        let effects = p.enroll_limited("n3", ip(3), 1);
+        assert_eq!(
+            *reply(&effects),
+            Reply::OwnerLimit {
+                limit: 1,
+                current: 2
+            }
+        );
+        assert_eq!(p.state_of("n1"), NodeState::Pending);
+    }
+
+    #[test]
+    fn a_silent_node_of_another_owner_does_not_make_room() {
+        let mut p = Pool::new();
+        p.two_silent();
+        p.state.nodes.get_mut(&id("n1")).unwrap().owner = OwnerId(2);
+        p.state.nodes.get_mut(&id("n2")).unwrap().owner = OwnerId(2);
+        let effects = p.enroll_limited("n3", ip(3), 0);
+        assert!(matches!(reply(&effects), Reply::OwnerLimit { .. }));
+    }
+
+    #[test]
+    fn nobody_is_evicted_while_the_heartbeats_after_a_restart_are_still_coming() {
+        let mut p = Pool::new();
+        p.two_silent();
+        p.state.evictions_from = Some(Ts(p.now.0 + SEC));
+        let early = p.enroll_limited("n3", ip(3), 2);
+        assert!(matches!(reply(&early), Reply::OwnerLimit { .. }));
+        assert_eq!(p.state_of("n1"), NodeState::Pending);
+
+        p.advance(SEC);
+        let due = p.enroll_limited("n3", ip(3), 2);
+        assert!(matches!(reply(&due), Reply::Enrolled { .. }));
+    }
+
+    #[test]
+    fn a_node_without_a_limit_enrolls_as_before() {
+        let mut p = Pool::new();
+        p.two_silent();
+        let effects = p.enroll("n3", ip(3));
+        assert!(matches!(
+            reply(&effects),
+            Reply::Enrolled { replaced: None, .. }
+        ));
+        assert_eq!(p.state_of("n1"), NodeState::Pending);
+    }
+
+    #[test]
+    fn a_confirmed_round_removes_the_record_and_keeps_the_block() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.quarantine("n1");
+        let effects = p.round("n1", &blocked());
+
+        assert!(!p.state.nodes.contains_key(&id("n1")));
+        assert!(!p.state.stats.contains_key(&id("n1")));
+        assert!(deletes(&effects, "n1"));
+        assert_eq!(
+            kinds(&effects),
+            [
+                EventKind::SensorRound,
+                EventKind::NodeBanned,
+                EventKind::MasterChanged
+            ],
+            "the only master was still holding its domain"
+        );
+        assert_eq!(
+            event_of(&effects, EventKind::NodeBanned).owner,
+            Some(OwnerId(1)),
+            "the webhook fan-out cannot look up a record that is gone"
+        );
+        assert!(
+            persists(&effects)
+                .iter()
+                .any(|op| matches!(op, PersistOp::RecordBan { node, .. } if *node == id("n1")))
+        );
+        assert_eq!(p.state.blocks.len(), 1);
+        assert_eq!(p.state.blocks[0].node_id, id("n1"));
+        assert_eq!(p.state.blocks[0].owner, Some(OwnerId(1)));
+        assert_eq!(
+            p.state.blocks[0].next_reverify_at,
+            Some(Ts(p.now.0 + 900 * SEC)),
+            "no reverify straight after the ban: it would spend the sensor quota"
+        );
+        // The agent that comes back within the pause is told to wait.
+        let effects = p.enroll("n2", ip(1));
+        assert!(matches!(
+            reply(&effects),
+            Reply::EnrollRejected {
+                reason: RejectReason::ReverifyPause,
+                retry_after_sec: 900,
+            }
+        ));
+        p.advance(900 * SEC);
+        let effects = p.enroll("n2", ip(1));
+        assert!(matches!(
+            reply(&effects),
+            Reply::Enrolled { reverify: true, .. }
+        ));
+    }
+
+    #[test]
+    fn a_failed_reverify_removes_the_record_and_keeps_the_block() {
+        let mut p = reverify_pool();
+        p.report("n2", Vote::Blocked);
+        let effects = p.round("n2", &blocked());
+        assert!(!p.state.nodes.contains_key(&id("n2")));
+        assert!(deletes(&effects, "n2"));
+        assert_eq!(p.state.blocks.len(), 1);
+        assert_eq!(p.state.blocks[0].node_id, id("n1"));
+        let effects = p.enroll("n3", ip(1));
+        assert!(matches!(
+            reply(&effects),
+            Reply::EnrollRejected {
+                reason: RejectReason::ReverifyPause,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_banned_master_leaves_its_domain_in_the_same_apply() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.quarantine("n1");
+        // Nobody can replace it: selection keeps it as the master through the quarantine.
+        p.run(Command::Tick);
+        assert_eq!(p.state.assignments.0[DOMAIN][0].node, id("n1"));
+
+        let effects = p.round("n1", &blocked());
+        assert!(!p.state.assignments.0.contains_key(DOMAIN));
+        let event = event_of(&effects, EventKind::MasterChanged);
+        assert_eq!(event.node, Some(id("n1")));
+        assert_eq!(event.owner, Some(OwnerId(1)));
+        assert_eq!(event.detail["removed"], json!(id("n1")));
+        assert!(
+            persists(&effects)
+                .iter()
+                .any(|op| matches!(op, PersistOp::DeleteMasters { domain } if domain == DOMAIN))
+        );
+
+        // The next tick has nothing left to do for it, and DNS never goes empty.
+        let effects = p.run(Command::Tick);
+        assert!(!kinds(&effects).contains(&EventKind::MasterChanged));
+        assert!(pushes(&effects).is_empty());
+    }
+
+    #[test]
+    fn a_banned_master_with_a_replacement_gives_the_domain_to_it_on_the_next_tick() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.make_healthy("n2", ip(2));
+        p.run(Command::Tick);
+        assert_eq!(p.state.assignments.0[DOMAIN][0].node, id("n1"));
+        // Banned before the selection had a tick to move the domain.
+        p.state.nodes.get_mut(&id("n1")).unwrap().state = NodeState::Quarantine;
+        p.beat("n1");
+        p.probe("n1", true);
+        p.round("n1", &blocked());
+        assert!(!p.state.assignments.0.contains_key(DOMAIN));
+
+        p.advance(SEC);
+        p.beat("n2");
+        p.report("n2", Vote::Clear);
+        let effects = p.run(Command::Tick);
+        assert_eq!(p.state.assignments.0[DOMAIN][0].node, id("n2"));
+        assert!(pushes(&effects).iter().any(|e| matches!(
+            e,
+            Effect::PushDns { desired: RecordValue::A(ips), .. } if *ips == [ip(2)]
+        )));
+    }
+
+    #[test]
+    fn dead_and_pruned_records_are_removed_a_day_after_they_ended() {
+        const DAY: i64 = 24 * 3600 * SEC;
+        let mut p = Pool::new();
+        p.make_healthy("dead", ip(1));
+        let action = p.node_action("dead");
+        p.run(Command::Retire(action));
+
+        p.make_healthy("pruned", ip(2));
+        p.quarantine("pruned");
+        p.advance(3601 * SEC);
+        p.beat("pruned");
+        p.run(Command::Tick);
+        assert_eq!(p.state_of("pruned"), NodeState::Pruned);
+        let pruned_at = p.now;
+        assert_eq!(p.state.tombstones.len(), 1);
+
+        let retired_at = p.state.nodes[&id("dead")].state_since;
+        p.now = Ts(retired_at.0 + DAY - 1);
+        let effects = p.run(Command::Tick);
+        assert!(p.state.nodes.contains_key(&id("dead")));
+        assert!(!deletes(&effects, "dead"));
+
+        p.now = Ts(retired_at.0 + DAY);
+        let effects = p.run(Command::Tick);
+        assert!(!p.state.nodes.contains_key(&id("dead")));
+        assert!(!p.state.stats.contains_key(&id("dead")));
+        assert!(deletes(&effects, "dead"));
+        assert!(kinds(&effects).is_empty(), "removal is not an event");
+
+        p.now = Ts(pruned_at.0 + DAY);
+        let effects = p.run(Command::Tick);
+        assert!(deletes(&effects, "pruned"));
+        assert!(!p.state.nodes.contains_key(&id("pruned")));
+        assert_eq!(p.state.tombstones.len(), 1, "the pause outlives the record");
+    }
+
+    #[test]
+    fn a_banned_record_of_an_old_database_is_removed_by_the_first_tick() {
+        let mut p = Pool::new();
+        p.make_healthy("old", ip(1));
+        let node = p.state.nodes.get_mut(&id("old")).unwrap();
+        node.state = NodeState::Banned;
+        node.state_since = p.now;
+        let effects = p.run(Command::Tick);
+        assert!(!p.state.nodes.contains_key(&id("old")));
+        assert!(deletes(&effects, "old"));
+    }
+
+    #[test]
+    fn unban_without_a_record_finds_the_block_by_the_node_id() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.quarantine("n1");
+        p.round("n1", &blocked());
+        assert!(!p.state.nodes.contains_key(&id("n1")));
+
+        let action = p.node_action("n1");
+        let effects = p.run(Command::AdminUnban(action));
+        assert_eq!(*reply(&effects), Reply::Ok);
+        assert!(p.state.blocks.is_empty());
+        assert!(
+            !p.state.nodes.contains_key(&id("n1")),
+            "no record comes back"
+        );
+        let event = event_of(&effects, EventKind::BanLifted);
+        assert_eq!(event.node, Some(id("n1")));
+        assert_eq!(event.detail, json!({ "admin": true }));
+        assert_eq!(
+            event.owner,
+            Some(OwnerId(1)),
+            "the owner's hooks get it although the record is gone"
+        );
+        let ops = persists(&effects);
+        assert!(ops.iter().any(|op| matches!(
+            op,
+            PersistOp::LiftBan { ip: a, admin: true, .. } if *a == ip(1)
+        )));
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, PersistOp::DeleteIpBlock { ip: a } if *a == ip(1)))
+        );
+
+        // The address enrolls as a normal node again.
+        let effects = p.enroll("n2", ip(1));
+        assert!(matches!(
+            reply(&effects),
+            Reply::Enrolled {
+                reverify: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn unban_of_an_unknown_node_is_not_found_and_changes_nothing() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.quarantine("n1");
+        p.round("n1", &blocked());
+        let action = p.node_action("ghost");
+        let effects = p.run(Command::AdminUnban(action));
+        assert_eq!(*reply(&effects), Reply::UnknownNode);
+        assert_eq!(p.state.blocks.len(), 1);
+        assert!(kinds(&effects).is_empty());
+    }
+
+    #[test]
+    fn unban_by_the_banned_id_ends_the_reverify_of_the_node_on_that_ip() {
+        let mut p = reverify_pool();
+        let action = p.node_action("n1");
+        let effects = p.run(Command::AdminUnban(action));
+        assert_eq!(*reply(&effects), Reply::Ok);
+        assert!(p.state.blocks.is_empty());
+        let n2 = &p.state.nodes[&id("n2")];
+        assert!(!n2.reverify, "nothing is left for it to prove");
+        assert!(
+            persists(&effects).iter().any(
+                |op| matches!(op, PersistOp::UpsertNode(n) if n.id == id("n2") && !n.reverify)
+            )
+        );
+    }
+
+    #[test]
+    fn unban_of_a_live_node_lifts_the_block_its_old_ban_left() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        p.state.blocks.push(IpBlock {
+            ip: ip(9),
+            node_id: id("n1"),
+            blocked_at: p.now,
+            next_reverify_at: None,
+            owner: Some(OwnerId(1)),
+        });
+        let action = p.node_action("n1");
+        let effects = p.run(Command::AdminUnban(action));
+        assert_eq!(*reply(&effects), Reply::Ok);
+        assert!(p.state.blocks.is_empty());
+        assert_eq!(
+            p.state_of("n1"),
+            NodeState::Healthy,
+            "the record is untouched"
+        );
     }
 }

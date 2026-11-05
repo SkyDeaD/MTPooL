@@ -3,7 +3,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { t } from '../src/lib/i18n';
+import { t, tp } from '../src/lib/i18n';
+import { otherClientsTotal } from '../src/lib/model';
+import type { PublicNode } from '../src/lib/types';
 import Stats from '../src/public/Stats.svelte';
 import { fakeApi, FIXTURE_NOW, settle, setHidden, type FakeApi } from './helpers';
 
@@ -27,6 +29,24 @@ afterEach(() => {
   app = undefined;
   target.remove();
   vi.useRealTimers();
+});
+
+describe('the owners own users', () => {
+  it('a_node_shows_them_apart_with_the_right_word', () => {
+    expect(t('clients.other', { n: 41, word: tp('unit.ownClient', 41) })).toBe('ещё 41 свой');
+    expect(t('clients.other', { n: 40, word: tp('unit.ownClient', 40) })).toBe('ещё 40 своих');
+    expect(t('clients.other', { n: 2, word: tp('unit.ownClient', 2) })).toBe('ещё 2 своих');
+  });
+
+  it('only_the_nodes_the_pool_counts_add_to_the_total', () => {
+    const nodes = [
+      { state: 'healthy', other_clients: 5 },
+      { state: 'quarantine', other_clients: 2 },
+      { state: 'dead', other_clients: 90 },
+      { state: 'healthy' },
+    ] as PublicNode[];
+    expect(otherClientsTotal(nodes)).toBe(7);
+  });
 });
 
 describe('stats page', () => {

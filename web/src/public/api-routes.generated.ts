@@ -41,7 +41,8 @@ export const publicRoutes: ApiRoute[] = [
     "path": "/api/v1/bans",
     "query": [
       "limit",
-      "before"
+      "before",
+      "active"
     ]
   },
   {
@@ -68,6 +69,11 @@ export const publicRoutes: ApiRoute[] = [
   {
     "method": "GET",
     "path": "/api/v1/openapi.json",
+    "query": []
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/stream",
     "query": []
   },
   {

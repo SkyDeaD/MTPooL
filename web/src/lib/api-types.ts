@@ -834,6 +834,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["live_stream"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/install.sh": {
         parameters: {
             query?: never;
@@ -902,6 +918,11 @@ export interface components {
             full_ip: string;
             /** @description RFC 3339, UTC: the last heartbeat; absent if none came. */
             last_heartbeat?: string | null;
+            /**
+             * @description RFC 3339, UTC: the last confirmed measurement; absent if none came since the node's last
+             *     new check began.
+             */
+            last_report_at?: string | null;
             /** Format: int64 */
             owner_id: number;
             /** @description Absent when the owner is gone. */
@@ -942,6 +963,12 @@ export interface components {
             intervals: components["schemas"]["Intervals"];
             /** Format: int32 */
             port: number;
+            /**
+             * @description This registrar takes the `other_*` fields of a report. A registrar that does not say so may
+             *     refuse a report with them, so the agent then sums all the users of the engine into the
+             *     plain fields, as older agents did.
+             */
+            report_other_users?: boolean;
             /** @description The TLS domain the proxy pretends to be. */
             sni: string;
             users: components["schemas"]["AgentUser"][];
@@ -1148,7 +1175,10 @@ export interface components {
             node_id: string;
             /** @description The bearer token of the node. Shown here once; only its hash is kept. */
             node_token: string;
-            /** @description Another node on the same address that this one displaced. */
+            /**
+             * @description The node that gave way to this one: another one on the same address or, if none, a silent
+             *     node of the same owner that was holding the last place.
+             */
             replaced?: string | null;
             /** @description The address was blocked: a decisive check decides whether the node may stay. */
             reverify: boolean;
@@ -1226,6 +1256,28 @@ export interface components {
             sensor: string;
             vote: components["schemas"]["Vote"];
         };
+        /** @description One frame `clients` of the live stream: the numbers of the pool right now. */
+        LiveClients: {
+            /** @description RFC 3339, UTC: when the frame was made. */
+            at: string;
+            /** @description Clients of each domain with a known number. */
+            domains: {
+                [key: string]: number;
+            };
+            /** @description Clients of the pool's users on each node in the pool with a known number. */
+            nodes: {
+                [key: string]: number;
+            };
+            /** @description The owner's own users on each node that has any. They are not in the numbers above. */
+            other_nodes?: {
+                [key: string]: number;
+            };
+            /**
+             * Format: int64
+             * @description Clients of the whole pool: its users on the nodes in the pool.
+             */
+            total: number;
+        };
         LoginBody: {
             /** @description The admin token. */
             token: string;
@@ -1235,22 +1287,44 @@ export interface components {
             owner: components["schemas"]["OwnerInfo"];
             token: components["schemas"]["TokenInfo"];
         };
-        /** @description What the engine's metrics said. */
+        /**
+         * @description What the engine's metrics said. The first three numbers count the users the pool set up on
+         *     the node; the `other_*` ones count everyone else on the engine, that is the owner's own users.
+         *     A report without `other_*` comes from an older agent, or from one that does not yet know the
+         *     pool's users or has no per-user statistics; then the first three are all the engine has.
+         */
         MetricsReport: {
             /**
              * Format: int64
-             * @description Clients connected now.
+             * @description Clients of the pool's users now: the unique addresses the engine counts for them.
              */
             clients?: number | null;
             /**
              * Format: int64
-             * @description Cumulative octets from clients, as the engine exports them.
+             * @description Cumulative octets from clients of the pool's users, as the engine exports them.
              */
             from_client_total: number;
             ok: boolean;
             /**
              * Format: int64
-             * @description Cumulative octets to clients.
+             * @description Clients of the other users of the engine now, counted the same way.
+             */
+            other_clients?: number | null;
+            /**
+             * Format: int64
+             * @description Cumulative octets from clients of the other users. Present (0 included) whenever the agent
+             *     tells the pool's users from the others.
+             */
+            other_from_client_total?: number | null;
+            /**
+             * Format: int64
+             * @description Cumulative octets to clients of the other users. Present together with
+             *     `other_from_client_total`.
+             */
+            other_to_client_total?: number | null;
+            /**
+             * Format: int64
+             * @description Cumulative octets to clients of the pool's users.
              */
             to_client_total: number;
         };
@@ -1448,7 +1522,8 @@ export interface components {
             checks: components["schemas"]["NodeChecks"];
             /**
              * Format: int64
-             * @description Clients connected to the node, as its last report said; absent until it reported one.
+             * @description Clients of the pool's users on the node, as its last report said; absent until it reported
+             *     one. A client is a unique address the engine counts for the user.
              */
             clients?: number | null;
             /** @description The domains the node is master of. */
@@ -1468,8 +1543,27 @@ export interface components {
             master_since?: string | null;
             /** @description When the next sensor round of the node is due (RFC 3339, UTC). */
             next_round_at?: string | null;
+            /**
+             * Format: int64
+             * @description Clients of the owner's own users on the node, counted apart from `clients`. Absent when
+             *     there are none or it is not known (an agent that does not tell them apart): nothing to
+             *     show either way.
+             */
+            other_clients?: number | null;
+            /**
+             * Format: int64
+             * @description Bytes of the owner's own users on the node since the pool began to count them apart, both
+             *     directions together. Not part of the pool's traffic. Absent when there are none or it is
+             *     not known.
+             */
+            other_traffic_bytes?: number | null;
             /** Format: int32 */
             port: number;
+            /**
+             * @description Why the node entered quarantine: `tcp`, `metrics`, `globalping`, `port`, `heartbeat_stale`,
+             *     `report_stale` (no confirmed measurement for too long). Absent in other states.
+             */
+            quarantine_reasons?: string[];
             /**
              * Format: int32
              * @description Place in the queue for a master slot, from 1: only for a healthy node that is not a
@@ -1499,7 +1593,7 @@ export interface components {
             /** @description RFC 3339, UTC. */
             ts: string;
         };
-        /** @description `POST /agent/report`. */
+        /** @description `POST /agent/report`. Fields this version does not name are ignored. */
         ReportRequest: {
             /**
              * @description When the agent made the checks, RFC 3339. Must be within 10 minutes before and one
@@ -1759,6 +1853,8 @@ export interface components {
             /** @description `admin`, `enroll`, `node`, `bot` or `metrics`. */
             kind: string;
             last_used_at?: string | null;
+            /** @description The node of a `node` token. The token goes with the node's record. */
+            node_id?: string | null;
             /** Format: int64 */
             owner_id?: number | null;
             prefix: string;
@@ -2119,7 +2215,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every node, banned, dead and pruned ones too, with the whole address and the owner */
+            /** @description Every node with a record, with the whole address and the owner. A banned node has none; a dead or pruned one keeps it for 24 hours */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2298,7 +2394,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The ban is lifted */
+            /** @description The ban is lifted. A banned node has no record, so the id may also be one the ban log names; the agent enrolls again by itself */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2316,7 +2412,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No such node */
+            /** @description No such node and no open ban under this id */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -3097,6 +3193,8 @@ export interface operations {
             query?: {
                 /** @description Only the tokens of this owner */
                 owner?: number;
+                /** @description Only the tokens of this kind: `admin`, `enroll`, `node`, `bot` or `metrics` */
+                kind?: string;
                 /** @description 1 to 200, default 50 */
                 limit?: number;
                 /** @description Only tokens with a smaller id */
@@ -3714,6 +3812,8 @@ export interface operations {
                 limit?: number;
                 /** @description Only entries with an id below this one: the id of the last entry of the previous page */
                 before?: number;
+                /** @description `true`: only bans still in force, without their failed re-checks */
+                active?: boolean;
             };
             header?: never;
             path?: never;
@@ -4388,7 +4488,7 @@ export interface operations {
                     "application/json": components["schemas"]["PublicNode"];
                 };
             };
-            /** @description No such node */
+            /** @description No such node. A banned node has no record, see /api/v1/bans */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -4434,7 +4534,7 @@ export interface operations {
                     "application/json": components["schemas"]["NodeHistory"];
                 };
             };
-            /** @description No such node */
+            /** @description No such node. A banned node has no record, see /api/v1/bans */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -4634,6 +4734,37 @@ export interface operations {
             429: {
                 headers: {
                     /** @description Seconds until the limit window ends */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    live_stream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-sent events: `event: clients` with the numbers of the pool at once and every 5 seconds, `event: changed` with an empty document when the pool has changed and the lists are worth reading again */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["LiveClients"];
+                };
+            };
+            /** @description Too many open streams or requests */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before trying again */
                     "Retry-After"?: number;
                     [name: string]: unknown;
                 };

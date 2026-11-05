@@ -1,0 +1,16 @@
+# Recorded from a real MTProxyL node under load: the telemt_user_* series of /metrics.
+# The pool user is `POOL` and the owner's user is `owner`: real names were replaced.
+# The owner's user has no clients here, and a user with no traffic has no octets or
+# connections series at all: only the telemt_user_unique_ips_* ones.
+telemt_user_connections_total{user="POOL"} 20117
+telemt_user_connections_current{user="POOL"} 18
+telemt_user_octets_from_client_total{user="POOL"} 641765116
+telemt_user_octets_to_client_total{user="POOL"} 20564997756
+telemt_user_unique_ips_current{user="owner"} 0
+telemt_user_unique_ips_recent_window{user="owner"} 0
+telemt_user_unique_ips_limit{user="owner"} 12000
+telemt_user_unique_ips_utilization{user="owner"} 0.000000
+telemt_user_unique_ips_current{user="POOL"} 11
+telemt_user_unique_ips_recent_window{user="POOL"} 1
+telemt_user_unique_ips_limit{user="POOL"} 12000
+telemt_user_unique_ips_utilization{user="POOL"} 0.000917

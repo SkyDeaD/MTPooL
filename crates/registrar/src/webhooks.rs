@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use data_encoding::HEXLOWER;
 use hmac::{Hmac, KeyInit, Mac};
-use mtpool_core::{Effect, Event, NodeId, Ts};
+use mtpool_core::{Effect, Event, EventKind, NodeId, Ts};
 use mtpool_protocol::rfc3339;
 use serde_json::json;
 use sha2::Sha256;
@@ -102,10 +102,12 @@ impl EffectDriver for WebhookFanOut {
             let Some(name) = event.kind.webhook_name() else {
                 return;
             };
-            // The owner of the node decides which owner-scoped hooks get the event. A node the
-            // pool does not know, and an event without a node, belong to nobody.
-            let owner = match &event.node {
-                Some(node) => {
+            // The owner of the node decides which owner-scoped hooks get the event. The event
+            // says who that is when the record may be gone; otherwise the pool is asked. A node
+            // the pool does not know, and an event without a node, belong to nobody.
+            let owner = match (event.owner, &event.node) {
+                (Some(owner), _) => Some(owner.0),
+                (None, Some(node)) => {
                     let node: NodeId = node.clone();
                     match results
                         .inspect(move |s| s.nodes.get(&node).map(|n| n.owner.0))
@@ -115,7 +117,7 @@ impl EffectDriver for WebhookFanOut {
                         Err(_) => return,
                     }
                 }
-                None => None,
+                (None, None) => None,
             };
             let queued =
                 tokio::task::spawn_blocking(move || enqueue(&store, name, owner, &event)).await;
@@ -155,13 +157,20 @@ fn enqueue(
     }
     // One event, one id, whatever the number of hooks and the number of tries.
     let event_id = new_event_id();
+    // The journal is for the admin; a pool-wide hook must not learn whole addresses from it.
+    let mut detail = event.detail.clone();
+    if event.kind == EventKind::NodeRegistered
+        && let Some(fields) = detail.as_object_mut()
+    {
+        fields.remove("ip");
+    }
     let payload = payload(
         &event_id,
         name,
         event.at,
         event.node.as_ref().map(NodeId::as_str),
         event.domain.as_deref(),
-        &event.detail,
+        &detail,
     );
     for hook in &hooks {
         store

@@ -3,6 +3,7 @@
 //! Pure state transitions. Time is a parameter, nothing here waits or talks to the network.
 //! The transitions follow section 4 of the spec.
 
+use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,8 @@ use crate::votes::{RoundVerdict, SensorKind, Vote, judge_round};
 const PRUNE_PAUSES_SEC: [u32; 5] = [900, 1800, 3600, 7200, 10_800];
 /// A tombstone is forgotten this long after its last update.
 const TOMBSTONE_TTL_MS: i64 = 7 * 24 * 3600 * 1000;
+/// A `Dead` or `Pruned` record is removed this long after it entered that state.
+const FINAL_RECORD_TTL_MS: i64 = 24 * 3600 * 1000;
 /// Retry hint while a reverify round for the same IP is running.
 const REVERIFY_IN_FLIGHT_RETRY_SEC: u32 = 60;
 
@@ -52,6 +55,9 @@ pub struct NodeRecord {
     /// check was unproven (unknown, failed or aged out). Stays set until the node leaves
     /// `Quarantine`; only counted clean rounds, not a fresh measurement, end it.
     pub suspected: bool,
+    /// Why the node entered `Quarantine`; empty in every other state.
+    #[serde(default)]
+    pub quarantine_reasons: Vec<FailedCondition>,
     /// Registered from a blocked IP: a decisive round must lift the block before the node
     /// may proceed.
     pub reverify: bool,
@@ -92,6 +98,7 @@ impl NodeRecord {
             undecided_rounds: 0,
             clean_rounds: 0,
             suspected: false,
+            quarantine_reasons: Vec::new(),
             reverify: false,
         }
     }
@@ -137,6 +144,7 @@ impl NodeRecord {
     /// report age start over. The metrics latch and the heartbeat describe the agent, not the
     /// IP, so they stay.
     fn reset_for_recheck(&mut self, now: Ts) {
+        self.quarantine_reasons.clear();
         self.generation = self.generation.next();
         self.state = NodeState::Pending;
         self.state_since = now;
@@ -152,7 +160,8 @@ impl NodeRecord {
     }
 
     /// Enters `Quarantine`: the node leaves the masters and the prune timer starts.
-    fn enter_quarantine(&mut self, now: Ts, suspected: bool) {
+    fn enter_quarantine(&mut self, now: Ts, suspected: bool, reasons: Vec<FailedCondition>) {
+        self.quarantine_reasons = reasons;
         self.state = NodeState::Quarantine;
         self.state_since = now;
         self.last_round_at = None;
@@ -163,6 +172,7 @@ impl NodeRecord {
 
     /// Enters `Healthy` and the back of the master queue.
     fn enter_healthy(&mut self, now: Ts) {
+        self.quarantine_reasons.clear();
         self.state = NodeState::Healthy;
         self.state_since = now;
         self.queued_at = now;
@@ -172,7 +182,8 @@ impl NodeRecord {
         self.suspected = false;
     }
 
-    fn enter_final(&mut self, state: NodeState, now: Ts) {
+    pub(crate) fn enter_final(&mut self, state: NodeState, now: Ts) {
+        self.quarantine_reasons.clear();
         self.state = state;
         self.state_since = now;
     }
@@ -185,8 +196,12 @@ pub struct IpBlock {
     /// The node that was banned.
     pub node_id: NodeId,
     pub blocked_at: Ts,
-    /// After a failed reverify: no new attempt before this moment.
+    /// No reverify before this moment: set by the ban and by every failed reverify.
     pub next_reverify_at: Option<Ts>,
+    /// The owner of the banned node. The record is gone by the time the ban is lifted. `None`
+    /// for a block made before the owner was kept.
+    #[serde(default)]
+    pub owner: Option<OwnerId>,
 }
 
 /// Escalating pause after a prune, kept per node id and per IP.
@@ -347,6 +362,62 @@ pub fn decide_enroll(
     }
 }
 
+/// What an enrollment that passed `decide_enroll` asks of the owner's limit.
+pub struct SlotRequest<'a> {
+    pub node_id: &'a NodeId,
+    pub owner: OwnerId,
+    pub limit: Option<i64>,
+    /// The node of the same address that gives way anyway: its place is free.
+    pub displaced: Option<&'a NodeId>,
+    /// Whether a silent node may give way to this one.
+    pub may_evict: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlotDecision {
+    Free,
+    /// The limit is full: this node is the one silent the longest and gives way.
+    Evict(NodeId),
+    Full {
+        limit: i64,
+        current: usize,
+    },
+}
+
+/// Counts the owner's live nodes against the limit. Only a limit that is exactly full evicts: with
+/// the limit lowered below the nodes the owner has, one more would stay over it.
+pub fn decide_slot<'a>(
+    req: &SlotRequest<'_>,
+    nodes: impl Iterator<Item = &'a NodeRecord>,
+    now: Ts,
+    s: &Settings,
+) -> SlotDecision {
+    let Some(limit) = req.limit else {
+        return SlotDecision::Free;
+    };
+    let counted: Vec<&NodeRecord> = nodes
+        .filter(|n| {
+            n.owner == req.owner
+                && is_live_state(n.state)
+                && n.id != *req.node_id
+                && Some(&n.id) != req.displaced
+        })
+        .collect();
+    let current = counted.len();
+    let used = i64::try_from(current).unwrap_or(i64::MAX);
+    if used < limit {
+        return SlotDecision::Free;
+    }
+    let silent = counted
+        .iter()
+        .filter(|n| !younger_than(n.health.last_heartbeat, now, s.heartbeat_ttl_sec))
+        .min_by_key(|n| (n.health.last_heartbeat, n.id.clone()));
+    match silent {
+        Some(n) if req.may_evict && used == limit => SlotDecision::Evict(n.id.clone()),
+        _ => SlotDecision::Full { limit, current },
+    }
+}
+
 /// Liveness: the heartbeat is younger than the TTL and the TCP latch is up.
 pub fn is_alive(n: &NodeRecord, now: Ts, s: &Settings) -> bool {
     n.health.tcp.up && younger_than(n.health.last_heartbeat, now, s.heartbeat_ttl_sec)
@@ -439,7 +510,7 @@ pub fn tick_node(n: &mut NodeRecord, now: Ts, s: &Settings) -> Vec<LifecycleEven
                     return Vec::new();
                 }
                 let suspected = is_alive(n, now, s) && globalping_unproven(&n.health, &failed);
-                n.enter_quarantine(now, suspected);
+                n.enter_quarantine(now, suspected, failed.clone());
                 return vec![LifecycleEvent::Quarantined { reason: failed }];
             }
             if n.state == NodeState::Pending {
@@ -511,7 +582,10 @@ fn quarantine_round(
                     ip: n.ip,
                     node_id: n.id.clone(),
                     blocked_at: now,
-                    next_reverify_at: None,
+                    // The agent enrolls again as soon as its token is refused; a reverify right
+                    // now would only spend the sensor quota on the verdict just reached.
+                    next_reverify_at: Some(add_sec(now, s.reverify_pause_sec)),
+                    owner: Some(n.owner),
                 });
             }
             vec![LifecycleEvent::Banned {
@@ -584,6 +658,39 @@ pub fn unban(n: &mut NodeRecord, blocks: &mut Vec<IpBlock>, now: Ts) -> Vec<Life
         n.reverify = false;
     }
     events
+}
+
+/// Removes the blocks the ban of `node` left, whatever has become of its record, and returns
+/// them. A reverify node on one of those addresses has nothing left to prove; the second list
+/// names the nodes that changed that way.
+pub fn unban_by_node(
+    node: &NodeId,
+    nodes: &mut BTreeMap<NodeId, NodeRecord>,
+    blocks: &mut Vec<IpBlock>,
+) -> (Vec<IpBlock>, Vec<NodeId>) {
+    let (lifted, kept): (Vec<IpBlock>, Vec<IpBlock>) =
+        blocks.drain(..).partition(|b| b.node_id == *node);
+    *blocks = kept;
+    let mut released = Vec::new();
+    for n in nodes.values_mut() {
+        if n.reverify && is_live_state(n.state) && lifted.iter().any(|b| b.ip == n.ip) {
+            n.reverify = false;
+            released.push(n.id.clone());
+        }
+    }
+    (lifted, released)
+}
+
+/// The record has no reason to stay: `Banned` at once (the ban lives in the block and the ban
+/// log), `Dead` and `Pruned` after a day, while the panel still shows why they left.
+pub fn record_expired(n: &NodeRecord, now: Ts) -> bool {
+    match n.state {
+        NodeState::Banned => true,
+        NodeState::Dead | NodeState::Pruned => {
+            now.0.saturating_sub(n.state_since.0) >= FINAL_RECORD_TTL_MS
+        }
+        NodeState::Pending | NodeState::Healthy | NodeState::Quarantine => false,
+    }
 }
 
 /// States of a record that is still in the pool: not final.
@@ -1083,7 +1190,8 @@ mod tests {
                 ip: n.ip,
                 node_id: n.id.clone(),
                 blocked_at: at(5),
-                next_reverify_at: None,
+                next_reverify_at: Some(at(5 + 900)),
+                owner: Some(OwnerId(1)),
             }]
         );
         assert!(
@@ -1095,8 +1203,16 @@ mod tests {
             node_id: id("node-bbbbb"),
             ip: n.ip,
         };
+        // The ban starts the pause: no reverify before it ends, however fast the agent is.
         assert_eq!(
             decide_enroll(&again, &[&n], &blocks, &[], at(20)),
+            EnrollDecision::Reject {
+                retry_after_sec: 885,
+                reason: RejectReason::ReverifyPause,
+            }
+        );
+        assert_eq!(
+            decide_enroll(&again, &[&n], &blocks, &[], at(5 + 900)),
             EnrollDecision::Reverify
         );
     }
@@ -1313,6 +1429,7 @@ mod tests {
             node_id: id("node-aaaaa"),
             blocked_at: T0,
             next_reverify_at: None,
+            owner: None,
         }];
         let from_blocked = EnrollInput {
             node_id: id("node-bbbbb"),
@@ -1339,6 +1456,7 @@ mod tests {
             node_id: id("node-aaaaa"),
             blocked_at: T0,
             next_reverify_at: None,
+            owner: None,
         }];
         let node = NodeRecord::new_reverify(
             id("node-bbbbb"),

@@ -476,6 +476,7 @@ fn event(kind: EventKind, node: Option<&str>, domain: Option<&str>) -> Effect {
         kind,
         at: Ts(NOW),
         node: node.map(|n| NodeId::parse(n).unwrap()),
+        owner: None,
         domain: domain.map(str::to_owned),
         detail: json!({ "reason": "test" }),
     })
@@ -527,6 +528,52 @@ impl Fan {
             .map(|r| r.event)
             .collect()
     }
+}
+
+#[tokio::test]
+async fn the_address_in_a_registration_stays_in_the_journal() {
+    let f = fan();
+    let hook = f.env.webhook(
+        f.alice,
+        "pool",
+        "https://hooks.example.com/hook",
+        &["node.registered"],
+    );
+    f.emit(Effect::Emit(Event {
+        kind: EventKind::NodeRegistered,
+        at: Ts(NOW),
+        node: Some(NodeId::parse("alpha-00001").unwrap()),
+        owner: Some(f.alice),
+        domain: None,
+        detail: json!({ "reverify": false, "replaced": null, "ip": "203.0.113.9" }),
+    }))
+    .await;
+    let rows = f.env.rows();
+    let row = rows.iter().find(|r| r.webhook_id == hook).unwrap();
+    assert!(!row.payload.contains("203.0.113.9"), "{}", row.payload);
+    assert!(row.payload.contains("reverify"), "{}", row.payload);
+}
+
+#[tokio::test]
+async fn an_event_that_names_its_owner_needs_no_record() {
+    let f = fan();
+    let url = "https://hooks.example.com/hook";
+    let all = &["node.banned"];
+    let alice = f.env.webhook(f.alice, "owner", url, all);
+    let bob = f.env.webhook(f.bob, "owner", url, all);
+
+    // A ban removes the record in the same `apply`, before the fan-out gets to look.
+    f.emit(Effect::Emit(Event {
+        kind: EventKind::NodeBanned,
+        at: Ts(NOW),
+        node: Some(NodeId::parse("ghost-00001").unwrap()),
+        owner: Some(f.alice),
+        domain: None,
+        detail: json!({}),
+    }))
+    .await;
+    assert_eq!(f.events_of(alice), vec!["node.banned"]);
+    assert!(f.events_of(bob).is_empty());
 }
 
 #[tokio::test]

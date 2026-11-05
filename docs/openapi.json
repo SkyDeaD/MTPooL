@@ -389,7 +389,7 @@
         "operationId": "admin_list_nodes",
         "responses": {
           "200": {
-            "description": "Every node, banned, dead and pruned ones too, with the whole address and the owner",
+            "description": "Every node with a record, with the whole address and the owner. A banned node has none; a dead or pruned one keeps it for 24 hours",
             "content": {
               "application/json": {
                 "schema": {
@@ -649,7 +649,7 @@
         },
         "responses": {
           "200": {
-            "description": "The ban is lifted",
+            "description": "The ban is lifted. A banned node has no record, so the id may also be one the ban log names; the agent enrolls again by itself",
             "content": {
               "application/json": {
                 "schema": {
@@ -669,7 +669,7 @@
             }
           },
           "404": {
-            "description": "No such node",
+            "description": "No such node and no open ban under this id",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1687,6 +1687,15 @@
             }
           },
           {
+            "name": "kind",
+            "in": "query",
+            "description": "Only the tokens of this kind: `admin`, `enroll`, `node`, `bot` or `metrics`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "description": "1 to 200, default 50",
@@ -2499,6 +2508,15 @@
             "schema": {
               "type": "integer",
               "format": "int64"
+            }
+          },
+          {
+            "name": "active",
+            "in": "query",
+            "description": "`true`: only bans still in force, without their failed re-checks",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -3414,7 +3432,7 @@
             }
           },
           "404": {
-            "description": "No such node",
+            "description": "No such node. A banned node has no record, see /api/v1/bans",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3476,7 +3494,7 @@
             }
           },
           "404": {
-            "description": "No such node",
+            "description": "No such node. A banned node has no record, see /api/v1/bans",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3764,6 +3782,46 @@
         }
       }
     },
+    "/api/v1/stream": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "live_stream",
+        "responses": {
+          "200": {
+            "description": "Server-sent events: `event: clients` with the numbers of the pool at once and every 5 seconds, `event: changed` with an empty document when the pool has changed and the lists are worth reading again",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveClients"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many open streams or requests",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds to wait before trying again"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/install.sh": {
       "get": {
         "tags": [
@@ -3986,6 +4044,13 @@
                 ],
                 "description": "RFC 3339, UTC: the last heartbeat; absent if none came."
               },
+              "last_report_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "RFC 3339, UTC: the last confirmed measurement; absent if none came since the node's last\nnew check began."
+              },
               "owner_id": {
                 "type": "integer",
                 "format": "int64"
@@ -4122,6 +4187,10 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "report_other_users": {
+            "type": "boolean",
+            "description": "This registrar takes the `other_*` fields of a report. A registrar that does not say so may\nrefuse a report with them, so the agent then sums all the users of the engine into the\nplain fields, as older agents did."
           },
           "sni": {
             "type": "string",
@@ -4652,7 +4721,7 @@
               "string",
               "null"
             ],
-            "description": "Another node on the same address that this one displaced."
+            "description": "The node that gave way to this one: another one on the same address or, if none, a silent\nnode of the same owner that was holding the last place."
           },
           "reverify": {
             "type": "boolean",
@@ -4872,6 +4941,64 @@
           }
         }
       },
+      "LiveClients": {
+        "type": "object",
+        "description": "One frame `clients` of the live stream: the numbers of the pool right now.",
+        "required": [
+          "at",
+          "total",
+          "domains",
+          "nodes"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "description": "RFC 3339, UTC: when the frame was made."
+          },
+          "domains": {
+            "type": "object",
+            "description": "Clients of each domain with a known number.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "nodes": {
+            "type": "object",
+            "description": "Clients of the pool's users on each node in the pool with a known number.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "other_nodes": {
+            "type": "object",
+            "description": "The owner's own users on each node that has any. They are not in the numbers above.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Clients of the whole pool: its users on the nodes in the pool.",
+            "minimum": 0
+          }
+        }
+      },
       "LoginBody": {
         "type": "object",
         "required": [
@@ -4903,7 +5030,7 @@
       },
       "MetricsReport": {
         "type": "object",
-        "description": "What the engine's metrics said.",
+        "description": "What the engine's metrics said. The first three numbers count the users the pool set up on\nthe node; the `other_*` ones count everyone else on the engine, that is the owner's own users.\nA report without `other_*` comes from an older agent, or from one that does not yet know the\npool's users or has no per-user statistics; then the first three are all the engine has.",
         "required": [
           "ok",
           "from_client_total",
@@ -4916,26 +5043,52 @@
               "null"
             ],
             "format": "int64",
-            "description": "Clients connected now.",
+            "description": "Clients of the pool's users now: the unique addresses the engine counts for them.",
             "minimum": 0
           },
           "from_client_total": {
             "type": "integer",
             "format": "int64",
-            "description": "Cumulative octets from clients, as the engine exports them.",
+            "description": "Cumulative octets from clients of the pool's users, as the engine exports them.",
             "minimum": 0
           },
           "ok": {
             "type": "boolean"
           },
+          "other_clients": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Clients of the other users of the engine now, counted the same way.",
+            "minimum": 0
+          },
+          "other_from_client_total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Cumulative octets from clients of the other users. Present (0 included) whenever the agent\ntells the pool's users from the others.",
+            "minimum": 0
+          },
+          "other_to_client_total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Cumulative octets to clients of the other users. Present together with\n`other_from_client_total`.",
+            "minimum": 0
+          },
           "to_client_total": {
             "type": "integer",
             "format": "int64",
-            "description": "Cumulative octets to clients.",
+            "description": "Cumulative octets to clients of the pool's users.",
             "minimum": 0
           }
-        },
-        "additionalProperties": false
+        }
       },
       "NewOwner": {
         "type": "object",
@@ -5438,7 +5591,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Clients connected to the node, as its last report said; absent until it reported one.",
+            "description": "Clients of the pool's users on the node, as its last report said; absent until it reported\none. A client is a unique address the engine counts for the user.",
             "minimum": 0
           },
           "domains": {
@@ -5489,10 +5642,35 @@
             ],
             "description": "When the next sensor round of the node is due (RFC 3339, UTC)."
           },
+          "other_clients": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Clients of the owner's own users on the node, counted apart from `clients`. Absent when\nthere are none or it is not known (an agent that does not tell them apart): nothing to\nshow either way.",
+            "minimum": 0
+          },
+          "other_traffic_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes of the owner's own users on the node since the pool began to count them apart, both\ndirections together. Not part of the pool's traffic. Absent when there are none or it is\nnot known.",
+            "minimum": 0
+          },
           "port": {
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "quarantine_reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Why the node entered quarantine: `tcp`, `metrics`, `globalping`, `port`, `heartbeat_stale`,\n`report_stale` (no confirmed measurement for too long). Absent in other states."
           },
           "queue_position": {
             "type": [
@@ -5561,7 +5739,7 @@
       },
       "ReportRequest": {
         "type": "object",
-        "description": "`POST /agent/report`.",
+        "description": "`POST /agent/report`. Fields this version does not name are ignored.",
         "required": [
           "ip",
           "port",
@@ -5625,8 +5803,7 @@
             "description": "The TLS domain the measurement used.",
             "example": "tls.example.com"
           }
-        },
-        "additionalProperties": false
+        }
       },
       "RolloutCounts": {
         "type": "object",
@@ -6261,6 +6438,13 @@
               "string",
               "null"
             ]
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The node of a `node` token. The token goes with the node's record."
           },
           "owner_id": {
             "type": [

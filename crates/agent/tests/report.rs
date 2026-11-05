@@ -35,6 +35,9 @@ fn inputs() -> ReportInputs {
             from_client_total: 5,
             to_client_total: 7,
             clients: Some(2),
+            other_clients: None,
+            other_from_client_total: None,
+            other_to_client_total: None,
         }),
         dc2: Some(Dc2Report {
             ok: true,
@@ -51,6 +54,7 @@ fn inputs() -> ReportInputs {
             ok: true,
             reason: None,
         },
+        registrar_takes_other_users: true,
         // 2026-11-03T12:00:00Z and 123 ms.
         now: SystemTime::UNIX_EPOCH + Duration::from_millis(1_793_707_200_123),
     }
@@ -78,6 +82,82 @@ fn the_report_has_every_part() {
     );
 }
 
+/// What an agent that tells the users apart gets from the engine.
+fn split_metrics() -> MetricsReport {
+    MetricsReport {
+        ok: true,
+        from_client_total: 5,
+        to_client_total: 7,
+        clients: Some(2),
+        other_clients: Some(3),
+        other_from_client_total: Some(100),
+        other_to_client_total: Some(200),
+    }
+}
+
+#[test]
+fn a_registrar_that_takes_the_split_gets_it() {
+    let mut input = inputs();
+    input.metrics = Ok(split_metrics());
+    assert_eq!(build_report(input).metrics, split_metrics());
+}
+
+/// The report as every released registrar up to v0.0.2 parses it: it refuses a field it does not
+/// name, and the node would go without a report at all.
+#[derive(serde::Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct MetricsOfAnOlderRegistrar {
+    ok: bool,
+    from_client_total: u64,
+    to_client_total: u64,
+    clients: Option<u64>,
+}
+
+#[test]
+fn a_registrar_that_does_not_gets_all_users_summed_as_older_agents_sent_them() {
+    let mut input = inputs();
+    input.metrics = Ok(split_metrics());
+    input.registrar_takes_other_users = false;
+    let metrics = build_report(input).metrics;
+    assert_eq!(
+        metrics,
+        MetricsReport {
+            ok: true,
+            from_client_total: 105,
+            to_client_total: 207,
+            clients: Some(5),
+            other_clients: None,
+            other_from_client_total: None,
+            other_to_client_total: None,
+        }
+    );
+    let wire = serde_json::to_value(&metrics).unwrap();
+    serde_json::from_value::<MetricsOfAnOlderRegistrar>(wire).expect("an older registrar takes it");
+
+    // The split alone would be refused: this is why it is not sent.
+    let wire = serde_json::to_value(split_metrics()).unwrap();
+    assert!(serde_json::from_value::<MetricsOfAnOlderRegistrar>(wire).is_err());
+}
+
+#[test]
+fn an_engine_without_per_user_numbers_stays_without_them_for_an_older_registrar() {
+    let mut input = inputs();
+    input.metrics = Ok(MetricsReport {
+        ok: true,
+        from_client_total: 0,
+        to_client_total: 0,
+        clients: None,
+        other_clients: None,
+        other_from_client_total: None,
+        other_to_client_total: None,
+    });
+    input.registrar_takes_other_users = false;
+    let metrics = build_report(input).metrics;
+    assert_eq!(metrics.clients, None);
+    assert_eq!((metrics.from_client_total, metrics.to_client_total), (0, 0));
+}
+
 #[test]
 fn an_engine_that_does_not_answer_is_ok_false() {
     let mut input = inputs();
@@ -89,7 +169,10 @@ fn an_engine_that_does_not_answer_is_ok_false() {
             ok: false,
             from_client_total: 0,
             to_client_total: 0,
-            clients: None
+            clients: None,
+            other_clients: None,
+            other_from_client_total: None,
+            other_to_client_total: None,
         }
     );
 }
@@ -233,6 +316,24 @@ async fn the_local_port_wins_over_the_engines() {
             .iter()
             .all(|(port, _)| *port == 8443)
     );
+}
+
+#[tokio::test]
+async fn the_report_follows_what_the_last_config_said_about_the_registrar() {
+    let n = node(None);
+    n.checks.watch(Instant::now()).await;
+    *n.engine.metrics.lock().unwrap() = Some(split_metrics());
+
+    n.memory.remember(&agent_config(30, 60));
+    assert_eq!(n.checks.build().await.unwrap().metrics, split_metrics());
+
+    // The registrar was rolled back: the next config does not say it any more.
+    let mut config = agent_config(30, 60);
+    config.report_other_users = false;
+    n.memory.remember(&config);
+    let metrics = n.checks.build().await.unwrap().metrics;
+    assert_eq!(metrics.from_client_total, 105);
+    assert_eq!(metrics.other_from_client_total, None);
 }
 
 #[tokio::test]

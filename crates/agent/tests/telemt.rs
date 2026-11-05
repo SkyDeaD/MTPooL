@@ -220,6 +220,29 @@ telemt_user_octets_to_client_total{user="bob"} 1000
 }
 
 #[test]
+fn split_sum_goes_by_the_label() {
+    let samples = parse_prometheus(concat!(
+        "m{user=\"a\"} 1\n",
+        "m{user=\"b\"} 2\n",
+        "m{user=\"c\"} 4\n",
+        "m{user=\"d\"} NaN\n",
+        "m 8\n",
+        "n{user=\"a\"} 16\n",
+    ));
+    let pool = ["a".to_owned(), "b".to_owned(), "absent".to_owned()];
+    // A series without the label is nobody the pool set up.
+    assert_eq!(
+        prom::split_sum(&samples, "m", "user", &pool),
+        Some((3.0, 12.0))
+    );
+    assert_eq!(
+        prom::split_sum(&samples, "n", "user", &[]),
+        Some((0.0, 16.0))
+    );
+    assert_eq!(prom::split_sum(&samples, "absent", "user", &pool), None);
+}
+
+#[test]
 fn parser_handles_escapes_specials_timestamps_and_noise() {
     let text = concat!(
         "# a comment\n",
@@ -266,12 +289,15 @@ fn with_users(extra: &str) -> String {
 
 #[tokio::test]
 async fn metrics_report_from_the_recorded_answer() {
-    let rig = rig(TOML, None);
+    let rig = rig(TOML, Some(r#"["probe"]"#));
     let report = rig.engine.metrics().await.unwrap();
     // The recording has no client traffic and one user without a connection.
     assert_eq!(report.from_client_total, 0);
     assert_eq!(report.to_client_total, 0);
     assert_eq!(report.clients, Some(0));
+    assert_eq!(report.other_clients, Some(0));
+    assert_eq!(report.other_from_client_total, Some(0));
+    assert_eq!(report.other_to_client_total, Some(0));
     assert!(report.ok);
     assert_eq!(rig.http.requests().len(), 1);
     assert_eq!(rig.http.requests()[0].url, METRICS_URL);
@@ -301,7 +327,7 @@ async fn octets_with_and_without_total_suffix() {
         "{with_total}telemt_user_octets_from_client{{user=\"alice\"}} 1500\ntelemt_user_octets_to_client{{user=\"alice\"}} 9000\n"
     );
     for body in [with_total, without_total, both] {
-        let rig = rig_with(Some(TOML), None, |_| {
+        let rig = rig_with(Some(TOML), Some(r#"["alice","bob"]"#), |_| {
             let http = ScriptedHttp::new();
             http.always(METRICS_URL, ok(&body));
             http
@@ -312,6 +338,120 @@ async fn octets_with_and_without_total_suffix() {
         assert_eq!(report.clients, Some(3));
         assert!(report.ok);
     }
+}
+
+/// Two users with live traffic. NOT a recording: no recorded node has a second user with traffic,
+/// so the numbers are made up; the series are those of `fixtures/mtproxyl/metrics_users.txt`.
+const POOL_AND_OWNER_WITH_TRAFFIC: &str = concat!(
+    "telemt_user_octets_from_client_total{user=\"alice\"} 1500\n",
+    "telemt_user_octets_to_client_total{user=\"alice\"} 9000\n",
+    "telemt_user_unique_ips_current{user=\"alice\"} 2\n",
+    "telemt_user_octets_from_client_total{user=\"owner\"} 500\n",
+    "telemt_user_octets_to_client_total{user=\"owner\"} 1000\n",
+    "telemt_user_unique_ips_current{user=\"owner\"} 7\n",
+);
+
+fn rig_on_body(pool_users: Option<&str>, body: &str) -> Rig<ScriptedHttp> {
+    rig_with(Some(TOML), pool_users, |_| {
+        let http = ScriptedHttp::new();
+        http.always(METRICS_URL, ok(body));
+        http
+    })
+}
+
+#[tokio::test]
+async fn the_pools_users_are_counted_apart_from_the_owners() {
+    let body = with_users(POOL_AND_OWNER_WITH_TRAFFIC);
+    let rig = rig_on_body(Some(r#"["alice"]"#), &body);
+    let report = rig.engine.metrics().await.unwrap();
+    assert_eq!(report.from_client_total, 1500);
+    assert_eq!(report.to_client_total, 9000);
+    assert_eq!(report.clients, Some(2));
+    assert_eq!(report.other_from_client_total, Some(500));
+    assert_eq!(report.other_to_client_total, Some(1000));
+    // The recording's own user `probe` has no client and counts among the others too.
+    assert_eq!(report.other_clients, Some(7));
+}
+
+#[tokio::test]
+async fn a_pool_user_without_a_series_counts_as_zero() {
+    let body = with_users(POOL_AND_OWNER_WITH_TRAFFIC);
+    let rig = rig_on_body(Some(r#"["carol"]"#), &body);
+    let report = rig.engine.metrics().await.unwrap();
+    assert_eq!(report.from_client_total, 0);
+    assert_eq!(report.to_client_total, 0);
+    assert_eq!(report.clients, Some(0));
+    assert_eq!(report.other_from_client_total, Some(2000));
+    assert_eq!(report.other_to_client_total, Some(10_000));
+    assert_eq!(report.other_clients, Some(9));
+}
+
+#[tokio::test]
+async fn a_pool_with_no_users_leaves_everything_to_the_others() {
+    let body = with_users(POOL_AND_OWNER_WITH_TRAFFIC);
+    let rig = rig_on_body(Some(r#"{"users":[],"sni":"example.com"}"#), &body);
+    let report = rig.engine.metrics().await.unwrap();
+    assert_eq!(report.from_client_total, 0);
+    assert_eq!(report.clients, Some(0));
+    assert_eq!(report.other_from_client_total, Some(2000));
+    assert_eq!(report.other_clients, Some(9));
+}
+
+#[tokio::test]
+async fn nothing_is_counted_until_the_pools_users_are_known() {
+    let body = with_users(POOL_AND_OWNER_WITH_TRAFFIC);
+    // No state file yet, and one that makes no sense: nobody can say whose traffic this is. The
+    // report has zeros and no split, which the registrar takes as no reading to count from.
+    for state in [None, Some("not json")] {
+        let rig = rig_on_body(state, &body);
+        let report = rig.engine.metrics().await.unwrap();
+        assert!(report.ok);
+        assert_eq!(report.from_client_total, 0);
+        assert_eq!(report.to_client_total, 0);
+        assert_eq!(report.clients, None);
+        assert_eq!(report.other_clients, None);
+        assert_eq!(report.other_from_client_total, None);
+        assert_eq!(report.other_to_client_total, None);
+    }
+}
+
+#[tokio::test]
+async fn the_list_follows_the_applied_config_and_survives_a_restart() {
+    let body = with_users(POOL_AND_OWNER_WITH_TRAFFIC);
+    let rig = rig_on_body(None, &body);
+    assert_eq!(rig.engine.metrics().await.unwrap().clients, None);
+
+    script_restart(&rig.runner);
+    let applied = rig
+        .engine
+        .apply_config(&desired(&[("alice", ALICE)], "example.com"))
+        .await
+        .unwrap();
+    assert_eq!(applied, ApplyOutcome::Applied);
+    assert_eq!(rig.engine.metrics().await.unwrap().clients, Some(2));
+
+    // The pool swaps its user: the next look counts the new one.
+    script_restart(&rig.runner);
+    rig.engine
+        .apply_config(&desired(&[("bob", BOB)], "example.com"))
+        .await
+        .unwrap();
+    let report = rig.engine.metrics().await.unwrap();
+    assert_eq!(report.clients, Some(0));
+    assert_eq!(report.other_clients, Some(9));
+
+    // A new process on the same state directory knows the list without a sync.
+    let restarted = TelemtEngine::new(
+        CONFIG.into(),
+        "telemt.service",
+        STATE_DIR.into(),
+        rig.runner.clone(),
+        rig.fs.clone(),
+        rig.http.clone(),
+    );
+    let report = restarted.metrics().await.unwrap();
+    assert_eq!(report.clients, Some(0));
+    assert_eq!(report.other_from_client_total, Some(2000));
 }
 
 #[tokio::test]
@@ -739,7 +879,7 @@ async fn dc2_is_not_checked_without_a_control_api() {
 #[tokio::test]
 async fn user_telemetry_disabled_is_reported() {
     let config = TOML.replace("user_enabled = true", "user_enabled = false");
-    let rig = rig_with(Some(&config), None, |_| {
+    let rig = rig_with(Some(&config), Some(r#"["probe"]"#), |_| {
         let http = ScriptedHttp::new();
         http.always(METRICS_URL, ok(METRICS_USER_OFF));
         http
@@ -750,6 +890,9 @@ async fn user_telemetry_disabled_is_reported() {
     assert_eq!(report.clients, None);
     assert_eq!(report.from_client_total, 0);
     assert_eq!(report.to_client_total, 0);
+    assert_eq!(report.other_clients, None);
+    assert_eq!(report.other_from_client_total, None);
+    assert_eq!(report.other_to_client_total, None);
     // The engine works, but something is lost: ok with a reason.
     let health = rig.engine.health().await;
     assert!(health.ok);
@@ -1663,6 +1806,7 @@ fn agent_config(users: &[(&str, &str)], sni: &str, port: u16) -> AgentConfig {
             sync_sec: 60,
         },
         antiscan: false,
+        report_other_users: false,
     }
 }
 

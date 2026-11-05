@@ -266,6 +266,9 @@ impl Node {
                 from_client_total: sent,
                 to_client_total: sent * 3,
                 clients: Some(0),
+                other_clients: None,
+                other_from_client_total: None,
+                other_to_client_total: None,
             },
             dc2: Some(Dc2Report {
                 ok: true,

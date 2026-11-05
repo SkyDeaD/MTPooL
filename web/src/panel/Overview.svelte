@@ -1,26 +1,32 @@
 <script lang="ts">
+  import { LIVE_STEP_MS, mergeLive, withLiveClients } from '../lib/clients-live';
+  import { useClientsLive } from '../lib/clients-live.svelte';
   import { useNow } from '../lib/clock.svelte';
   import { formatSpan, formatWhen } from '../lib/dates';
-  import { buildScheme, secondsUntil } from '../lib/model';
+  import { buildScheme, otherClientsTotal, panelBans, secondsUntil, whyText } from '../lib/model';
   import type { BanRecord, ClientsRange, ClientsSeries, PublicDomain, StatsSeries } from '../lib/types';
   import BanTable from '../shared/BanTable.svelte';
   import ClientsChart from '../shared/ClientsChart.svelte';
   import PoolScheme from '../shared/PoolScheme.svelte';
   import TimeChart, { type Bar } from '../shared/TimeChart.svelte';
+  import { act } from './act';
   import AddNode from './AddNode.svelte';
+  import { usePanel } from './context.svelte';
   import { useData } from './data.svelte';
   import EventRow from './EventRow.svelte';
   import { t, tp } from './i18n';
   import { usePolled } from './live.svelte';
-  import { failedText, panelGroups } from './nodes';
+  import { panelGroups } from './nodes';
   import { hrefOf } from './route.svelte';
   import type { AdminNode, EventEntry } from './types';
   import { sensorKey } from './types';
   import Icon from './ui/Icon.svelte';
 
   // The pool at a glance: what needs a person, the main numbers, clients, the scheme, bans, events.
+  const panel = usePanel();
   const data = useData();
   const clock = useNow(1000);
+  const live = useClientsLive();
   let range = $state<ClientsRange>('10m');
   let adding = $state(false);
 
@@ -28,6 +34,7 @@
   const clients = usePolled<ClientsSeries>(() => `/api/v1/stats/clients?range=${range}`);
   const series = usePolled<StatsSeries>(() => '/api/v1/stats/series?range=7d');
   const bans = usePolled<BanRecord[]>(() => '/api/v1/bans?limit=50');
+  const activeBans = usePolled<BanRecord[]>(() => '/api/v1/bans?active=true&limit=200');
   const events = usePolled<EventEntry[]>(() => '/api/v1/admin/events');
 
   const nodes = $derived(data.nodes.data);
@@ -49,8 +56,8 @@
     return bans ? Math.round(days.reduce((sum, b) => sum + (b.avg_lifetime_sec ?? 0) * b.bans, 0) / bans) : 0;
   });
   const bars = $derived<Bar[]>((ser?.buckets ?? []).map((b) => ({ at: Date.parse(b.start_ts), value: b.bans })));
-  const chartSeries = $derived(clients.data && clients.data.range === range ? clients.data : null);
-  const recentBans = $derived((bans.data ?? []).filter((b) => !b.reverify).slice(0, 5));
+  const chartSeries = $derived(clients.data && clients.data.range === range ? mergeLive(clients.data, live.ticks) : null);
+  const recentBans = $derived(panelBans(activeBans.data ?? [], bans.data ?? [], 5));
   const known = $derived(new Set((nodes ?? []).map((n) => n.id)));
   const banHref = (id: string) => (known.has(id) ? hrefOf('node', id) : null);
 
@@ -59,13 +66,16 @@
   const attention = $derived((groups?.quarantine.length ?? 0) + (dnsBroken ? 1 : 0) + silent.length);
   const calm = $derived(groups !== null && status !== null && attention === 0);
 
+  const unban = (id: string) =>
+    act(panel, () => panel.client.post('/api/v1/admin/nodes/{id}/unban', { params: { id } }), t('panel.node.unbanned', { id }));
+
   function quarantineText(n: AdminNode): string {
     const blocked = n.last_round?.votes.filter((v) => v.vote === 'blocked').length ?? 0;
     const left = secondsUntil(n.next_round_at, clock.ms);
     const next = left !== null && left > 0 ? t('panel.overview.nextRound', { span: formatSpan(left) }) : '';
-    const failed = n.failed.length ? failedText(n.failed) : '';
-    const why = blocked === 1 ? t('panel.overview.oneVote') : failed && `${failed[0].toUpperCase()}${failed.slice(1)}.`;
-    return [why, next].filter(Boolean).join(' ');
+    const failed = whyText(n.quarantine_reasons?.length ? n.quarantine_reasons : n.failed);
+    const why = failed && `${failed[0].toUpperCase()}${failed.slice(1)}.`;
+    return [why, blocked === 1 ? t('panel.overview.oneVote') : '', next].filter(Boolean).join(' ');
   }
   const stale = $derived(data.nodes.stale || data.status.stale || domains.stale);
 </script>
@@ -150,7 +160,7 @@
     </section>
   </div>
 
-  <ClientsChart series={chartSeries} {range} onrange={(r) => (range = r)} />
+  <ClientsChart series={chartSeries} {range} onrange={(r) => (range = r)} delayMs={live.connected ? LIVE_STEP_MS * 1.5 : undefined} other={otherClientsTotal(withLiveClients(nodes ?? [], [], live.last).nodes)} />
 
   {#if scheme}<PoolScheme {scheme} href={(id) => hrefOf('node', id)} now={clock.ms} />{/if}
 
@@ -199,7 +209,13 @@
         <a href="/dashboard/">{t('panel.overview.allBans')}</a>
       </div>
       {#if recentBans.length > 0}
-        <BanTable rows={recentBans} href={banHref} compact />
+        <BanTable rows={recentBans} href={banHref} compact>
+          {#snippet action(ban)}
+            {#if !ban.lifted_at}
+              <button class="btn s" type="button" onclick={() => unban(ban.node_id)}>{t('panel.node.unban')}</button>
+            {/if}
+          {/snippet}
+        </BanTable>
       {:else}
         <div class="tb-b"><p class="muted">{t('dash.log.empty')}</p></div>
       {/if}

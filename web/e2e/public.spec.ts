@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { expectNoAxeViolations, expectNoSidewaysScroll, settled, stand, THEMES, useTheme, watchExternal, WIDTHS } from './support.ts';
+import { expectNoAxeViolations, expectNoOverlap, expectNoSidewaysScroll, settled, stand, THEMES, useTheme, watchExternal, WIDTHS } from './support.ts';
 
 // The public pages, from a real registrar: every page in both themes at three widths. Each one
 // must fit the window, ask no other host for anything, and pass axe at WCAG AA.
@@ -11,10 +11,16 @@ const PAGES: { name: string; path: () => string; heading: RegExp }[] = [
   { name: 'node', path: () => `/node/?id=${stand.ids[stand.roster.healthy[0]]}`, heading: /Доступность/ },
 ];
 
+let reader = 0;
+const readerNo = () => (reader = (reader % 250) + 1);
+
 for (const page of PAGES) {
   for (const theme of THEMES) {
     for (const width of WIDTHS) {
       test(`public ${page.name}, ${theme}, ${width}px`, async ({ page: tab }) => {
+        // Each test is a reader of its own: the request limit is per address, and this run goes
+        // through the pages far faster than a person.
+        await tab.setExtraHTTPHeaders({ 'x-forwarded-for': `198.51.100.${readerNo()}` });
         const external = watchExternal(tab);
         await useTheme(tab, theme);
         await tab.setViewportSize({ width, height: 900 });
@@ -23,6 +29,7 @@ for (const page of PAGES) {
         await settled(tab);
         await expect(tab.locator('html')).toHaveAttribute('data-theme', theme);
         await expectNoSidewaysScroll(tab);
+        await expectNoOverlap(tab, '.chv');
         await expectNoAxeViolations(tab, `${page.name} ${theme} ${width}`);
         expect(external, 'requests to other hosts').toEqual([]);
       });

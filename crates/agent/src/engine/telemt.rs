@@ -415,6 +415,15 @@ impl<R: CommandRunner, H: HttpGet> TelemtEngine<R, H> {
         }
     }
 
+    /// The users the engine serves for the pool, as of the last configuration it took. Read
+    /// afresh each time, so it follows every change and survives a restart of the agent. `None`
+    /// when nothing says so: before the first configuration is applied, or with a state file that
+    /// is gone bad. A list with no name in it is known.
+    fn known_pool_users(&self) -> Option<Vec<String>> {
+        let bytes = self.fs.read(&self.pool_users_path()).ok()??;
+        Some(PoolState::parse(&bytes)?.users)
+    }
+
     pub(crate) fn remember_pool_state(&self, state: &PoolState) {
         let path = self.pool_users_path();
         if let Err(error) = self.fs.write_private(&path, &state.to_bytes()) {
@@ -446,7 +455,8 @@ impl<R: CommandRunner, H: HttpGet> TelemtEngine<R, H> {
                 "the answer is not telemt's metrics".to_owned(),
             ));
         }
-        Ok(snapshot_of(&config, &samples))
+        let pool_users = self.known_pool_users();
+        Ok(snapshot_of(&config, &samples, pool_users.as_deref()))
     }
 
     /// telemt is up on the file it was started with: its metrics answer. Whether its middle
@@ -505,39 +515,56 @@ impl<R: CommandRunner, H: HttpGet> TelemtEngine<R, H> {
     }
 }
 
-fn snapshot_of(config: &TelemtToml, samples: &[Sample]) -> Snapshot {
+/// Reads the metrics. The numbers are counted by the `user` label: `pool_users` on one side, every
+/// other user of the engine on the other. Whose traffic it is cannot be said without the list, so
+/// without it, as without per-user statistics, there are zeros, no clients and no `other_*`.
+fn snapshot_of(config: &TelemtToml, samples: &[Sample], pool_users: Option<&[String]>) -> Snapshot {
     let user_telemetry_off = match prom::first(samples, "telemt_telemetry_user_enabled") {
         Some(gauge) => gauge == 0.0,
         None => !config.user_telemetry_enabled(),
-    };
-    let octets = |direction: &str| -> u64 {
-        if user_telemetry_off {
-            return 0;
-        }
-        // The series is `..._total` in telemt 3.5.16; one without the suffix is accepted too,
-        // and an engine that exports both is counted once.
-        let total = format!("telemt_user_octets_{direction}_total");
-        let bare = format!("telemt_user_octets_{direction}");
-        prom::sum(samples, &total)
-            .or_else(|| prom::sum(samples, &bare))
-            .map_or(0, |v| v as u64)
-    };
-    let clients = if user_telemetry_off {
-        None
-    } else {
-        prom::sum(samples, "telemt_user_unique_ips_current").map(|v| v as u64)
     };
     let writers = prom::first(samples, "telemt_me_writers_active_current").unwrap_or(0.0);
     // With the control API the DC2 check says how the middle proxy is; without it a telemt that
     // uses the middle proxy is serving once it has a writer.
     let ok = config.control_api().is_some() || !config.uses_middle_proxy() || writers > 0.0;
-    Snapshot {
-        report: MetricsReport {
+    let counted = pool_users.filter(|_| !user_telemetry_off);
+    let report = match counted {
+        None => MetricsReport {
             ok,
-            from_client_total: octets("from_client"),
-            to_client_total: octets("to_client"),
-            clients,
+            from_client_total: 0,
+            to_client_total: 0,
+            clients: None,
+            other_clients: None,
+            other_from_client_total: None,
+            other_to_client_total: None,
         },
+        Some(pool_users) => {
+            let by_user = |name: &str| prom::split_sum(samples, name, "user", pool_users);
+            // A user without traffic has no series at all: that is zero. The series is `..._total`
+            // in telemt 3.5.16; one without the suffix is accepted too, and an engine that exports
+            // both is counted once.
+            let octets = |direction: &str| -> (u64, u64) {
+                let (pool, other) = by_user(&format!("telemt_user_octets_{direction}_total"))
+                    .or_else(|| by_user(&format!("telemt_user_octets_{direction}")))
+                    .unwrap_or_default();
+                (pool as u64, other as u64)
+            };
+            let (from_client, other_from_client) = octets("from_client");
+            let (to_client, other_to_client) = octets("to_client");
+            let clients = by_user("telemt_user_unique_ips_current");
+            MetricsReport {
+                ok,
+                from_client_total: from_client,
+                to_client_total: to_client,
+                clients: clients.map(|(pool, _)| pool as u64),
+                other_clients: clients.map(|(_, other)| other as u64),
+                other_from_client_total: Some(other_from_client),
+                other_to_client_total: Some(other_to_client),
+            }
+        }
+    };
+    Snapshot {
+        report,
         user_telemetry_off,
     }
 }

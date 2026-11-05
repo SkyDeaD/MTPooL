@@ -49,9 +49,9 @@ impl Stand {
         .await
     }
 
-    /// The state of one node in the public list, or `None` when the list does not have it.
+    /// The state of one node, or `None` when it has no record (a banned node has none).
     pub async fn node_state(&self, node_id: &str) -> Result<Option<String>> {
-        // The node's own page: the list leaves banned nodes out.
+        // The node's own page, for the states the list leaves out.
         let response = self
             .http
             .get(format!(

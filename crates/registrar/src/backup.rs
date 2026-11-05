@@ -45,6 +45,63 @@ fn beside(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// The copy of the database at `db` kept right before it left schema `version`.
+pub fn before_migration(db: &Path, version: i64) -> PathBuf {
+    beside(db, &format!(".before-v{version}"))
+}
+
+/// Waits for other processes migrating the database at `db`, and holds them off until the file is
+/// dropped. The lock is on the directory: a lock file left by a command run as root could not be
+/// opened by the registrar when its update comes.
+pub fn lock_for_migration(db: &Path) -> Result<File, BackupError> {
+    let dir = db
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let what = || format!("cannot lock {}", dir.display());
+    let lock = File::open(dir).map_err(io_error(what()))?;
+    lock.lock().map_err(io_error(what()))?;
+    Ok(lock)
+}
+
+/// Keeps a copy of the database at `db` before it leaves schema `version`, in place of any older
+/// such copy. A build older than the migration refuses the migrated database, so the copy is what
+/// a rollback goes back to.
+pub fn keep_before_migration(db: &Path, version: i64) -> Result<(), BackupError> {
+    let copy = before_migration(db, version);
+    backup(db, &copy)?;
+    // A command run as root may be the one migrating; the registrar must be able to read the copy.
+    own_like_directory(db, [copy.clone(), beside(&copy, ".sha256")])?;
+    let Some(dir) = db.parent().filter(|d| !d.as_os_str().is_empty()) else {
+        return Ok(());
+    };
+    let prefix = format!("{}.before-v", base_name(db));
+    let keep = base_name(&copy);
+    let entries = fs::read_dir(dir).map_err(io_error(format!("cannot read {}", dir.display())))?;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let older = name.starts_with(&prefix) && name != keep && name != format!("{keep}.sha256");
+        if older && let Err(e) = fs::remove_file(entry.path()) {
+            tracing::warn!(error = %e, file = %name, "cannot remove an older database copy");
+        }
+    }
+    Ok(())
+}
+
+/// Takes back the copy kept before schema `version` and removes it. The caller holds the lock of
+/// the database: a registrar about to serve it.
+pub fn take_back_before_migration(db: &Path, version: i64) -> Result<(), BackupError> {
+    let copy = before_migration(db, version);
+    verify_checksum(&copy)?;
+    put_in_place(db, &copy)?;
+    for file in [beside(&copy, ".sha256"), copy] {
+        if let Err(e) = fs::remove_file(&file) {
+            tracing::warn!(error = %e, file = %file.display(), "cannot remove the database copy");
+        }
+    }
+    Ok(())
+}
+
 /// The lock file of the database at `db`.
 pub fn lock_path(db: &Path) -> PathBuf {
     beside(db, ".lock")
@@ -190,6 +247,13 @@ fn promised_checksum(from: &Path) -> Result<String, BackupError> {
 /// missing or does not match, when a registrar serves the database, or when the copy fails
 /// `integrity_check`; in each case the database is left as it was.
 pub fn restore(db: &Path, from: &Path) -> Result<(), BackupError> {
+    verify_checksum(from)?;
+    // Held until the new database is in place, so a registrar cannot start halfway.
+    let _lock = lock_serving(db)?;
+    put_in_place(db, from)
+}
+
+fn verify_checksum(from: &Path) -> Result<(), BackupError> {
     let promised = promised_checksum(from)?;
     let actual = sha256_of(from)?;
     if actual != promised {
@@ -198,9 +262,11 @@ pub fn restore(db: &Path, from: &Path) -> Result<(), BackupError> {
             from.display()
         )));
     }
-    // Held until the new database is in place, so a registrar cannot start halfway.
-    let _lock = lock_serving(db)?;
+    Ok(())
+}
 
+/// Replaces the database with a copy that passes `integrity_check`. The caller holds the lock.
+fn put_in_place(db: &Path, from: &Path) -> Result<(), BackupError> {
     let staged = beside(db, ".restoring");
     let _ = fs::remove_file(&staged);
     let staged_result = fs::copy(from, &staged)
@@ -236,12 +302,20 @@ pub fn restore(db: &Path, from: &Path) -> Result<(), BackupError> {
 /// open them. It changes nothing when the owner already matches, and when the caller may not
 /// change owners (anyone but root).
 pub fn match_directory_owner(db: &Path) -> Result<(), BackupError> {
+    own_like_directory(db, [db.to_path_buf(), lock_path(db)])
+}
+
+/// Gives `files`, which live beside the database at `db`, the owner of their directory.
+fn own_like_directory(
+    db: &Path,
+    files: impl IntoIterator<Item = PathBuf>,
+) -> Result<(), BackupError> {
     use std::os::unix::fs::{MetadataExt, chown};
 
     let dir = db.parent().filter(|p| !p.as_os_str().is_empty());
     let dir = dir.unwrap_or_else(|| Path::new("."));
     let wanted = fs::metadata(dir).map_err(io_error(format!("cannot read {}", dir.display())))?;
-    for file in [db.to_path_buf(), lock_path(db)] {
+    for file in files {
         let meta = match fs::metadata(&file) {
             Ok(meta) => meta,
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,

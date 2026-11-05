@@ -420,6 +420,7 @@ async fn the_driver_takes_push_dns_only() {
         kind: mtpool_core::EventKind::DnsApplied,
         at: mtpool_core::Ts(0),
         node: None,
+        owner: None,
         domain: None,
         detail: serde_json::json!({}),
     });

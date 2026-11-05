@@ -1,7 +1,5 @@
-// How the panel sorts the nodes it shows. A banned node is in none of these lists: it is the
-// business of the ban history, which opens the node's own page. Only a quarantine stays visible.
-import { t } from './i18n';
-import { messages, type Key as MessageKey } from './i18n';
+// How the panel sorts the nodes it shows. A banned node has no record any more: it is the business
+// of the ban history. Only a quarantine stays visible.
 import type { AdminNode } from './types';
 
 export interface PanelGroups {
@@ -26,14 +24,4 @@ export function panelGroups(nodes: readonly AdminNode[]): PanelGroups {
   g.queue.sort((a, b) => place(a) - place(b));
   g.idle.sort((a, b) => (IDLE_ORDER[a.state] ?? 9) - (IDLE_ORDER[b.state] ?? 9));
   return g;
-}
-
-/** The conditions that failed, in words; a code the panel does not know is shown as it came. */
-export function failedText(codes: readonly string[]): string {
-  return codes
-    .map((c) => {
-      const key = `panel.failed.${c}`;
-      return key in messages ? t(key as MessageKey) : c;
-    })
-    .join(', ');
 }

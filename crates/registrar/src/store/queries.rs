@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
 use mtpool_core::{
-    Assignments, DnsState, IpBlock, NodeHealth, NodeId, NodeRecord, NodeStats, PoolState, Settings,
-    Slot, SrmdState, Tombstone, Ts,
+    Assignments, DnsState, IpBlock, NodeHealth, NodeId, NodeRecord, NodeStats, OwnerId, PoolState,
+    Settings, Slot, SrmdState, Tombstone, Ts,
 };
 use rusqlite::{Connection, OptionalExtension};
 use serde::de::DeserializeOwned;
@@ -59,6 +59,7 @@ pub(super) fn load_state(conn: &Connection, now: Ts) -> Result<PoolState, StoreE
         assignments,
         dns,
         srmd,
+        evictions_from: None,
     })
 }
 
@@ -116,7 +117,8 @@ fn load_stats(
 
 fn load_blocks(conn: &Connection) -> Result<Vec<IpBlock>, StoreError> {
     let mut stmt = conn.prepare(
-        "SELECT ip, node_id, blocked_at, next_reverify_at FROM ip_blocks ORDER BY blocked_at, ip",
+        "SELECT ip, node_id, blocked_at, next_reverify_at, owner FROM ip_blocks \
+         ORDER BY blocked_at, ip",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok((
@@ -124,16 +126,18 @@ fn load_blocks(conn: &Connection) -> Result<Vec<IpBlock>, StoreError> {
             r.get::<_, String>(1)?,
             r.get::<_, i64>(2)?,
             r.get::<_, Option<i64>>(3)?,
+            r.get::<_, Option<i64>>(4)?,
         ))
     })?;
     let mut blocks = Vec::new();
     for row in rows {
-        let (ip, node_id, blocked_at, next) = row?;
+        let (ip, node_id, blocked_at, next, owner) = row?;
         blocks.push(IpBlock {
             ip: parse_ip("ip_blocks.ip", &ip)?,
             node_id: parse_id("ip_blocks.node_id", &node_id)?,
             blocked_at: Ts(blocked_at),
             next_reverify_at: next.map(Ts),
+            owner: owner.map(OwnerId),
         });
     }
     Ok(blocks)

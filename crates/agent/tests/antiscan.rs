@@ -478,6 +478,7 @@ fn config(antiscan: bool) -> AgentConfig {
             sync_sec: 60,
         },
         antiscan,
+        report_other_users: false,
     }
 }
 
