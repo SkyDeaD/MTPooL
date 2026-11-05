@@ -372,3 +372,92 @@ async fn a_symlink_in_the_releases_directory_is_not_followed() {
     let resp = send(&env, get("/releases/link", "198.51.100.4:1", &[])).await;
     assert_eq!(resp.status, StatusCode::NOT_FOUND);
 }
+
+/// A signing key, as `with_minisign_pub` takes it, and what signs with it.
+fn signing_key() -> (minisign::KeyPair, &'static str) {
+    let pair = minisign::KeyPair::generate_unencrypted_keypair().expect("a key");
+    let public: &'static str = Box::leak(pair.pk.to_base64().into_boxed_str());
+    (pair, public)
+}
+
+/// Puts a manifest of `version` with a build of `component` and its signature on the registrar.
+fn publish(env: &Env, pair: &minisign::KeyPair, version: &str, component: &str) -> String {
+    let manifest = serde_json::json!({
+        "version": version,
+        "artifacts": [{
+            "component": component,
+            "target": "x86_64-unknown-linux-musl",
+            "name": format!("{component}-x86_64-unknown-linux-musl"),
+            "sha256": "0".repeat(64),
+        }],
+    })
+    .to_string();
+    let signature = minisign::sign(Some(&pair.pk), &pair.sk, manifest.as_bytes(), None, None)
+        .expect("a signature")
+        .into_string();
+    let dir = env.releases.path();
+    std::fs::write(dir.join("manifest.json"), &manifest).unwrap();
+    std::fs::write(dir.join("manifest.json.minisig"), signature).unwrap();
+    manifest
+}
+
+/// A version above any this workspace is stamped with.
+const NEWER: &str = "999.0.0";
+
+#[tokio::test]
+async fn a_manifest_with_an_agent_newer_than_the_registrar_is_refused() {
+    let (pair, public) = signing_key();
+    let env = env_with(public, |_| {});
+    publish(&env, &pair, NEWER, "mtpool-agent");
+
+    let resp = send(&env, get("/releases/manifest.json", "198.51.100.4:1", &[])).await;
+
+    assert_eq!(resp.status, StatusCode::CONFLICT);
+    let problem = problem(&resp);
+    assert_eq!(problem.code, "registrar_behind");
+    assert!(problem.detail.contains(NEWER), "{}", problem.detail);
+    assert!(
+        problem.detail.contains(env!("CARGO_PKG_VERSION")),
+        "{}",
+        problem.detail
+    );
+}
+
+#[tokio::test]
+async fn a_manifest_with_the_agent_of_the_registrar_is_served() {
+    let (pair, public) = signing_key();
+    let env = env_with(public, |_| {});
+    let manifest = publish(&env, &pair, env!("CARGO_PKG_VERSION"), "mtpool-agent");
+
+    let resp = send(&env, get("/releases/manifest.json", "198.51.100.4:1", &[])).await;
+
+    assert_eq!(resp.status, StatusCode::OK);
+    assert_eq!(resp.text(), manifest);
+}
+
+/// The installer is the one to say that the signature is bad, and it says it better.
+#[tokio::test]
+async fn a_newer_manifest_with_a_foreign_signature_is_served_for_the_installer_to_refuse() {
+    let (foreign, _) = signing_key();
+    let (_, public) = signing_key();
+    let env = env_with(public, |_| {});
+    let manifest = publish(&env, &foreign, NEWER, "mtpool-agent");
+
+    let resp = send(&env, get("/releases/manifest.json", "198.51.100.4:1", &[])).await;
+
+    assert_eq!(resp.status, StatusCode::OK);
+    assert_eq!(resp.text(), manifest);
+}
+
+/// Only an agent can be too new here: a release without one has nothing for a new node to install.
+#[tokio::test]
+async fn a_newer_manifest_without_an_agent_is_served() {
+    let (pair, public) = signing_key();
+    let env = env_with(public, |_| {});
+    let manifest = publish(&env, &pair, NEWER, "mtpool-registrar");
+
+    let resp = send(&env, get("/releases/manifest.json", "198.51.100.4:1", &[])).await;
+
+    assert_eq!(resp.status, StatusCode::OK);
+    assert_eq!(resp.text(), manifest);
+}

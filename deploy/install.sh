@@ -496,7 +496,16 @@ main() {
 
     step_begin 'Релиз'
     step_detail 'проверяю подпись'
-    fetch "$POOL_URL/releases/manifest.json" "$work/manifest.json" || die_with_log "не удалось скачать манифест релиза"
+    # The registrar holds one release, and answers 409 when its agent is newer than the registrar:
+    # after a rollback, or for the moment before an update restarts it.
+    manifest_code=0
+    manifest_status=$(curl -fsSL --retry 3 --connect-timeout 10 -w '%{http_code}' \
+        -o "$work/manifest.json" "$POOL_URL/releases/manifest.json") || manifest_code=$?
+    case "$manifest_code:$manifest_status" in
+    0:200) ;;
+    *:409) die "релиз на пуле новее его регистратора, а другой сборки агента там нет, ничего не установлено. Повторите установку, когда регистратор обновится" ;;
+    *) die_with_log "не удалось скачать манифест релиза" ;;
+    esac
     fetch "$POOL_URL/releases/manifest.json.minisig" "$work/manifest.json.minisig" ||
         die_with_log "не удалось скачать подпись манифеста"
     if ! minisign -Vm "$work/manifest.json" -x "$work/manifest.json.minisig" -P "$PUBKEY"; then

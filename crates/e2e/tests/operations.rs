@@ -7,21 +7,22 @@ mod common;
 
 use std::time::Instant;
 
-use common::{enroll_healthy, secs, settings};
+use common::{enroll_healthy, run_registrar_build, secs, settings};
 use mtpool_e2e::{
     InstallOptions, PROXY_USER_SECRET, ReleaseSpec, Stand, TLS_DOMAIN, TestKey, Token,
     ensure_test_key, eventually, registrar_release,
 };
 use serde_json::Value;
 
-/// Offers the agent of node 1's image as a release signed by the stand's key.
+/// Offers the agent of node 1's image as a release signed by the stand's key, under the version
+/// that build reports: not newer than the stand's registrar, so the installer gets it.
 async fn offer_release(stand: &Stand, key: &TestKey) {
     let node = stand.node(1);
     let binary = node.fetch_agent_binary().await.expect("the agent build");
     let target = node.target().await.expect("the target");
     stand
         .sign_release(&ReleaseSpec {
-            version: "9.9.9",
+            version: "0.0.0",
             agent_binary: &binary,
             target: &target,
             key,
@@ -70,6 +71,90 @@ async fn install_rejects_bad_signature() {
         node.node_id().await.unwrap().is_none(),
         "the node did not enroll"
     );
+}
+
+/// The stand's registrar is 0.9.0 (`e2e/images/registrar/Dockerfile`), and 0.9.1 is its next build.
+#[tokio::test]
+#[ignore = "needs Docker and the internet; run with --ignored"]
+async fn install_waits_for_a_registrar_that_was_rolled_back() {
+    let stand = Stand::up().await.expect("the stand comes up");
+    let key = ensure_test_key().expect("the stand's key");
+    let node = stand.node(1);
+    let kept = stand
+        .registrar_exec("cp /usr/local/bin/mtpool-registrar /opt/e2e/registrar-0.9.0")
+        .await
+        .expect("the old build is kept");
+    assert!(kept.success, "{}", kept.output);
+    let build = node
+        .fetch_file("/opt/e2e/agent-0.9.1")
+        .await
+        .expect("the 0.9.1 build");
+    let target = node.target().await.expect("the target");
+    stand
+        .sign_release(&ReleaseSpec {
+            version: "0.9.1",
+            agent_binary: &build,
+            target: &target,
+            key: &key,
+        })
+        .await
+        .expect("the release is put on the registrar");
+
+    // The update and the rollback: the manifest of 0.9.1 stays, the only agent build beside it.
+    run_registrar_build(&stand, "0.9.1").await;
+    run_registrar_build(&stand, "0.9.0").await;
+    let options = InstallOptions {
+        name: "node-one",
+        token: Token::Env(stand.enroll_token()),
+        preset: None,
+        port: None,
+    };
+    let run = node.install(&options).await.expect("the installer runs");
+    assert!(!run.success, "the installer must refuse:\n{}", run.output);
+    assert!(
+        run.output.contains("релиз на пуле новее его регистратора"),
+        "it says why:\n{}",
+        run.output
+    );
+    assert!(
+        run.output.contains("когда регистратор обновится"),
+        "it says what to do:\n{}",
+        run.output
+    );
+    let left = node
+        .exec(
+            "ls /var/lib/mtpool/enroll_token /etc/mtpool/agent.toml /usr/local/bin/mtpool-agent.new \
+             2>&1 | grep -v 'No such file' || true; \
+             systemctl is-enabled mtpool-agent 2>&1 || true; mtpool-agent version",
+        )
+        .await
+        .unwrap();
+    assert!(
+        !left.contains("enroll_token")
+            && !left.contains("agent.toml")
+            && !left.contains("enabled\n")
+            && !left.contains("0.9.1"),
+        "nothing of the node is set up: {left}"
+    );
+    assert!(
+        node.node_id().await.unwrap().is_none(),
+        "the node did not enroll"
+    );
+
+    // The registrar reaches that version: the same command works, with the new agent.
+    run_registrar_build(&stand, "0.9.1").await;
+    let run = node.install(&options).await.expect("the installer runs");
+    assert!(run.success, "the installer works:\n{}", run.output);
+    let id = node.wait_node_id(secs(60)).await.expect("the node enrolls");
+    stand
+        .wait_state(&id, "healthy", secs(120))
+        .await
+        .expect("the node is healthy");
+    let version = node
+        .exec("/usr/local/bin/mtpool-agent version")
+        .await
+        .expect("the agent answers");
+    assert!(version.starts_with("0.9.1"), "{version}");
 }
 
 #[tokio::test]

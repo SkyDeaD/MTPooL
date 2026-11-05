@@ -3979,6 +3979,16 @@
               }
             }
           },
+          "409": {
+            "description": "`manifest.json` only, code `registrar_behind`: the signed release has an agent newer than this registrar, and the directory holds no older build",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Too many requests",
             "headers": {

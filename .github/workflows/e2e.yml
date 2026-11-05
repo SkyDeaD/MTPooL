@@ -144,6 +144,7 @@ jobs:
               db_write_error_visible_in_readyz
               install_rejects_port_mismatch
               install_says_when_the_pool_refuses_the_node
+              install_waits_for_a_registrar_that_was_rolled_back
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
