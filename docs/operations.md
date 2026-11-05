@@ -159,3 +159,4 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/readyz
 | Бот не получает события | журнал доставок подписки, см. [bots.md](bots.md) |
 
 Секрет администратора утерян — `sudo runuser -u mtpool -- mtpool-registrar admin reset-token` выдаёт новый токен (см. [install-registrar.md](install-registrar.md)).
+
