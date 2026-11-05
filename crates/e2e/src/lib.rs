@@ -94,11 +94,26 @@ fn compose_file() -> PathBuf {
 /// What `docker compose up` does about the images: builds them, unless the variable
 /// `MTPOOL_E2E_PREBUILT=1` says they are loaded already. Then a missing image is an error.
 fn build_flag() -> &'static str {
-    build_flag_for(std::env::var("MTPOOL_E2E_PREBUILT").as_deref() == Ok("1"))
+    build_flag_for(prebuilt())
+}
+
+fn prebuilt() -> bool {
+    std::env::var("MTPOOL_E2E_PREBUILT").as_deref() == Ok("1")
 }
 
 fn build_flag_for(prebuilt: bool) -> &'static str {
     if prebuilt { "--no-build" } else { "--build" }
+}
+
+/// What the compose file is told about the images. Built here, they go by the id of the key they
+/// embed: another working copy has another key, so its builds neither replace these images nor
+/// share their cargo target. Loaded images keep the compose file's default tag.
+fn image_env_for(prebuilt: bool, key: &TestKey) -> Vec<(String, String)> {
+    if prebuilt {
+        Vec::new()
+    } else {
+        vec![("MTPOOL_E2E_TAG".to_owned(), key.id())]
+    }
 }
 
 /// The file for the logs of a failed stand: the test it served and its project.
@@ -259,7 +274,7 @@ impl Stand {
     /// [`Stand::up`] with the options given.
     pub async fn up_with(options: StandOptions) -> Result<Stand> {
         // The images embed the public half of the stand's key; it has to exist before they build.
-        ensure_test_key()?;
+        let key = ensure_test_key()?;
         let project = project_name();
         let mut files = vec![compose_file()];
         if options.small_db {
@@ -268,7 +283,7 @@ impl Stand {
         let mut guard = Guard {
             project: project.clone(),
             files,
-            env: Vec::new(),
+            env: image_env_for(prebuilt(), &key),
             up: false,
         };
         eprintln!("e2e: project {project}");
@@ -800,12 +815,23 @@ async fn configure(admin: &Admin) -> Result<()> {
 
 #[cfg(test)]
 mod build_flag_tests {
-    use super::build_flag_for;
+    use super::{TestKey, build_flag_for, image_env_for};
 
     #[test]
     fn images_are_built_unless_they_came_prebuilt() {
         assert_eq!(build_flag_for(false), "--build");
         assert_eq!(build_flag_for(true), "--no-build");
+    }
+
+    #[test]
+    fn built_images_go_by_the_key_and_loaded_ones_keep_their_tag() {
+        let key = TestKey::generate().expect("a key");
+        assert_eq!(
+            image_env_for(false, &key),
+            [("MTPOOL_E2E_TAG".to_owned(), key.id())]
+        );
+        assert!(image_env_for(true, &key).is_empty());
+        assert_ne!(key.id(), TestKey::generate().expect("a key").id());
     }
 }
 

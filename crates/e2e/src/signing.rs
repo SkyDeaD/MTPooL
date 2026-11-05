@@ -26,6 +26,11 @@ impl TestKey {
         })
     }
 
+    /// The key's id in hex. The images of a working copy are tagged with it.
+    pub fn id(&self) -> String {
+        data_encoding::HEXLOWER.encode(self.secret.keynum())
+    }
+
     /// The public key as it is written in the installer: the base64 line.
     pub fn public(&self) -> &str {
         &self.public_line
