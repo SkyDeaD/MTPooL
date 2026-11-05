@@ -102,6 +102,10 @@ pub struct NodeHealth {
     pub last_report: Ts,
     /// The node's port matches the pool setting.
     pub port_ok: bool,
+    /// The agent refused the pool's configuration: the owner holds a user under a name of the
+    /// pool, with another secret. Health stored before this existed reads as not taken.
+    #[serde(default)]
+    pub pool_user_taken: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,11 +117,17 @@ pub enum FailedCondition {
     Port,
     HeartbeatStale,
     ReportStale,
+    PoolUserTaken,
 }
 
 /// Every Healthy condition that does not hold at `now`. Empty means the node may be a master.
 pub fn failed_conditions(h: &NodeHealth, now: Ts, s: &Settings) -> Vec<FailedCondition> {
     let mut failed = Vec::new();
+    // First: the failed metrics or Globalping of such a node may only follow from it, and the
+    // owner reads the reasons in this order.
+    if h.pool_user_taken {
+        failed.push(FailedCondition::PoolUserTaken);
+    }
     if !h.tcp.up {
         failed.push(FailedCondition::Tcp);
     }
@@ -171,7 +181,28 @@ mod tests {
             last_heartbeat: ago(5),
             last_report: ago(60),
             port_ok: true,
+            pool_user_taken: false,
         }
+    }
+
+    #[test]
+    fn a_taken_user_name_fails_the_node() {
+        let h = NodeHealth {
+            pool_user_taken: true,
+            ..healthy()
+        };
+        assert_eq!(
+            failed_conditions(&h, NOW, &Settings::default()),
+            vec![FailedCondition::PoolUserTaken]
+        );
+    }
+
+    #[test]
+    fn health_stored_before_the_taken_name_reads_as_not_taken() {
+        let mut stored = serde_json::to_value(healthy()).unwrap();
+        stored.as_object_mut().unwrap().remove("pool_user_taken");
+        let read: NodeHealth = serde_json::from_value(stored).unwrap();
+        assert!(!read.pool_user_taken);
     }
 
     #[test]
@@ -327,10 +358,12 @@ mod tests {
             last_heartbeat: ago(120),
             last_report: ago(2000),
             port_ok: false,
+            pool_user_taken: true,
         };
         assert_eq!(
             failed_conditions(&h, NOW, &Settings::default()),
             vec![
+                FailedCondition::PoolUserTaken,
                 FailedCondition::Tcp,
                 FailedCondition::Metrics,
                 FailedCondition::Globalping,

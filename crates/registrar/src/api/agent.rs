@@ -28,9 +28,9 @@ use mtpool_core::{
     NodeState, Reply, ReplyId, TrafficCounters, Ts, Vote, lifecycle::RejectReason,
 };
 use mtpool_protocol::agent::{
-    AgentConfig, AgentUser, Empty, EmptyRequest, EnrollRequest, EnrollResponse, GpReport,
-    Intervals, MetricsReport, ReportRequest, Terminate, TerminateReason, UpdateOffer,
-    UpdateOutcome, UpdatePoll, UpdateStatus,
+    AgentConfig, AgentUser, ERROR_POOL_USER_TAKEN, Empty, EmptyRequest, EnrollRequest,
+    EnrollResponse, GpReport, Intervals, MetricsReport, ReportRequest, Terminate, TerminateReason,
+    UpdateOffer, UpdateOutcome, UpdatePoll, UpdateStatus,
 };
 use mtpool_protocol::problem::Problem;
 use mtpool_protocol::public::Engine;
@@ -730,6 +730,7 @@ struct Settled {
     clients: Option<u64>,
     other_traffic: Option<TrafficCounters>,
     other_clients: Option<u64>,
+    pool_user_taken: bool,
 }
 
 impl Settled {
@@ -744,6 +745,7 @@ impl Settled {
             clients: self.clients,
             other_traffic: self.other_traffic,
             other_clients: self.other_clients,
+            pool_user_taken: self.pool_user_taken,
         })
     }
 }
@@ -910,6 +912,7 @@ pub async fn report(
         clients: request.metrics.clients,
         other_traffic: other_traffic(&request.metrics),
         other_clients: request.metrics.other_clients,
+        pool_user_taken: request.error.as_deref() == Some(ERROR_POOL_USER_TAKEN),
     };
     match request.gp {
         GpReport::NoData { reason } => {

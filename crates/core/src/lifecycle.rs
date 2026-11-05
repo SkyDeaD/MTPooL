@@ -89,6 +89,7 @@ impl NodeRecord {
                 last_heartbeat: now,
                 last_report: Ts(0),
                 port_ok: port == s.proxy_port,
+                pool_user_taken: false,
             },
             registered_at: now,
             queued_at: now,
@@ -436,7 +437,13 @@ pub fn needs_sensors(n: &NodeRecord, now: Ts, s: &Settings) -> bool {
             if !is_alive(n, now, s) {
                 return false;
             }
-            n.suspected || globalping_unproven(&n.health, &failed_conditions(&n.health, now, s))
+            let failed = failed_conditions(&n.health, now, s);
+            // The pool's secret and domain are not on this node: a sensor would learn nothing
+            // about the address, and a vote made that way must not count towards a ban.
+            if failed.contains(&FailedCondition::PoolUserTaken) {
+                return false;
+            }
+            n.suspected || globalping_unproven(&n.health, &failed)
         }
         _ => false,
     }
@@ -769,6 +776,7 @@ mod tests {
             last_heartbeat: now,
             last_report: now,
             port_ok: true,
+            pool_user_taken: false,
         }
     }
 
@@ -1695,6 +1703,49 @@ mod tests {
         assert_eq!(n.state, NodeState::Quarantine);
         assert_eq!(n.state_since, at(20));
         assert!(needs_sensors(&n, at(20), &s()));
+    }
+
+    #[test]
+    fn a_taken_user_name_quarantines_a_pending_node_at_once() {
+        let mut n = pending("node-aaaaa", "95.216.0.1", T0);
+        n.health = good_health(at(20));
+        n.health.pool_user_taken = true;
+        assert_eq!(
+            tick_node(&mut n, at(20), &s()),
+            vec![LifecycleEvent::Quarantined {
+                reason: vec![FailedCondition::PoolUserTaken]
+            }]
+        );
+        assert_eq!(n.state, NodeState::Quarantine);
+        assert!(!n.suspected);
+    }
+
+    #[test]
+    fn a_node_with_a_taken_user_name_gets_no_sensors() {
+        // The pool's secret and domain are not on this node, so a sensor learns nothing about the
+        // address from it, even when Globalping fails as well.
+        let mut n = quarantined_gp_failed(T0);
+        assert!(needs_sensors(&n, T0, &s()));
+        n.health.pool_user_taken = true;
+        assert!(!needs_sensors(&n, T0, &s()));
+    }
+
+    #[test]
+    fn a_node_returns_at_once_when_the_name_is_free_again() {
+        let mut n = healthy(T0);
+        n.health.pool_user_taken = true;
+        assert_eq!(
+            tick_node(&mut n, T0, &s()),
+            vec![LifecycleEvent::Quarantined {
+                reason: vec![FailedCondition::PoolUserTaken]
+            }]
+        );
+        n.health.pool_user_taken = false;
+        assert_eq!(
+            tick_node(&mut n, at(1), &s()),
+            vec![LifecycleEvent::Recovered]
+        );
+        assert_eq!(n.state, NodeState::Healthy);
     }
 
     /// A node that reports, with the metrics latch not yet risen.

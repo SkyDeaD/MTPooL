@@ -1563,6 +1563,31 @@ fn split_report(pool: (u64, u64), other: (u64, u64), other_clients: u64) -> Valu
 }
 
 #[tokio::test]
+async fn report_says_when_a_pool_user_name_is_taken_on_the_node() {
+    let env = env(pool(vec![alpha()]));
+    let token = node_token(&env, "alpha-00001");
+    let taken = || async {
+        env.actor
+            .inspect(|s| s.nodes[&node_id("alpha-00001")].health.pool_user_taken)
+            .await
+            .unwrap()
+    };
+
+    let mut body = report_at(NOW, no_data());
+    body["error"] = json!("pool_user_taken");
+    let resp = report(&env, &token, body).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert!(taken().await);
+
+    // Only that word counts, and the next report without it ends it.
+    let mut body = report_at(NOW, no_data());
+    body["error"] = json!("user_telemetry_disabled");
+    let resp = report(&env, &token, body).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert!(!taken().await);
+}
+
+#[tokio::test]
 async fn report_keeps_the_owners_users_apart() {
     let env = env(pool(vec![alpha()]));
     let token = node_token(&env, "alpha-00001");

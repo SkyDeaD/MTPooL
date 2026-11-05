@@ -39,6 +39,11 @@ pub enum EngineError {
     /// The new configuration failed and the old one could not be brought back either.
     #[error("the new configuration failed ({reason}) and rolling back failed too: {cause}")]
     RollbackFailed { reason: String, cause: String },
+    /// The owner holds a user under a name of the pool, with another secret. Nothing was changed.
+    #[error(
+        "the owner's configuration already has the users {names:?} with other secrets: the pool's configuration is not applied. Rename them, or change the names in the pool's settings"
+    )]
+    PoolUserTaken { names: Vec<String> },
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
