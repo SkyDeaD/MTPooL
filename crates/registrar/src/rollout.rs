@@ -25,6 +25,8 @@ use crate::store::{AdminOp, Store, StoreError};
 const TICK: Duration = Duration::from_secs(1);
 /// How often the releases directory is looked at.
 const SCAN_EVERY: Duration = Duration::from_secs(10);
+/// The note of a rollout stopped because the registrar went back to a build older than its agent.
+const REGISTRAR_BEHIND: &str = "registrar_behind";
 
 #[derive(Default)]
 struct Inner {
@@ -35,6 +37,10 @@ struct Inner {
     /// The version each node reported on its last poll. Memory only: agents poll every 30
     /// seconds, so it fills again after a restart.
     versions: BTreeMap<NodeId, String>,
+    /// The newest agent this registrar hands out, once [`RolloutService::limit_to`] has set it.
+    limit: Option<Version>,
+    /// The release last refused for being above the limit, so that the log says it once.
+    held_back: Option<Version>,
 }
 
 /// The rollout in progress or the last one, and its saved copy.
@@ -64,11 +70,20 @@ fn load_all(store: &Store) -> Result<Vec<Rollout>, StoreError> {
     Ok(all)
 }
 
+/// The newest version with a rollout that counts. One stopped because the registrar was too old
+/// did not finish, and goes out again once a registrar of that version runs.
+fn newest_started(all: &[Rollout]) -> Option<Version> {
+    all.iter()
+        .filter(|r| r.note.as_ref().is_none_or(|n| n.code != REGISTRAR_BEHIND))
+        .filter_map(|r| Version::parse(&r.version))
+        .max()
+}
+
 impl RolloutService {
     /// Picks up where the registrar was before it stopped.
     pub fn load(store: Store, clock: Clock) -> Result<RolloutService, StoreError> {
         let all = load_all(&store)?;
-        let newest = all.iter().filter_map(|r| Version::parse(&r.version)).max();
+        let newest = newest_started(&all);
         let current = all.into_iter().next();
         Ok(RolloutService {
             inner: Arc::new(Mutex::new(Inner {
@@ -76,6 +91,8 @@ impl RolloutService {
                 newest,
                 dirty: false,
                 versions: BTreeMap::new(),
+                limit: None,
+                held_back: None,
             })),
             store,
             clock,
@@ -89,6 +106,40 @@ impl RolloutService {
             store,
             clock,
         }
+    }
+
+    /// Keeps the rollouts to agents that this registrar understands: none newer than `registrar`,
+    /// the version of the running build. The registrar and the agent are released together, so
+    /// an agent newer than the registrar may rely on what this build does not know.
+    ///
+    /// The manifest stays in the releases directory when the registrar is rolled back, and so
+    /// does the saved rollout. An open rollout of a newer agent is therefore stopped here. Called
+    /// once, before the first agent can poll.
+    pub fn limit_to(&self, registrar: Version, now: Ts) {
+        let mut inner = lock(&self.inner);
+        let stopped = inner
+            .current
+            .as_mut()
+            .filter(|r| Version::parse(&r.version).is_some_and(|v| v > registrar))
+            .filter(|r| r.is_open())
+            .map(|r| {
+                r.cancel(now);
+                r.note = Some(Reason {
+                    code: REGISTRAR_BEHIND.to_owned(),
+                    text: format!("регистратор вернулся на версию {registrar}, новый агент для него не раздаётся"),
+                });
+                r.clone()
+            });
+        if let Some(r) = stopped {
+            tracing::warn!(rollout = r.id, version = %r.version, %registrar, "the rollout is stopped: the agent is newer than this registrar");
+            self.save(&r);
+            inner.dirty = false;
+            // The stopped rollout no longer counts: see `newest_started`.
+            if let Ok(all) = load_all(&self.store) {
+                inner.newest = newest_started(&all);
+            }
+        }
+        inner.limit = Some(registrar);
     }
 
     /// A node polled with the version it runs. `true` when it is told to update.
@@ -172,14 +223,22 @@ impl RolloutService {
         Some(done)
     }
 
-    /// Starts a rollout of `version` when it is newer than every one before. An open rollout
-    /// of an older version is cancelled. `true` when one was started.
+    /// Starts a rollout of `version` when it is newer than every one before and this registrar
+    /// understands it. An open rollout of an older version is cancelled. `true` when one was
+    /// started.
     pub fn offer_release(&self, version: &str, now: Ts, timings: RolloutSettings) -> bool {
         let Some(parsed) = Version::parse(version) else {
             return false;
         };
         let mut inner = lock(&self.inner);
         if inner.newest.as_ref().is_some_and(|n| *n >= parsed) {
+            return false;
+        }
+        if inner.limit.as_ref().is_some_and(|limit| parsed > *limit) {
+            if inner.held_back.as_ref() != Some(&parsed) {
+                tracing::warn!(%version, "the release waits: its agent is newer than this registrar");
+                inner.held_back = Some(parsed);
+            }
             return false;
         }
         if let Some(old) = inner.current.as_mut()

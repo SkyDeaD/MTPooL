@@ -129,7 +129,8 @@ pub struct DomainRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct RolloutNote {
     /// `no_canary_candidate` (waiting), `node_not_back`, `health_drop`, `update_failed`,
-    /// `bad_signature` or `rolled_back` (paused), `superseded` (cancelled by a newer release).
+    /// `bad_signature` or `rolled_back` (paused), `superseded` (cancelled by a newer release),
+    /// `registrar_behind` (cancelled: the registrar went back to a build older than the agent).
     #[schema(example = "node_not_back")]
     pub code: String,
     pub text: String,

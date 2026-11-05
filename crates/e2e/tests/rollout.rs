@@ -108,6 +108,132 @@ fn number_of(node_id: &str, ids: &[String]) -> u32 {
     ids.iter().position(|i| i == node_id).expect("a known node") as u32 + 1
 }
 
+/// Runs the registrar build of `version`, as a rollback or an update leaves it: the binary replaced,
+/// the service restarted, the database and the releases directory as they were.
+async fn run_registrar_build(stand: &Stand, version: &str) {
+    let run = stand
+        .registrar_exec(&format!(
+            "set -e; cd /usr/local/bin; cp /opt/e2e/registrar-{version} mtpool-registrar.new; \
+             mv -f mtpool-registrar.new mtpool-registrar"
+        ))
+        .await
+        .expect("the build is put in place");
+    assert!(run.success, "{}", run.output);
+    stand
+        .restart_registrar()
+        .await
+        .expect("the registrar is back");
+    let run = stand
+        .registrar_exec("mtpool-registrar version")
+        .await
+        .expect("the registrar answers");
+    assert!(run.output.starts_with(version), "{}", run.output);
+}
+
+/// The stand's registrar is 0.9.0 (`e2e/images/registrar/Dockerfile`), and 0.9.1 is its next build.
+#[tokio::test]
+#[ignore = "needs Docker; run with --ignored"]
+async fn registrar_rollback_stops_the_rollout_of_its_agent() {
+    let stand = Stand::up().await.expect("the stand comes up");
+    let key = ensure_test_key().expect("the stand's key");
+    let mut ids = Vec::new();
+    for n in 1..=3 {
+        let (_, id) = enroll_healthy(&stand, n, &format!("node-{n}")).await;
+        ids.push(id);
+    }
+    // The observation outlasts the restart of the registrar: the rollback finds the canary
+    // observed and the other nodes untouched.
+    settings(
+        &stand,
+        json!({"rollout": {
+            "observe_sec": 45, "batch_interval_sec": 5, "batch_percent": 50,
+            "return_sec": 90, "offer_wait_sec": 60
+        }}),
+    )
+    .await;
+    let run = stand
+        .registrar_exec("cp /usr/local/bin/mtpool-registrar /opt/e2e/registrar-0.9.0")
+        .await
+        .expect("the old build is kept");
+    assert!(run.success, "{}", run.output);
+    let build = stand
+        .node(1)
+        .fetch_file("/opt/e2e/agent-0.9.1")
+        .await
+        .expect("the 0.9.1 build");
+
+    // The release lands before the registrar is replaced: its agent waits for the registrar.
+    put_release(&stand, "0.9.1", &build, &key).await;
+    tokio::time::sleep(secs(25)).await;
+    assert!(
+        rollouts(&stand).await.is_empty(),
+        "the old registrar started a rollout of a newer agent"
+    );
+
+    // The new registrar takes it out: the canary goes first.
+    run_registrar_build(&stand, "0.9.1").await;
+    let first = eventually("a rollout starts", secs(60), || async {
+        match rollouts(&stand).await.first() {
+            Some(r) => Ok(r.clone()),
+            None => Err("no rollout".to_owned()),
+        }
+    })
+    .await
+    .unwrap_or_else(|e| panic!("{e}"));
+    let id = first["id"].as_i64().expect("an id");
+    assert_eq!(first["version"], "0.9.1");
+    let observing = wait_phase(&stand, id, "observing", 90).await;
+    let canary = observing["canary"].as_str().expect("a canary").to_owned();
+    let c = number_of(&canary, &ids);
+    assert_eq!(
+        agent_version(&stand, c).await,
+        "0.9.1",
+        "the canary runs it"
+    );
+
+    // The rollback: the manifest and the open rollout stay, the old build must not go on.
+    run_registrar_build(&stand, "0.9.0").await;
+    let stopped = rollout(&stand, id).await;
+    assert_eq!(stopped["phase"], "cancelled", "{stopped}");
+    assert_eq!(stopped["note"]["code"], "registrar_behind", "{stopped}");
+    // Longer than the rest of the observation and two batches.
+    tokio::time::sleep(secs(60)).await;
+    assert_eq!(rollouts(&stand).await.len(), 1, "no new rollout started");
+    for n in (1..=3).filter(|n| *n != c) {
+        assert_eq!(
+            agent_version(&stand, n).await,
+            "0.0.0",
+            "node {n} untouched"
+        );
+    }
+    assert_eq!(
+        agent_version(&stand, c).await,
+        "0.9.1",
+        "the canary is not moved back"
+    );
+    stand
+        .wait_state(&canary, "healthy", secs(120))
+        .await
+        .expect("the old registrar works with the newer agent");
+
+    // The registrar reaches that version after all: the agent goes out to everyone.
+    run_registrar_build(&stand, "0.9.1").await;
+    let again = eventually("a second rollout starts", secs(60), || async {
+        rollouts(&stand)
+            .await
+            .into_iter()
+            .find(|r| r["id"] != id)
+            .ok_or_else(|| "not yet".to_owned())
+    })
+    .await
+    .unwrap_or_else(|e| panic!("{e}"));
+    let second = again["id"].as_i64().expect("an id");
+    wait_phase(&stand, second, "done", 240).await;
+    for n in 1..=3 {
+        assert_eq!(agent_version(&stand, n).await, "0.9.1");
+    }
+}
+
 #[tokio::test]
 #[ignore = "needs Docker; run with --ignored"]
 async fn release_rolls_through_canary_and_batches_and_stops_on_failure() {

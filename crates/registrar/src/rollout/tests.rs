@@ -106,3 +106,98 @@ fn the_version_stays_after_the_rollout_is_over() {
     assert_eq!(svc.cancel(1, T0), Some(true));
     assert_eq!(svc.agent_versions()[&id(1)], "1.9.0");
 }
+
+fn v(text: &str) -> Version {
+    Version::parse(text).unwrap()
+}
+
+#[test]
+fn a_release_newer_than_the_registrar_starts_no_rollout() {
+    let (_d, _s, svc) = service();
+    svc.limit_to(v("0.2.0"), T0);
+    assert!(!svc.offer_release("0.3.0", T0, RolloutSettings::default()));
+    assert!(svc.list().unwrap().is_empty());
+    assert_eq!(svc.offered_version(), None);
+    // The refused release leaves no mark: the release the registrar does understand still goes.
+    assert!(svc.offer_release("0.2.0", T0, RolloutSettings::default()));
+    assert_eq!(svc.offered_version().as_deref(), Some("0.2.0"));
+}
+
+#[test]
+fn a_registrar_rolled_back_stops_the_rollout_of_the_agent_it_may_not_understand() {
+    let (_d, store, svc) = service();
+    // The new registrar starts the rollout of its own agent and saves it.
+    svc.limit_to(v("0.3.0"), T0);
+    assert!(svc.offer_release("0.3.0", T0, RolloutSettings::default()));
+    svc.poll(&id(1), "0.2.0", T0);
+    svc.flush();
+
+    // The rollback: the old build reads the same database, the manifest is still in the directory.
+    let old = RolloutService::load(store.clone(), clock()).unwrap();
+    assert_eq!(old.offered_version().as_deref(), Some("0.3.0"));
+    old.limit_to(v("0.2.0"), T0);
+    assert_eq!(old.offered_version(), None);
+    assert!(!old.poll(&id(1), "0.2.0", T0));
+    assert!(!old.offer_release("0.3.0", T0, RolloutSettings::default()));
+    let stopped = old.get(1).unwrap().unwrap();
+    assert!(matches!(stopped.phase, Phase::Cancelled { .. }));
+    assert_eq!(stopped.note.as_ref().unwrap().code, "registrar_behind");
+
+    // The stop is saved: the old build restarted does not take the rollout up again.
+    let again = RolloutService::load(store.clone(), clock()).unwrap();
+    again.limit_to(v("0.2.0"), T0);
+    assert_eq!(again.offered_version(), None);
+    assert!(matches!(
+        again.get(1).unwrap().unwrap().phase,
+        Phase::Cancelled { .. }
+    ));
+
+    // The registrar gets to that version after all: its agent goes out in a rollout of its own.
+    let back = RolloutService::load(store, clock()).unwrap();
+    back.limit_to(v("0.3.0"), T0);
+    assert!(back.offer_release("0.3.0", T0, RolloutSettings::default()));
+    assert_eq!(back.list().unwrap()[0].id, 2);
+    assert_eq!(back.offered_version().as_deref(), Some("0.3.0"));
+}
+
+#[test]
+fn a_rollback_keeps_the_memory_of_the_versions_already_rolled_out() {
+    let (_d, store, svc) = service();
+    svc.offer_release("0.2.0", T0, RolloutSettings::default());
+    svc.offer_release("0.3.0", T0, RolloutSettings::default());
+    svc.flush();
+    let old = RolloutService::load(store, clock()).unwrap();
+    old.limit_to(v("0.2.0"), T0);
+    assert_eq!(
+        old.get(2).unwrap().unwrap().note.unwrap().code,
+        "registrar_behind"
+    );
+    // Still the same process: 0.2.0 has had its rollout and does not get a second one.
+    assert!(!old.offer_release("0.2.0", T0, RolloutSettings::default()));
+}
+
+#[test]
+fn a_rollout_the_registrar_understands_goes_on_after_a_restart() {
+    let (_d, store, svc) = service();
+    svc.offer_release("0.2.0", T0, RolloutSettings::default());
+    svc.flush();
+    let before = svc.get(1).unwrap().unwrap();
+    let again = RolloutService::load(store, clock()).unwrap();
+    again.limit_to(v("0.2.0"), T0);
+    assert_eq!(again.get(1).unwrap().unwrap(), before);
+    assert_eq!(again.offered_version().as_deref(), Some("0.2.0"));
+    // The version it has rolled out is not started a second time.
+    assert!(!again.offer_release("0.2.0", T0, RolloutSettings::default()));
+}
+
+#[test]
+fn a_finished_rollout_is_left_as_it_ended_after_a_rollback() {
+    let (_d, store, svc) = service();
+    svc.offer_release("0.3.0", T0, RolloutSettings::default());
+    assert_eq!(svc.cancel(1, T0), Some(true));
+    svc.flush();
+    let before = svc.get(1).unwrap().unwrap();
+    let old = RolloutService::load(store, clock()).unwrap();
+    old.limit_to(v("0.2.0"), T0);
+    assert_eq!(old.get(1).unwrap().unwrap(), before);
+}

@@ -13,11 +13,19 @@ COPY e2e/keys/minisign.pub ./deploy/minisign.pub
 # The target directory is a cache shared by every build of this image, and cargo goes by the
 # file's time: a key older than the last build would leave that build's key in the binary.
 RUN touch deploy/minisign.pub
+# A registrar hands out no agent newer than itself, so the stand's registrar is stamped above what
+# the scenarios release: the unstamped 0.0.0 would hand out none. The second build is the same code
+# one version on, for the scenario that rolls the registrar back. Cargo.lock follows the version,
+# hence no --locked here.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/target,sharing=locked \
-    cargo build --release --locked -p mtpool-registrar -p mtpool-fakes \
+    sed -i 's/^version = "0.0.0"/version = "0.9.0"/' Cargo.toml \
+ && cargo build --release -p mtpool-registrar -p mtpool-fakes \
  && install -D target/release/mtpool-registrar /out/mtpool-registrar \
- && install -D target/release/mtpool-fakes /out/mtpool-fakes
+ && install -D target/release/mtpool-fakes /out/mtpool-fakes \
+ && sed -i 's/^version = "0.9.0"/version = "0.9.1"/' Cargo.toml \
+ && cargo build --release -p mtpool-registrar \
+ && install -D target/release/mtpool-registrar /out/registrar-0.9.1
 
 # A machine the registrar installer has never seen: Ubuntu 24.04 with systemd, curl and the
 # deploy directory the installer reads its units from. It has no registrar, no Caddy, no minisign.
@@ -46,5 +54,6 @@ ENTRYPOINT ["mtpool-loadgen"]
 
 FROM alpine:3.21
 COPY --from=build /out/mtpool-registrar /out/mtpool-fakes /usr/local/bin/
+COPY --from=build /out/registrar-0.9.1 /opt/e2e/registrar-0.9.1
 RUN mkdir -p /var/lib/mtpool /srv/releases
 CMD ["mtpool-registrar", "serve"]

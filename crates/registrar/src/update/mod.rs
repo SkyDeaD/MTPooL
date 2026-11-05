@@ -354,7 +354,7 @@ fn paths_from_env() -> Paths {
     }
 }
 
-fn compiled_version() -> Version {
+pub(crate) fn compiled_version() -> Version {
     Version::parse(env!("CARGO_PKG_VERSION")).expect("the crate version is a version")
 }
 
