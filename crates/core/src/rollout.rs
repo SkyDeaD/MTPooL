@@ -776,6 +776,15 @@ mod tests {
         assert!(r.canary.is_some());
     }
 
+    /// A registrar without nodes yet publishes the release of its own version.
+    #[test]
+    fn a_rollout_without_nodes_ends_at_once() {
+        let mut r = Rollout::new(1, "0.2.0", T0, RolloutSettings::default());
+        r.advance(&[], &masters(&[]), at(1));
+        assert_eq!(r.phase, Phase::Done { at: at(1) });
+        assert_eq!(r.note, None);
+    }
+
     #[test]
     fn nodes_on_the_new_version_are_left_alone_and_the_rollout_ends() {
         let nodes = fleet(3);

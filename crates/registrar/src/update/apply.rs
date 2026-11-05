@@ -581,6 +581,21 @@ mod tests {
         assert_eq!(host.restarts.load(Ordering::SeqCst), 0);
     }
 
+    /// The worker publishes the release of the running version for new nodes to install from; its
+    /// manifest wakes this helper, which has nothing to do.
+    #[tokio::test]
+    async fn the_release_of_the_running_version_is_not_applied() {
+        let rig = rig();
+        rig.publish("1.0.0", b"another build");
+        let host = FakeHost::ready(&rig.key_id);
+        assert_eq!(
+            apply_self_update(&rig.cfg, &host).await,
+            Ok(Applied::NothingToDo)
+        );
+        assert_eq!(rig.bin(), b"old build");
+        assert_eq!(host.restarts.load(Ordering::SeqCst), 0);
+    }
+
     #[tokio::test]
     async fn older_release_is_not_applied() {
         let rig = rig();
