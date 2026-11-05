@@ -70,6 +70,8 @@ pub fn lock_for_migration(db: &Path) -> Result<File, BackupError> {
 pub fn keep_before_migration(db: &Path, version: i64) -> Result<(), BackupError> {
     let copy = before_migration(db, version);
     backup(db, &copy)?;
+    // A command run as root may be the one migrating; the registrar must be able to read the copy.
+    own_like_directory(db, [copy.clone(), beside(&copy, ".sha256")])?;
     let Some(dir) = db.parent().filter(|d| !d.as_os_str().is_empty()) else {
         return Ok(());
     };
@@ -300,12 +302,20 @@ fn put_in_place(db: &Path, from: &Path) -> Result<(), BackupError> {
 /// open them. It changes nothing when the owner already matches, and when the caller may not
 /// change owners (anyone but root).
 pub fn match_directory_owner(db: &Path) -> Result<(), BackupError> {
+    own_like_directory(db, [db.to_path_buf(), lock_path(db)])
+}
+
+/// Gives `files`, which live beside the database at `db`, the owner of their directory.
+fn own_like_directory(
+    db: &Path,
+    files: impl IntoIterator<Item = PathBuf>,
+) -> Result<(), BackupError> {
     use std::os::unix::fs::{MetadataExt, chown};
 
     let dir = db.parent().filter(|p| !p.as_os_str().is_empty());
     let dir = dir.unwrap_or_else(|| Path::new("."));
     let wanted = fs::metadata(dir).map_err(io_error(format!("cannot read {}", dir.display())))?;
-    for file in [db.to_path_buf(), lock_path(db)] {
+    for file in files {
         let meta = match fs::metadata(&file) {
             Ok(meta) => meta,
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,

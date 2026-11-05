@@ -908,7 +908,7 @@ export interface components {
             agent_version?: string | null;
             /**
              * @description The conditions that do not hold now: `tcp`, `metrics`, `globalping`, `port`,
-             *     `heartbeat_stale`, `report_stale`, `pool_user_taken`.
+             *     `heartbeat_stale`, `report_stale`.
              */
             failed: string[];
             /**
@@ -1561,8 +1561,7 @@ export interface components {
             port: number;
             /**
              * @description Why the node entered quarantine: `tcp`, `metrics`, `globalping`, `port`, `heartbeat_stale`,
-             *     `report_stale` (no confirmed measurement for too long), `pool_user_taken` (the owner holds a
-             *     user under a name of the pool, with another secret). Absent in other states.
+             *     `report_stale` (no confirmed measurement for too long). Absent in other states.
              */
             quarantine_reasons?: string[];
             /**
@@ -1603,10 +1602,7 @@ export interface components {
              */
             checked_at: string;
             dc2?: components["schemas"]["Dc2Report"] | null;
-            /**
-             * @description What went wrong on the node, if something did. `pool_user_taken`: the owner holds a user
-             *     under a name of the pool, with another secret, so the pool's configuration is not applied.
-             */
+            /** @description What went wrong on the node, if something did. */
             error?: string | null;
             gp: components["schemas"]["GpReport"];
             host?: components["schemas"]["HostReport"] | null;

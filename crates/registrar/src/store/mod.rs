@@ -451,9 +451,10 @@ fn check_integrity(path: &Path, conn: &Connection) -> Result<(), StoreError> {
 }
 
 /// How long after a migration the build before it may still take the database back. A rollback
-/// happens within minutes of an update. A copy older than this is not what anyone who starts an
-/// old build later expects to get: they restore by hand.
-const UNDO_WINDOW: Duration = Duration::from_secs(60 * 60);
+/// happens within a minute or two of an update: after the watch of the new build nothing rolls it
+/// back. Whoever starts an old build later would lose everything written since, so they restore
+/// by hand.
+const UNDO_WINDOW: Duration = Duration::from_secs(10 * 60);
 
 /// Goes back to the database this build knows when a newer build migrated it moments ago and was
 /// rolled back: the copy kept before the migration replaces the migrated database. `true` when it
