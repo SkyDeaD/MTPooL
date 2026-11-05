@@ -4,6 +4,11 @@
 //! written over its markers, so that one command (`curl ... | sh`) needs nothing else from the
 //! operator. `GET /releases/{name}` serves what the installer fetches: the signed manifest and
 //! the agent binaries, from the releases directory.
+//!
+//! The directory holds one release, and a new one replaces the files of the last. Its manifest
+//! stays there when the registrar is rolled back and lands there before the registrar is replaced,
+//! so it may be newer than the running build. Then the manifest is refused: a new node would get
+//! an agent newer than its registrar, and there is no older build to give it instead.
 
 use std::path::{Path as FsPath, PathBuf};
 
@@ -16,7 +21,9 @@ use mtpool_protocol::problem::Problem;
 use std::net::SocketAddr;
 
 use crate::api::ApiError;
+use crate::rollout::{REGISTRAR_BEHIND, signed_agent_version};
 use crate::server::AppState;
+use crate::update::{MANIFEST_NAME, SIGNATURE_NAME, compiled_version};
 
 /// The public key releases are verified with, as built in (empty in a debug build made
 /// without the key file).
@@ -206,6 +213,25 @@ fn read_release(dir: &FsPath, name: &str) -> Option<Vec<u8>> {
     std::fs::read(path).ok()
 }
 
+/// The refusal of `manifest`, the manifest in `dir`, when its agent is newer than this registrar.
+/// A manifest that does not verify is left to the one who downloads it: the installer and the
+/// agent check the signature themselves and say what is wrong.
+fn too_new(dir: &FsPath, manifest: &[u8], key: &str) -> Option<ApiError> {
+    let signature = read_release(dir, SIGNATURE_NAME)?;
+    let agent = signed_agent_version(key, manifest, signature)?;
+    let registrar = compiled_version();
+    (agent > registrar).then(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            REGISTRAR_BEHIND,
+            "The release is newer than the registrar",
+            &format!(
+                "This registrar runs {registrar} and the release is {agent}. There is no older agent build to hand out; try again when the registrar has reached that version."
+            ),
+        )
+    })
+}
+
 #[utoipa::path(
     get,
     path = "/releases/{name}",
@@ -215,6 +241,7 @@ fn read_release(dir: &FsPath, name: &str) -> Option<Vec<u8>> {
         (status = 200, description = "The release file", content_type = "application/octet-stream", body = Vec<u8>,
             headers(("Cache-Control" = String, description = "Always `no-cache`: a new release replaces the file under the same name"))),
         (status = 404, description = "No such release file", body = Problem, content_type = "application/problem+json"),
+        (status = 409, description = "`manifest.json` only, code `registrar_behind`: the signed release has an agent newer than this registrar, and the directory holds no older build", body = Problem, content_type = "application/problem+json"),
         (status = 429, description = "Too many requests", body = Problem, content_type = "application/problem+json",
             headers(("Retry-After" = u64, description = "Seconds until the limit window ends"))),
     )
@@ -232,10 +259,20 @@ pub async fn release_file(
     }
     let dir = app.releases_dir.clone();
     let wanted = name.clone();
-    let bytes = tokio::task::spawn_blocking(move || read_release(&dir, &wanted))
-        .await
-        .map_err(|_| ApiError::internal())?
-        .ok_or_else(unknown)?;
+    let key = app.minisign_pub;
+    let bytes = tokio::task::spawn_blocking(move || {
+        let bytes = read_release(&dir, &wanted)?;
+        let refusal = (wanted == MANIFEST_NAME)
+            .then(|| too_new(&dir, &bytes, key))
+            .flatten();
+        Some(match refusal {
+            Some(refusal) => Err(refusal),
+            None => Ok(bytes),
+        })
+    })
+    .await
+    .map_err(|_| ApiError::internal())?
+    .ok_or_else(unknown)??;
     let mut response = Response::new(Body::from(bytes));
     let headers = response.headers_mut();
     headers.insert(

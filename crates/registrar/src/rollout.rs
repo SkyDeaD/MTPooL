@@ -25,8 +25,9 @@ use crate::store::{AdminOp, Store, StoreError};
 const TICK: Duration = Duration::from_secs(1);
 /// How often the releases directory is looked at.
 const SCAN_EVERY: Duration = Duration::from_secs(10);
-/// The note of a rollout stopped because the registrar went back to a build older than its agent.
-const REGISTRAR_BEHIND: &str = "registrar_behind";
+/// The note of a rollout stopped because the registrar went back to a build older than its agent,
+/// and the code of the installer's refusal for the same reason.
+pub(crate) const REGISTRAR_BEHIND: &str = "registrar_behind";
 
 #[derive(Default)]
 struct Inner {
@@ -330,13 +331,23 @@ impl RolloutService {
 pub fn release_agent_version(dir: &Path, key: &str) -> Option<String> {
     let manifest = read_release_file(dir, MANIFEST_NAME, MAX_MANIFEST_BYTES as u64).ok()?;
     let signature = read_release_file(dir, SIGNATURE_NAME, 16 * 1024).ok()?;
+    signed_agent_version(key, &manifest, signature).map(|version| version.to_string())
+}
+
+/// The version of the agent in `manifest`, when `signature` is good for it under `key` and it
+/// lists an agent build.
+pub(crate) fn signed_agent_version(
+    key: &str,
+    manifest: &[u8],
+    signature: Vec<u8>,
+) -> Option<Version> {
     let signature = String::from_utf8(signature).ok()?;
-    let manifest = verify_manifest_with(key, &manifest, &signature).ok()?;
+    let manifest = verify_manifest_with(key, manifest, &signature).ok()?;
     manifest
         .artifacts
         .iter()
         .any(|a| a.component == AGENT_COMPONENT)
-        .then(|| manifest.version.to_string())
+        .then_some(manifest.version)
 }
 
 /// The worker: looks for a new release and drives the rollout.

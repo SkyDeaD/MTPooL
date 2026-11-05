@@ -4901,6 +4901,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            /** @description `manifest.json` only, code `registrar_behind`: the signed release has an agent newer than this registrar, and the directory holds no older build */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             /** @description Too many requests */
             429: {
                 headers: {

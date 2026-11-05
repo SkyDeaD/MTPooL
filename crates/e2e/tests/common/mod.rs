@@ -92,3 +92,25 @@ pub fn vote_of(votes: &[(String, String)], sensor: &str) -> Option<String> {
         .find(|(s, _)| s == sensor)
         .map(|(_, v)| v.clone())
 }
+
+/// Runs the registrar build of `version`, as a rollback or an update leaves it: the binary replaced,
+/// the service restarted, the database and the releases directory as they were.
+pub async fn run_registrar_build(stand: &Stand, version: &str) {
+    let run = stand
+        .registrar_exec(&format!(
+            "set -e; cd /usr/local/bin; cp /opt/e2e/registrar-{version} mtpool-registrar.new; \
+             mv -f mtpool-registrar.new mtpool-registrar"
+        ))
+        .await
+        .expect("the build is put in place");
+    assert!(run.success, "{}", run.output);
+    stand
+        .restart_registrar()
+        .await
+        .expect("the registrar is back");
+    let run = stand
+        .registrar_exec("mtpool-registrar version")
+        .await
+        .expect("the registrar answers");
+    assert!(run.output.starts_with(version), "{}", run.output);
+}

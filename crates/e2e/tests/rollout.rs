@@ -6,7 +6,7 @@ mod common;
 
 use std::path::Path;
 
-use common::{enroll_healthy, secs, settings};
+use common::{enroll_healthy, run_registrar_build, secs, settings};
 use mtpool_e2e::{ReleaseSpec, Stand, TestKey, ensure_test_key, eventually};
 use serde_json::{Value, json};
 
@@ -106,28 +106,6 @@ async fn pid_of(stand: &Stand, n: u32, unit: &str) -> String {
 
 fn number_of(node_id: &str, ids: &[String]) -> u32 {
     ids.iter().position(|i| i == node_id).expect("a known node") as u32 + 1
-}
-
-/// Runs the registrar build of `version`, as a rollback or an update leaves it: the binary replaced,
-/// the service restarted, the database and the releases directory as they were.
-async fn run_registrar_build(stand: &Stand, version: &str) {
-    let run = stand
-        .registrar_exec(&format!(
-            "set -e; cd /usr/local/bin; cp /opt/e2e/registrar-{version} mtpool-registrar.new; \
-             mv -f mtpool-registrar.new mtpool-registrar"
-        ))
-        .await
-        .expect("the build is put in place");
-    assert!(run.success, "{}", run.output);
-    stand
-        .restart_registrar()
-        .await
-        .expect("the registrar is back");
-    let run = stand
-        .registrar_exec("mtpool-registrar version")
-        .await
-        .expect("the registrar answers");
-    assert!(run.output.starts_with(version), "{}", run.output);
 }
 
 /// The stand's registrar is 0.9.0 (`e2e/images/registrar/Dockerfile`), and 0.9.1 is its next build.
