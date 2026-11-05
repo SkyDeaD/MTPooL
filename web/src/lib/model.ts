@@ -12,24 +12,28 @@ export const ENGINE_NAMES: Record<Engine, string> = {
 export interface NodeGroups {
   masters: PublicNode[];
   queue: PublicNode[];
+  /** In quarantine and suspected of a block: the sensors check the address. */
   quarantine: PublicNode[];
+  /** In quarantine for a port, metrics or a stale report: only out of the queue. */
+  outside: PublicNode[];
 }
 
 /**
- * The nodes the pool shows, in three groups. Nodes that are pending, dead or pruned are neither
+ * The nodes the pool shows, in four groups. Nodes that are pending, dead or pruned are neither
  * shown nor counted; banned nodes do not come in this list at all.
  */
 export function groupNodes(nodes: readonly PublicNode[]): NodeGroups {
   const masters: PublicNode[] = [];
   const queue: PublicNode[] = [];
   const quarantine: PublicNode[] = [];
+  const outside: PublicNode[] = [];
   for (const node of nodes) {
-    if (node.state === 'quarantine') quarantine.push(node);
+    if (node.state === 'quarantine') (node.suspected ? quarantine : outside).push(node);
     else if (node.state === 'healthy') (node.is_master ? masters : queue).push(node);
   }
   const place = (n: PublicNode) => n.queue_position ?? Number.MAX_SAFE_INTEGER;
   queue.sort((a, b) => place(a) - place(b));
-  return { masters, queue, quarantine };
+  return { masters, queue, quarantine, outside };
 }
 
 export interface PoolCounts {
@@ -43,7 +47,7 @@ export interface PoolCounts {
 
 export function poolCounts(nodes: readonly PublicNode[]): PoolCounts {
   const g = groupNodes(nodes);
-  const all = [...g.masters, ...g.queue, ...g.quarantine];
+  const all = [...g.masters, ...g.queue, ...g.quarantine, ...g.outside];
   const known = all.map((n) => n.availability_bp).filter((v): v is number => typeof v === 'number');
   return {
     shown: all.length,

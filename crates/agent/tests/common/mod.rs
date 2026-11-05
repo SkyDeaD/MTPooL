@@ -150,6 +150,7 @@ pub fn agent_config(heartbeat_sec: u32, sync_sec: u32) -> AgentConfig {
         },
         antiscan: true,
         report_other_users: true,
+        measure_now: false,
     }
 }
 

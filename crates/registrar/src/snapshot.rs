@@ -153,6 +153,7 @@ impl<'a> View<'a> {
                     _ => None,
                 })
                 .collect(),
+            suspected: n.state == mtpool_core::NodeState::Quarantine && n.suspected,
             queue_position: self.queue.get(&n.id).copied(),
             master_since: self.since_of.get(n.id.as_str()).map(|at| rfc3339(*at)),
             rotates_at,
@@ -460,15 +461,23 @@ mod tests {
     }
 
     #[test]
-    fn a_quarantined_node_shows_when_its_next_round_is_due() {
+    fn a_suspected_node_shows_when_its_next_round_is_due() {
         let mut n = node("alpha-00001", T0);
         n.state = NodeState::Quarantine;
+        n.suspected = true;
         n.state_since = Ts(T0 + 3_000);
-        let state = pool(settings(0), vec![n]);
+        let mut out = node("beta-00002", T0);
+        out.state = NodeState::Quarantine;
+        out.state_since = Ts(T0 + 3_000);
+        let state = pool(settings(0), vec![n, out]);
         let snapshot = Snapshot::build(&state);
         assert_eq!(
             snapshot.node_docs["alpha-00001"].next_round_at,
             Some(rfc3339(T0 + 3_000))
+        );
+        assert_eq!(
+            snapshot.node_docs["beta-00002"].next_round_at, None,
+            "a node only out of the queue runs no rounds"
         );
     }
 

@@ -143,7 +143,7 @@ pub fn failed_conditions(h: &NodeHealth, now: Ts, s: &Settings) -> Vec<FailedCon
     if !younger_than(h.last_heartbeat, now, s.heartbeat_ttl_sec) {
         failed.push(FailedCondition::HeartbeatStale);
     }
-    if !younger_than(h.last_report, now, s.report_max_age_sec) {
+    if !younger_than(h.last_report, now, s.report_fresh_sec()) {
         failed.push(FailedCondition::ReportStale);
     }
     failed
@@ -291,6 +291,42 @@ mod tests {
             ..healthy()
         };
         assert!(failed_conditions(&h, NOW, &Settings::default()).is_empty());
+    }
+
+    #[test]
+    fn a_report_is_fresh_for_three_intervals_of_measurement() {
+        let s = Settings {
+            globalping_interval_sec: 600,
+            report_max_age_sec: 900,
+            ..Settings::default()
+        };
+        assert_eq!(s.report_fresh_sec(), 1800);
+        let h = NodeHealth {
+            last_report: ago(1799),
+            ..healthy()
+        };
+        assert!(
+            failed_conditions(&h, NOW, &s).is_empty(),
+            "one missed measurement"
+        );
+        let h = NodeHealth {
+            last_report: ago(1800),
+            ..healthy()
+        };
+        assert_eq!(
+            failed_conditions(&h, NOW, &s),
+            vec![FailedCondition::ReportStale]
+        );
+    }
+
+    #[test]
+    fn a_longer_report_age_of_the_settings_stands() {
+        let s = Settings {
+            globalping_interval_sec: 60,
+            report_max_age_sec: 900,
+            ..Settings::default()
+        };
+        assert_eq!(s.report_fresh_sec(), 900);
     }
 
     #[test]

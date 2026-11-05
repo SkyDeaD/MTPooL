@@ -2,6 +2,7 @@
 //! own checks live here too: [`NodeChecks`] is the [`ReportSource`] of the lifecycle.
 
 use std::net::Ipv4Addr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -110,7 +111,11 @@ pub fn build_report(inputs: ReportInputs) -> ReportRequest {
 /// What the config last said, for the checks: the domain the proxy pretends to be, how often to
 /// ask Globalping and whether the registrar takes the `other_*` fields of a report.
 #[derive(Debug, Clone, Default)]
-pub struct ConfigMemory(Arc<Mutex<Option<(String, u32, bool)>>>);
+pub struct ConfigMemory {
+    slot: Arc<Mutex<Option<(String, u32, bool)>>>,
+    /// The registrar asked for a measurement out of turn and the loop has not been told yet.
+    measure_now: Arc<AtomicBool>,
+}
 
 impl ConfigMemory {
     pub fn new() -> ConfigMemory {
@@ -118,7 +123,7 @@ impl ConfigMemory {
     }
 
     fn slot(&self) -> MutexGuard<'_, Option<(String, u32, bool)>> {
-        self.0
+        self.slot
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -129,6 +134,14 @@ impl ConfigMemory {
             config.intervals.globalping_sec,
             config.report_other_users,
         ));
+        if config.measure_now {
+            self.measure_now.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Whether the registrar asked for a measurement out of turn since the last call.
+    pub fn take_measure_now(&self) -> bool {
+        self.measure_now.swap(false, Ordering::Relaxed)
     }
 
     pub fn get(&self) -> Option<(String, u32)> {
@@ -289,6 +302,9 @@ impl<H: HttpGet + 'static> ReportSource for NodeChecks<H> {
         };
 
         self.update_gp_job(ip, port);
+        if self.shared.memory.take_measure_now() {
+            self.shared.gp.measure_soon(now);
+        }
 
         Watch {
             ip_changed: matches!(event, IpEvent::Changed { .. }),

@@ -4193,6 +4193,10 @@
           "intervals": {
             "$ref": "#/components/schemas/Intervals"
           },
+          "measure_now": {
+            "type": "boolean",
+            "description": "The registrar asks for a Globalping measurement out of turn: the planned one is late, or\nthe node is suspected of a block. The agent keeps its own limits: no sooner than 5 minutes\nafter the last measurement began, nor within an interval after a 429."
+          },
           "port": {
             "type": "integer",
             "format": "int32",
@@ -4940,7 +4944,7 @@
               "string",
               "null"
             ],
-            "description": "Why the sensor abstained: `not_configured`, `key_rejected`, `unavailable`, `rate_limited`,\n`timeout`, `unknown_answer` or `no_data`. Only for `abstain`."
+            "description": "Why the sensor abstained: `not_configured`, `key_rejected`, `unavailable`, `rate_limited`,\n`timeout`, `unknown_answer`, `no_data` or `port_refused` (most probes were refused the\nconnection: the port is closed). Only for `abstain`."
           },
           "sensor": {
             "type": "string",
@@ -5650,7 +5654,7 @@
               "string",
               "null"
             ],
-            "description": "When the next sensor round of the node is due (RFC 3339, UTC)."
+            "description": "When the next sensor round of the node is due (RFC 3339, UTC). Only for a node the\nsensors check: suspected of a block in quarantine, or a node on reverify."
           },
           "other_clients": {
             "type": [
@@ -5708,6 +5712,10 @@
           "state_since": {
             "type": "string",
             "description": "When the node entered its current state. RFC 3339, UTC."
+          },
+          "suspected": {
+            "type": "boolean",
+            "description": "In quarantine and suspected of a block: the sensors check the address. A node in\nquarantine without it is only out of the queue (a port, metrics, a stale report). Absent\nin other states."
           }
         }
       },

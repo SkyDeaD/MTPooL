@@ -50,7 +50,7 @@
       <div class="ph" style="margin:0">
         <h1>{id}</h1>
         {#if node.data}
-          <StateCell state={node.data.state} />
+          <StateCell state={node.data.state} suspected={node.data.suspected} />
           {#if node.data.is_master}<MasterTag domain={node.data.domains[0] ? shortDomain(node.data.domains[0]) : undefined} />{/if}
           <span class="sub"><span class="mono">{node.data.ip}:{node.data.port}</span>, {t('node.engine', { name: ENGINE_NAMES[node.data.engine] ?? node.data.engine })}</span>
         {/if}
@@ -87,7 +87,7 @@
           </section>
         </div>
 
-        {#if n.state === 'quarantine'}<QuarantineNote reasons={n.quarantine_reasons ?? []} />{/if}
+        {#if n.state === 'quarantine'}<QuarantineNote reasons={n.quarantine_reasons ?? []} suspected={n.suspected} />{/if}
 
         {#if n.last_round}
           <section class="t">

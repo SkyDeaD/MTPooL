@@ -13,6 +13,10 @@
 //!   masked domain, only finish the handshake.
 //! - `finished_no_tls.json`: port 81, where nothing listens. Every probe has status `failed`
 //!   and `"tls": null` after a TCP connect timeout.
+//! - `failed_refused.json`: a node whose proxy was down, recorded in production and made
+//!   anonymous (the address of the node, its domain and the id are replaced). Every probe has
+//!   status `failed`, `"tls": null` and `rawOutput` `connect ECONNREFUSED <ip>:443`: the port
+//!   answered with a refusal, which a closed port does and a block by address does not need to.
 //! - `in_progress.json`: one polling answer before the end (port 81 as the file above): status
 //!   `in-progress`, every probe `in-progress`, no `tls` key.
 //! - `not_found.json`: the answer to an unknown measurement id (404).
@@ -41,6 +45,7 @@ const TLS_403: &str = include_str!("../../../tests/fixtures/globalping/finished_
 const INVALID_CERT: &str =
     include_str!("../../../tests/fixtures/globalping/finished_invalid_cert.json");
 const NO_TLS: &str = include_str!("../../../tests/fixtures/globalping/finished_no_tls.json");
+const REFUSED: &str = include_str!("../../../tests/fixtures/globalping/failed_refused.json");
 const IN_PROGRESS: &str = include_str!("../../../tests/fixtures/globalping/in_progress.json");
 const NOT_FOUND: &str = include_str!("../../../tests/fixtures/globalping/not_found.json");
 const CREATE: &str = include_str!("../../../tests/fixtures/globalping/create.json");
@@ -934,4 +939,46 @@ fn the_target_does_not_show_the_secret() {
     let shown = format!("{:?}", target());
     assert!(!shown.contains("ee0011"));
     assert!(shown.contains("104.16.132.229"));
+}
+
+/// The recording of a closed port, served under the id the tests ask for.
+fn refused(change: impl FnOnce(&mut Vec<Value>)) -> Value {
+    let mut document = changed(REFUSED, change);
+    document["id"] = json!(ID);
+    document
+}
+
+#[tokio::test]
+async fn refused_connections_are_a_closed_port_not_a_block() {
+    let server = MockServer::start().await;
+    let document = refused(|_| {});
+    serve_measurement(&server, ID, 200, &document).await;
+
+    let vote = verified(&server, &expect_for(&document, 443, 5_000))
+        .await
+        .expect("a measurement made against this node");
+
+    assert_eq!(abstained(&vote), AbstainReason::PortRefused);
+    assert_eq!(vote.evidence["reason"], "port_refused");
+    assert_eq!(vote.evidence["probes_with_result"], 20);
+    assert_eq!(vote.evidence["probes_refused"], 20);
+}
+
+#[tokio::test]
+async fn a_few_refusals_do_not_hide_a_block() {
+    // 10 of 20 refused: not more than half. The other failures still count against the node.
+    let server = MockServer::start().await;
+    let document = refused(|results| {
+        for probe in results.iter_mut().take(10) {
+            probe["result"] = failed_probe();
+        }
+    });
+    serve_measurement(&server, ID, 200, &document).await;
+
+    let vote = verified(&server, &expect_for(&document, 443, 5_000))
+        .await
+        .expect("accepted");
+
+    assert_eq!(vote.vote, Vote::Blocked);
+    assert_eq!(vote.evidence["probes_refused"], 10);
 }

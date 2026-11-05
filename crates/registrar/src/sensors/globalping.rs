@@ -171,6 +171,9 @@ pub struct ProbeOutcome {
     pub status: String,
     /// Present (an object) when the handshake finished; `null` or absent otherwise.
     pub tls: Option<Value>,
+    /// What the probe saw, as text: `connect ECONNREFUSED <ip>:<port>` for a refused connection.
+    #[serde(rename = "rawOutput")]
+    pub raw_output: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -184,6 +187,16 @@ impl ProbeResult {
     /// The probe ran to an end, well or badly. A probe still running or offline has no result.
     fn has_result(&self) -> bool {
         matches!(self.result.status.as_str(), "finished" | "failed")
+    }
+
+    /// The connection was refused: a closed port answers so, a block by address need not.
+    fn is_refused(&self) -> bool {
+        self.result.status == "failed"
+            && self
+                .result
+                .raw_output
+                .as_deref()
+                .is_some_and(|text| text.contains("ECONNREFUSED"))
     }
 
     /// Spec section 5: finished, and the TLS handshake is there. The HTTP code and the validity
@@ -457,11 +470,17 @@ fn tally(id: &str, measurement: &Measurement, settings: &GlobalpingSettings) -> 
         .iter()
         .filter(|r| r.is_success())
         .count();
+    let refused = measurement
+        .results
+        .iter()
+        .filter(|r| r.is_refused())
+        .count();
     let mut evidence = json!({
         "measurement_id": id,
         "probes_total": measurement.results.len(),
         "probes_with_result": with_result,
         "probes_ok": ok,
+        "probes_refused": refused,
         "probes": measurement
             .results
             .iter()
@@ -473,6 +492,9 @@ fn tally(id: &str, measurement: &Measurement, settings: &GlobalpingSettings) -> 
     let vote = if with_result < min_probes {
         evidence["reason"] = json!(AbstainReason::NoData);
         Vote::Abstain(AbstainReason::NoData)
+    } else if refused * 2 > with_result {
+        evidence["reason"] = json!(AbstainReason::PortRefused);
+        Vote::Abstain(AbstainReason::PortRefused)
     } else if (ok as f64) / (with_result as f64) < settings.success_threshold {
         Vote::Blocked
     } else {

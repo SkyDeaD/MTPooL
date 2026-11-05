@@ -1745,6 +1745,23 @@ mod tests {
     }
 
     #[test]
+    fn a_closed_port_is_no_verdict_of_globalping() {
+        let mut p = Pool::new();
+        p.enroll("n1", ip(1));
+        p.report("n1", Vote::Clear);
+        let verified = p.now;
+        p.advance(60 * SEC);
+        p.report("n1", Vote::Abstain(AbstainReason::PortRefused));
+        let h = p.state.nodes[&id("n1")].health;
+        assert_eq!(
+            h.gp,
+            GpStatus::NoData { at: p.now },
+            "not Failed: no block was seen"
+        );
+        assert_eq!(h.last_report, verified);
+    }
+
+    #[test]
     fn a_report_between_measurements_keeps_the_last_verdict() {
         let mut p = Pool::new();
         p.enroll("n1", ip(1));

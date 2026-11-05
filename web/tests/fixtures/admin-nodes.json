@@ -207,6 +207,7 @@
     "port": 443,
     "registered_at": "2026-09-25T12:00:00Z",
     "state": "quarantine",
+    "suspected": true,
     "state_since": "2026-11-04T10:30:00Z",
     "id": "theta-m1d7z",
     "ip": "203.x.x.17",

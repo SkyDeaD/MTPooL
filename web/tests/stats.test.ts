@@ -65,6 +65,22 @@ describe('stats page', () => {
     expect(target.querySelector('[data-kpi="availability"]')?.textContent).toContain('97,89');
   });
 
+  it('a_node_out_of_the_queue_has_its_own_group_and_is_not_called_a_quarantine', async () => {
+    const list = JSON.parse(readFileSync(join(process.cwd(), 'tests', 'fixtures', 'nodes.json'), 'utf8')) as PublicNode[];
+    const outside = { ...list[0], id: 'iota-p2k8v', is_master: false, state: 'quarantine', quarantine_reasons: ['tcp'] };
+    api.set('nodes', [...list, outside]);
+    open();
+    await settle();
+    const groups = [...target.querySelectorAll('tr.grp')].map((g) => g.textContent ?? '');
+    expect(groups).toHaveLength(4);
+    expect(groups[2]).toContain(t('stats.group.quarantine'));
+    expect(groups[3]).toContain(t('stats.group.outside'));
+    const row = (id: string) => [...target.querySelectorAll('tr.go')].find((r) => r.textContent?.includes(id))!;
+    expect(row('theta-m1d7z').textContent).toContain(t('node.state.quarantine'));
+    expect(row('iota-p2k8v').textContent).toContain(t('node.state.outside'));
+    expect(row('iota-p2k8v').textContent).not.toContain(t('node.state.quarantine'));
+  });
+
   it('stats_empty_pool_shows_explanation', async () => {
     api.set('nodes', []);
     api.set('domains', []);

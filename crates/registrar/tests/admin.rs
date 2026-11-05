@@ -1212,3 +1212,31 @@ async fn dns_push_marks_every_domain_but_one_that_is_being_pushed() {
         "{entries:?}"
     );
 }
+
+#[tokio::test]
+async fn a_node_suspected_of_a_block_says_so_and_one_out_of_the_queue_does_not() {
+    let mut suspected = alpha();
+    suspected.state = NodeState::Quarantine;
+    suspected.suspected = true;
+    suspected.quarantine_reasons = vec![mtpool_core::FailedCondition::Globalping];
+    let mut out_of_queue = beta();
+    out_of_queue.state = NodeState::Quarantine;
+    out_of_queue.quarantine_reasons = vec![mtpool_core::FailedCondition::Metrics];
+    let env = env(pool(vec![suspected, out_of_queue]));
+    let admin = admin_token(&env);
+
+    for path in [
+        "/api/v1/nodes/alpha-00001",
+        "/api/v1/admin/nodes/alpha-00001",
+    ] {
+        let body = get(&env, path, &admin).await.json();
+        assert_eq!(body["suspected"], true, "{path}: {body}");
+        assert!(body["next_round_at"].is_string(), "{path}: {body}");
+    }
+    for path in ["/api/v1/nodes/beta-00002", "/api/v1/admin/nodes/beta-00002"] {
+        let body = get(&env, path, &admin).await.json();
+        assert!(body.get("suspected").is_none(), "{path}: {body}");
+        // No sensors check it, so no round is due.
+        assert!(body["next_round_at"].is_null(), "{path}: {body}");
+    }
+}

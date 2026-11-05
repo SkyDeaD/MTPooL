@@ -76,20 +76,20 @@ async fn all_sensors_down_no_ban_then_pruned() {
     let (_node, id) = enroll_healthy(&stand, 1, "node-one").await;
     settings(
         &stand,
-        // The agent's last good report must not vote for Globalping here: it stays good for ten
-        // minutes by default, and this round is about sensors that are down.
+        // The agent's report must not vote for Globalping in the rounds: they are about sensors
+        // that are down.
         json!({
-            "report_max_age_sec": 15,
             "quarantine_max_sec": 120,
             "globalping": {"vote_report_max_age_sec": 1},
         }),
     )
     .await;
 
+    // A failed check makes the node suspected; a stale report alone would not run sensors.
     set_sensors(
         &stand,
         &[
-            ("globalping", "timeout"),
+            ("globalping", "blocked"),
             ("cheburcheck", "unavailable"),
             ("redflag", "unauthorized"),
         ],
@@ -98,14 +98,22 @@ async fn all_sensors_down_no_ban_then_pruned() {
     stand
         .wait_state_in(&id, &["quarantine"], secs(90))
         .await
-        .expect("the node, with no valid Globalping report, goes to quarantine");
-    // A round must happen, and every one of the three sensors must have abstained in it.
+        .expect("the node with a failed Globalping check goes to quarantine");
+    set_sensors(&stand, &[("globalping", "timeout")]).await;
+    // A round must happen in which every one of the three sensors abstained. The first rounds
+    // may still have the Globalping vote of the failed check: one vote, no ban.
     let (verdict, votes) = eventually(
         "a round in which every sensor abstains",
         secs(90),
         || async {
             match last_round(&stand, &id).await {
-                Some((verdict, votes)) if votes.len() >= 3 => Ok((verdict, votes)),
+                Some((verdict, votes))
+                    if ["globalping", "cheburcheck", "red_flag"]
+                        .iter()
+                        .all(|s| vote_of(&votes, s).as_deref() == Some("abstain")) =>
+                {
+                    Ok((verdict, votes))
+                }
                 other => Err(format!("{other:?}")),
             }
         },

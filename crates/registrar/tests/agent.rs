@@ -1674,7 +1674,8 @@ async fn config_returns_users_sni_port_intervals() {
                 "sync_sec": 90
             },
             "antiscan": true,
-            "report_other_users": true
+            "report_other_users": true,
+            "measure_now": false
         })
     );
 
@@ -1812,4 +1813,21 @@ async fn a_report_without_a_measurement_says_why_in_the_log() {
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(lines[0].contains("no Globalping measurement"), "{lines:?}");
     assert!(lines[0].contains("RateLimited"), "{lines:?}");
+}
+
+#[tokio::test]
+async fn the_config_asks_for_a_measurement_when_the_planned_one_is_late() {
+    let env = env(pool(vec![alpha()]));
+    let token = node_token(&env, "alpha-00001");
+    let interval_ms = i64::from(settings().globalping_interval_sec) * 1000;
+
+    env.clock.store(NOW + 1_000, Ordering::SeqCst);
+    let config = get(&env, "/api/v1/agent/config", ALPHA_IP, &token).await;
+    assert_eq!(config.status, StatusCode::OK, "{}", config.body);
+    assert_eq!(config.json()["measure_now"], false);
+
+    env.clock
+        .store(NOW + interval_ms + 60_000, Ordering::SeqCst);
+    let config = get(&env, "/api/v1/agent/config", ALPHA_IP, &token).await;
+    assert_eq!(config.json()["measure_now"], true);
 }

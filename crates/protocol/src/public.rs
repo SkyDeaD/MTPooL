@@ -82,6 +82,11 @@ pub struct PublicNode {
     /// user under a name of the pool, with another secret). Absent in other states.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quarantine_reasons: Vec<String>,
+    /// In quarantine and suspected of a block: the sensors check the address. A node in
+    /// quarantine without it is only out of the queue (a port, metrics, a stale report). Absent
+    /// in other states.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub suspected: bool,
     /// Place in the queue for a master slot, from 1: only for a healthy node that is not a
     /// master.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -93,7 +98,8 @@ pub struct PublicNode {
     /// off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotates_at: Option<String>,
-    /// When the next sensor round of the node is due (RFC 3339, UTC).
+    /// When the next sensor round of the node is due (RFC 3339, UTC). Only for a node the
+    /// sensors check: suspected of a block in quarantine, or a node on reverify.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_round_at: Option<String>,
     /// Uptime over the last 30 days in hundredths of a percent (9997 is 99.97 %). Absent while
@@ -140,7 +146,8 @@ pub struct LastVote {
     pub sensor: String,
     pub vote: Vote,
     /// Why the sensor abstained: `not_configured`, `key_rejected`, `unavailable`, `rate_limited`,
-    /// `timeout`, `unknown_answer` or `no_data`. Only for `abstain`.
+    /// `timeout`, `unknown_answer`, `no_data` or `port_refused` (most probes were refused the
+    /// connection: the port is closed). Only for `abstain`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
