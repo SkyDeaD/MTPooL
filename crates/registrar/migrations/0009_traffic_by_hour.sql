@@ -37,4 +37,7 @@ SELECT node,
        COALESCE(json_extract(stats, '$.other_to_client_total'), 0)
   FROM node_stats
  WHERE COALESCE(json_extract(stats, '$.other_from_client_total'), 0) > 0
-    OR COALESCE(json_extract(stats, '$.other_to_client_total'), 0) > 0;
+    OR COALESCE(json_extract(stats, '$.other_to_client_total'), 0) > 0
+ON CONFLICT(node, at) DO UPDATE SET
+    other_from_client = excluded.other_from_client,
+    other_to_client = excluded.other_to_client;

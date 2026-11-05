@@ -1589,6 +1589,40 @@ fn the_migration_keeps_what_the_nodes_counted_of_the_other_users() {
 }
 
 #[test]
+fn the_migration_adds_the_other_users_to_a_node_that_already_has_traffic_this_hour() {
+    let (_dir, path) = temp_db();
+    database_at(&path, 8);
+    let conn = fresh(&path);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    conn.execute(
+        "INSERT INTO traffic(node, at, from_client, to_client) VALUES ('own-00001', ?1, 5, 6)",
+        [now_ms],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO node_stats(node, stats) VALUES ('own-00001', ?1)",
+        [r#"{"other_from_client_total": 30, "other_to_client_total": 40}"#],
+    )
+    .unwrap();
+    drop(conn);
+
+    Store::open(&path).unwrap().close().unwrap();
+
+    assert_eq!(count(&path, "SELECT count(*) FROM traffic"), 1);
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM traffic WHERE node = 'own-00001' AND from_client = 5 \
+             AND to_client = 6 AND other_from_client = 30 AND other_to_client = 40"
+        ),
+        1
+    );
+}
+
+#[test]
 fn traffic_of_one_hour_is_one_row() {
     let (_dir, path) = temp_db();
     let store = Store::open(&path).unwrap();
