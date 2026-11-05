@@ -105,6 +105,7 @@ jobs:
             tests: >-
               all_sensors_down_no_ban_then_pruned
               token_file_option_works
+              registrar_rollback_stops_the_rollout_of_its_agent
           - shard: "2"
             tests: >-
               release_rolls_through_canary_and_batches_and_stops_on_failure

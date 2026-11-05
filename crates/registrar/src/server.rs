@@ -386,6 +386,14 @@ pub async fn run_with(
         .with_allow_private_ips(allow_private_ips)
         .with_releases_dir(releases_dir)
         .with_verifier(Arc::new(verifier));
+    // Before anything is served: an agent must not be offered a build this registrar went back
+    // from.
+    let rollouts = state.rollouts.clone();
+    let started_at = (state.clock)();
+    tokio::task::spawn_blocking(move || {
+        rollouts.limit_to(crate::update::compiled_version(), started_at);
+    })
+    .await?;
     // The rollout worker only reads the state owner; the agents' polls reach the rollout
     // through the handlers.
     workers.push(tokio::spawn(crate::rollout::run(

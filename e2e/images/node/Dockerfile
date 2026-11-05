@@ -16,7 +16,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     cargo build --release --locked -p mtpool-agent \
  && install -D target/release/mtpool-agent /out/mtpool-agent \
  && cp Cargo.toml /tmp/Cargo.toml.orig && cp Cargo.lock /tmp/Cargo.lock.orig \
- && for v in 0.0.1; do \
+ && for v in 0.0.1 0.9.1; do \
       sed -i "s/^version = \"0.0.0\"/version = \"$v\"/" Cargo.toml \
    && cargo build --release -p mtpool-agent \
    && install -D target/release/mtpool-agent /out/agent-$v \
@@ -53,6 +53,7 @@ RUN set -eu; \
 COPY --from=build /out/mtpool-agent /usr/local/bin/mtpool-agent
 # Builds of the same agent under another version, for the rollout scenarios to offer as releases.
 COPY --from=build /out/agent-0.0.1 /opt/e2e/agent-0.0.1
+COPY --from=build /out/agent-0.9.1 /opt/e2e/agent-0.9.1
 # The units and the engine's starting configuration are the ones the installer puts on a real
 # node. Only the agent's environment is the stand's: plain http to the registrar, private
 # addresses and the stand-ins for the services outside the pool.
