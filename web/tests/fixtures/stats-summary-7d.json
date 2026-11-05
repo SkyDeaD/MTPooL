@@ -10,7 +10,10 @@
     "avg_gap_sec": 172800,
     "traffic_ingress_bytes": 6287429468,
     "traffic_egress_bytes": 52395245568,
-    "traffic_total_bytes": 58682675036
+    "traffic_total_bytes": 58682675036,
+    "other_traffic_ingress_bytes": 19560891678,
+    "other_traffic_egress_bytes": 29341337518,
+    "other_traffic_total_bytes": 48902229196
   },
   "by_reason": {
     "cheburcheck+globalping": 2,

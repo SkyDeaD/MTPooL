@@ -303,11 +303,16 @@ pub struct StatsPoint {
     /// Mean seconds since the previous ban over those bans that have a previous one; `null`
     /// when there is none.
     pub avg_gap_sec: Option<i64>,
-    /// Bytes from clients to the nodes.
+    /// Bytes from the pool's clients to the nodes.
     pub traffic_ingress_bytes: i64,
-    /// Bytes from the nodes to clients.
+    /// Bytes from the nodes to the pool's clients.
     pub traffic_egress_bytes: i64,
     pub traffic_total_bytes: i64,
+    /// Bytes from clients of the node owners' own users to the nodes. Not part of `traffic_*`.
+    pub other_traffic_ingress_bytes: i64,
+    /// Bytes from the nodes to clients of the node owners' own users. Not part of `traffic_*`.
+    pub other_traffic_egress_bytes: i64,
+    pub other_traffic_total_bytes: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]

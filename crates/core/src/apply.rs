@@ -656,33 +656,42 @@ fn report(state: &mut PoolState, r: ReportRequest, now: Ts, out: &mut Out) -> An
             let same_kind = r.other_traffic.is_some() == entry.other_counters.is_some();
             // The first reading only sets the base: what came before the registrar looked
             // is not traffic of this pool.
-            if let Some(previous) = entry.counters.filter(|_| same_kind) {
-                let from = traffic_delta(previous.from_client, counters.from_client);
-                let to = traffic_delta(previous.to_client, counters.to_client);
-                entry.from_client_total = entry.from_client_total.saturating_add(from);
-                entry.to_client_total = entry.to_client_total.saturating_add(to);
-                if from > 0 || to > 0 {
-                    persist(
-                        out,
-                        PersistOp::Traffic {
-                            node: r.node.clone(),
-                            at: now,
-                            from_client: from,
-                            to_client: to,
-                        },
-                    );
-                }
-            }
+            let (from, to) = entry
+                .counters
+                .filter(|_| same_kind)
+                .map_or((0, 0), |previous| {
+                    (
+                        traffic_delta(previous.from_client, counters.from_client),
+                        traffic_delta(previous.to_client, counters.to_client),
+                    )
+                });
+            entry.from_client_total = entry.from_client_total.saturating_add(from);
+            entry.to_client_total = entry.to_client_total.saturating_add(to);
             entry.counters = Some(counters);
-            if let (Some(previous), Some(current)) = (entry.other_counters, r.other_traffic) {
-                entry.other_from_client_total = entry
-                    .other_from_client_total
-                    .saturating_add(traffic_delta(previous.from_client, current.from_client));
-                entry.other_to_client_total = entry
-                    .other_to_client_total
-                    .saturating_add(traffic_delta(previous.to_client, current.to_client));
-            }
+            let (other_from, other_to) = match (entry.other_counters, r.other_traffic) {
+                (Some(previous), Some(current)) => (
+                    traffic_delta(previous.from_client, current.from_client),
+                    traffic_delta(previous.to_client, current.to_client),
+                ),
+                _ => (0, 0),
+            };
+            entry.other_from_client_total =
+                entry.other_from_client_total.saturating_add(other_from);
+            entry.other_to_client_total = entry.other_to_client_total.saturating_add(other_to);
             entry.other_counters = r.other_traffic;
+            if from > 0 || to > 0 || other_from > 0 || other_to > 0 {
+                persist(
+                    out,
+                    PersistOp::Traffic {
+                        node: r.node.clone(),
+                        at: now,
+                        from_client: from,
+                        to_client: to,
+                        other_from_client: other_from,
+                        other_to_client: other_to,
+                    },
+                );
+            }
             if r.other_traffic.is_none() {
                 entry.other_clients = None;
             }
@@ -1895,6 +1904,62 @@ mod tests {
             (Some(5), Some(46)),
             "no number in a report keeps the last value"
         );
+    }
+
+    /// `(pool from, pool to, other from, other to)` of every stored delta.
+    fn stored(effects: &[Effect]) -> Vec<(u64, u64, u64, u64)> {
+        persists(effects)
+            .iter()
+            .filter_map(|op| match op {
+                PersistOp::Traffic {
+                    from_client,
+                    to_client,
+                    other_from_client,
+                    other_to_client,
+                    ..
+                } => Some((
+                    *from_client,
+                    *to_client,
+                    *other_from_client,
+                    *other_to_client,
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_traffic_of_the_other_users_is_stored_beside_the_pools() {
+        let mut p = pool_with_node();
+        let effects = traffic_report(&mut p, (1_000, 2_000), Some((8_000, 88_000)), None, None);
+        assert_eq!(stored(&effects), [], "the first reading only sets the base");
+
+        let effects = traffic_report(&mut p, (1_010, 2_020), Some((8_030, 88_040)), None, None);
+        assert_eq!(stored(&effects), [(10, 20, 30, 40)]);
+
+        // Only the owner's users were active: that is still traffic worth a point.
+        let effects = traffic_report(&mut p, (1_010, 2_020), Some((8_035, 88_046)), None, None);
+        assert_eq!(stored(&effects), [(0, 0, 5, 6)]);
+
+        // Nobody was active: nothing to store.
+        let effects = traffic_report(&mut p, (1_010, 2_020), Some((8_035, 88_046)), None, None);
+        assert_eq!(stored(&effects), []);
+
+        // The engine restarted: each side counts what it read since.
+        let effects = traffic_report(&mut p, (3, 4), Some((5, 6)), None, None);
+        assert_eq!(stored(&effects), [(3, 4, 5, 6)]);
+    }
+
+    #[test]
+    fn a_report_of_another_kind_stores_no_traffic_at_all() {
+        let mut p = pool_with_node();
+        traffic_report(&mut p, (9_000, 90_000), None, None, None);
+        let effects = traffic_report(&mut p, (1_000, 2_000), Some((8_000, 88_000)), None, None);
+        assert_eq!(stored(&effects), [], "the agent began to tell users apart");
+
+        traffic_report(&mut p, (1_100, 2_100), Some((8_100, 88_100)), None, None);
+        let effects = traffic_report(&mut p, (9_300, 90_300), None, None, None);
+        assert_eq!(stored(&effects), [], "the agent went back to summing them");
     }
 
     #[test]

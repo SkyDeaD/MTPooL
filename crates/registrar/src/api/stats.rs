@@ -106,6 +106,8 @@ struct Acc {
     gap_n: i64,
     ingress: i64,
     egress: i64,
+    other_ingress: i64,
+    other_egress: i64,
 }
 
 impl Acc {
@@ -129,6 +131,9 @@ impl Acc {
             traffic_ingress_bytes: self.ingress,
             traffic_egress_bytes: self.egress,
             traffic_total_bytes: self.ingress + self.egress,
+            other_traffic_ingress_bytes: self.other_ingress,
+            other_traffic_egress_bytes: self.other_egress,
+            other_traffic_total_bytes: self.other_ingress + self.other_egress,
         }
     }
 }
@@ -222,7 +227,8 @@ fn compute(conn: &Connection, range: StatsRange, now_ms: i64) -> rusqlite::Resul
     }
 
     let mut statement = conn.prepare_cached(
-        "SELECT (at - ?1) / ?2, SUM(from_client), SUM(to_client)
+        "SELECT (at - ?1) / ?2, SUM(from_client), SUM(to_client),
+                SUM(other_from_client), SUM(other_to_client)
          FROM traffic WHERE at >= ?1 AND at <= ?3 GROUP BY 1",
     )?;
     let traffic = statement.query_map([from_ms, step_ms, now_ms], |r| {
@@ -230,15 +236,19 @@ fn compute(conn: &Connection, range: StatsRange, now_ms: i64) -> rusqlite::Resul
             r.get::<_, i64>(0)?,
             r.get::<_, i64>(1)?,
             r.get::<_, i64>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?,
         ))
     })?;
     for row in traffic {
-        let (index, ingress, egress) = row?;
+        let (index, ingress, egress, other_ingress, other_egress) = row?;
         let acc = &mut accs[bucket_of(from_ms + index * step_ms)];
-        acc.ingress += ingress;
-        acc.egress += egress;
-        kpi.ingress += ingress;
-        kpi.egress += egress;
+        for acc in [acc, &mut kpi] {
+            acc.ingress += ingress;
+            acc.egress += egress;
+            acc.other_ingress += other_ingress;
+            acc.other_egress += other_egress;
+        }
     }
 
     let recent = ban_rows(conn, "ORDER BY at DESC, id DESC LIMIT ?1", &[&RECENT])?

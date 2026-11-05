@@ -72,6 +72,8 @@ fn traffic(at: Ts) -> PersistOp {
         at,
         from_client: 10,
         to_client: 20,
+        other_from_client: 30,
+        other_to_client: 40,
     }
 }
 
@@ -125,7 +127,7 @@ fn migrations_apply_on_empty_db() {
             r.get(0)
         })
         .unwrap();
-    assert_eq!(version, 8);
+    assert_eq!(version, 9);
     let mode: String = conn
         .query_row("PRAGMA journal_mode", [], |r| r.get(0))
         .unwrap();
@@ -142,7 +144,7 @@ fn migrations_apply_on_empty_db() {
     // Opening again applies nothing twice.
     let store = Store::open(&path).unwrap();
     store.close().unwrap();
-    assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 8);
+    assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 9);
 }
 
 #[test]
@@ -159,6 +161,7 @@ fn a_database_at_version_5_upgrades_cleanly() {
     let conn = fresh(&path);
     conn.execute_batch(
         "DROP TABLE client_samples; DROP TABLE node_samples; \
+         ALTER TABLE traffic DROP COLUMN other_from_client; ALTER TABLE traffic DROP COLUMN other_to_client; \
          ALTER TABLE bans DROP COLUMN node_registered_at; ALTER TABLE ip_blocks DROP COLUMN owner; DROP INDEX tokens_node_id; \
          DELETE FROM schema_migrations WHERE version >= 6;",
     )
@@ -170,7 +173,7 @@ fn a_database_at_version_5_upgrades_cleanly() {
     store.close().unwrap();
     assert_eq!(
         count(&path, "SELECT max(version) FROM schema_migrations"),
-        8
+        9
     );
     assert_eq!(count(&path, "SELECT count(*) FROM client_samples"), 0);
 }
@@ -188,8 +191,9 @@ fn a_database_at_version_7_upgrades_and_loses_the_tokens_of_nodes_it_no_longer_h
     store.close().unwrap();
     let conn = fresh(&path);
     conn.execute_batch(
-        "ALTER TABLE bans DROP COLUMN node_registered_at; ALTER TABLE ip_blocks DROP COLUMN owner; DROP INDEX tokens_node_id; \
-         DELETE FROM schema_migrations WHERE version = 8; \
+        "ALTER TABLE traffic DROP COLUMN other_from_client; ALTER TABLE traffic DROP COLUMN other_to_client; \
+         ALTER TABLE bans DROP COLUMN node_registered_at; ALTER TABLE ip_blocks DROP COLUMN owner; DROP INDEX tokens_node_id; \
+         DELETE FROM schema_migrations WHERE version >= 8; \
          INSERT INTO ip_blocks(ip, node_id, blocked_at) VALUES ('198.51.100.9', 'old-a1b2c', 1); \
          INSERT INTO tokens(kind, hash, prefix, node_id, created_at) \
            VALUES ('node', x'01', 'p', 'kept-a1b2c', 1), ('node', x'02', 'p', 'gone-a1b2c', 1); \
@@ -314,7 +318,9 @@ fn a_database_at_version_6_upgrades_cleanly() {
     store.close().unwrap();
     let conn = fresh(&path);
     conn.execute_batch(
-        "DROP TABLE node_samples; ALTER TABLE bans DROP COLUMN node_registered_at; ALTER TABLE ip_blocks DROP COLUMN owner; \
+        "DROP TABLE node_samples; \
+         ALTER TABLE traffic DROP COLUMN other_from_client; ALTER TABLE traffic DROP COLUMN other_to_client; \
+         ALTER TABLE bans DROP COLUMN node_registered_at; ALTER TABLE ip_blocks DROP COLUMN owner; \
          DROP INDEX tokens_node_id; DELETE FROM schema_migrations WHERE version >= 7;",
     )
     .unwrap();
@@ -325,7 +331,7 @@ fn a_database_at_version_6_upgrades_cleanly() {
     store.close().unwrap();
     assert_eq!(
         count(&path, "SELECT max(version) FROM schema_migrations"),
-        8
+        9
     );
     assert_eq!(count(&path, "SELECT count(*) FROM node_samples"), 0);
 }
@@ -535,7 +541,7 @@ fn unknown_schema_version_refuses_open() {
             err,
             StoreError::UnknownSchemaVersion {
                 found: 999,
-                supported: 8
+                supported: 9
             }
         ),
         "{err:?}"
@@ -1401,7 +1407,7 @@ fn processes_opening_a_new_database_together_all_succeed() {
         for result in results {
             assert_eq!(result, Ok(()));
         }
-        assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 8);
+        assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 9);
     }
 }
 
@@ -1461,6 +1467,100 @@ fn the_migration_keeps_when_the_nodes_of_old_bans_registered() {
 }
 
 #[test]
+fn the_migration_finds_old_bans_in_the_journal_of_registrations() {
+    let (_dir, path) = temp_db();
+    database_at(&path, 8);
+    let conn = fresh(&path);
+    let registered = |node: &str, at: i64| {
+        conn.execute(
+            "INSERT INTO events(at, kind, node, detail) VALUES (?1, 'node_registered', ?2, '{}')",
+            rusqlite::params![at, node],
+        )
+        .unwrap();
+    };
+    // Banned at 9000, as every ban row here: it registered twice before that and once after.
+    registered("twice-00001", 1000);
+    registered("twice-00001", 5000);
+    registered("twice-00001", 9500);
+    registered("once-00002", 2000);
+    registered("kept-00003", 3000);
+    registered("recheck-00004", 4000);
+    conn.execute(
+        "INSERT INTO events(at, kind, node, detail) VALUES (6000, 'node_retired', 'late-00005', '{}')",
+        [],
+    )
+    .unwrap();
+    a_ban_row(&conn, "twice-00001", 0);
+    a_ban_row(&conn, "once-00002", 0);
+    a_ban_row(&conn, "kept-00003", 0);
+    conn.execute(
+        "UPDATE bans SET node_registered_at = 7777 WHERE node = 'kept-00003'",
+        [],
+    )
+    .unwrap();
+    a_ban_row(&conn, "recheck-00004", 1);
+    a_ban_row(&conn, "late-00005", 0);
+    a_ban_row(&conn, "gone-00006", 0);
+    drop(conn);
+
+    Store::open(&path).unwrap().close().unwrap();
+
+    let conn = fresh(&path);
+    let mut stmt = conn
+        .prepare("SELECT node_registered_at FROM bans ORDER BY id")
+        .unwrap();
+    let kept: Vec<Option<i64>> = stmt
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        kept,
+        vec![Some(5000), Some(2000), Some(7777), None, None, None]
+    );
+}
+
+#[test]
+fn the_migration_keeps_the_traffic_stored_so_far_as_the_pools() {
+    let (_dir, path) = temp_db();
+    database_at(&path, 8);
+    let conn = fresh(&path);
+    conn.execute(
+        "INSERT INTO traffic(node, at, from_client, to_client) VALUES ('old-00001', 1000, 10, 20)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    Store::open(&path).unwrap().close().unwrap();
+
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM traffic WHERE node = 'old-00001' AND from_client = 10 \
+             AND to_client = 20 AND other_from_client = 0 AND other_to_client = 0"
+        ),
+        1
+    );
+}
+
+#[test]
+fn traffic_keeps_the_other_users_apart() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).unwrap();
+    store.send(traffic(NOW));
+    store.close().unwrap();
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM traffic WHERE from_client = 10 AND to_client = 20 \
+             AND other_from_client = 30 AND other_to_client = 40"
+        ),
+        1
+    );
+}
+
+#[test]
 fn a_migration_first_keeps_a_copy_of_the_database() {
     let (_dir, path) = temp_db();
     database_at(&path, 7);
@@ -1472,7 +1572,7 @@ fn a_migration_first_keeps_a_copy_of_the_database() {
     assert!(copy.is_file(), "{}", copy.display());
     assert_eq!(version_of(&copy), 7);
     assert_eq!(count(&copy, "SELECT COUNT(*) FROM bans"), 1);
-    assert_eq!(version_of(&path), 8);
+    assert_eq!(version_of(&path), 9);
 
     // A restore checks the sum beside the copy, so the sum must be there.
     crate::backup::restore(&path, &copy).unwrap();
@@ -1537,7 +1637,7 @@ fn an_old_copy_is_not_taken_back() {
 
     assert!(!undo_schema(&path, 7, Duration::ZERO).unwrap());
 
-    assert_eq!(version_of(&path), 8, "the database is left as it was");
+    assert_eq!(version_of(&path), 9, "the database is left as it was");
     assert!(crate::backup::before_migration(&path, 7).is_file());
 }
 
@@ -1545,7 +1645,7 @@ fn an_old_copy_is_not_taken_back() {
 fn a_database_this_build_knows_is_left_alone() {
     let (_dir, path) = temp_db();
     rolled_back(&path);
-    assert!(!undo_schema(&path, 8, UNDO_WINDOW).unwrap());
+    assert!(!undo_schema(&path, 9, UNDO_WINDOW).unwrap());
     assert_eq!(count(&path, "SELECT COUNT(*) FROM bans"), 2);
 }
 
@@ -1573,7 +1673,7 @@ fn a_damaged_copy_is_not_taken_back() {
     std::fs::write(crate::backup::before_migration(&path, 7), b"damaged").unwrap();
 
     assert!(undo_schema(&path, 7, UNDO_WINDOW).is_err());
-    assert_eq!(version_of(&path), 8, "the database is left as it was");
+    assert_eq!(version_of(&path), 9, "the database is left as it was");
 }
 
 #[test]

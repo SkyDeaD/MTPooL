@@ -394,15 +394,20 @@ fn apply_op(conn: &Connection, op: &PersistOp) -> Result<(), StoreError> {
             at,
             from_client,
             to_client,
+            other_from_client,
+            other_to_client,
         } => {
             conn.prepare_cached(
-                "INSERT INTO traffic(node, at, from_client, to_client) VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO traffic(node, at, from_client, to_client, \
+                 other_from_client, other_to_client) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )?
             .execute(params![
                 node.as_str(),
                 at.0,
                 int(*from_client),
-                int(*to_client)
+                int(*to_client),
+                int(*other_from_client),
+                int(*other_to_client)
             ])?;
         }
         PersistOp::RecordRound {

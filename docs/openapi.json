@@ -6197,7 +6197,10 @@
           "bans",
           "traffic_ingress_bytes",
           "traffic_egress_bytes",
-          "traffic_total_bytes"
+          "traffic_total_bytes",
+          "other_traffic_ingress_bytes",
+          "other_traffic_egress_bytes",
+          "other_traffic_total_bytes"
         ],
         "properties": {
           "avg_gap_sec": {
@@ -6221,15 +6224,29 @@
             "format": "int64",
             "description": "Bans that began in the stretch."
           },
+          "other_traffic_egress_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes from the nodes to clients of the node owners' own users. Not part of `traffic_*`."
+          },
+          "other_traffic_ingress_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes from clients of the node owners' own users to the nodes. Not part of `traffic_*`."
+          },
+          "other_traffic_total_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
           "traffic_egress_bytes": {
             "type": "integer",
             "format": "int64",
-            "description": "Bytes from the nodes to clients."
+            "description": "Bytes from the nodes to the pool's clients."
           },
           "traffic_ingress_bytes": {
             "type": "integer",
             "format": "int64",
-            "description": "Bytes from clients to the nodes."
+            "description": "Bytes from the pool's clients to the nodes."
           },
           "traffic_total_bytes": {
             "type": "integer",
