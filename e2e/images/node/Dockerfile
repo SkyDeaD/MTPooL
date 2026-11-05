@@ -8,11 +8,13 @@ COPY crates ./crates
 COPY deploy ./deploy
 # The agent verifies releases with this key: the public half of the stand's test key.
 COPY e2e/keys/minisign.pub ./deploy/minisign.pub
-# The target directory is a cache shared by every build of this image, and cargo goes by the
-# file's time: a key older than the last build would leave that build's key in the binary.
+# One target directory per tag: cargo goes by file times, so a directory shared with another working
+# copy would leave that copy's key and code in the binary, and the layer cache would keep them.
+# Within a tag the key can still change, and a key older than the last build would be missed.
+ARG MTPOOL_E2E_TAG=local
 RUN touch deploy/minisign.pub
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,target=/src/target,sharing=locked \
+    --mount=type=cache,id=mtpool-e2e-target-${MTPOOL_E2E_TAG},target=/src/target,sharing=locked \
     cargo build --release --locked -p mtpool-agent \
  && install -D target/release/mtpool-agent /out/mtpool-agent \
  && cp Cargo.toml /tmp/Cargo.toml.orig && cp Cargo.lock /tmp/Cargo.lock.orig \

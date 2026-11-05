@@ -1,12 +1,18 @@
 # The end-to-end stand: the registrar, stand-ins for the services outside the pool, and three
 # systemd nodes with a real telemt. The test harness (crates/e2e) starts it under its own project
 # name. The flags on private addresses and plain http are for this stand only.
+#
+# MTPOOL_E2E_TAG names the images and the cargo cache they build with. The harness sets it to the id
+# of the working copy's test key, so that working copies with different keys share neither. Without
+# it, as in CI, the images are `:local`.
 
 x-nodes: &node
-  image: mtpool-e2e-node:local
+  image: mtpool-e2e-node:${MTPOOL_E2E_TAG:-local}
   build:
     context: ..
     dockerfile: e2e/images/node/Dockerfile
+    args: &build-args
+      MTPOOL_E2E_TAG: ${MTPOOL_E2E_TAG:-local}
   privileged: true
   cgroup: host
   # /tmp is executable, as on a real Ubuntu: the MTProxyL installer runs the engine it downloaded
@@ -31,10 +37,11 @@ x-nodes: &node
 
 services:
   fakes:
-    image: mtpool-e2e-registrar:local
+    image: mtpool-e2e-registrar:${MTPOOL_E2E_TAG:-local}
     build:
       context: ..
       dockerfile: e2e/images/registrar/Dockerfile
+      args: *build-args
     command: ["mtpool-fakes"]
     environment:
       MTPOOL_FAKES_LISTEN: 0.0.0.0:9000
@@ -47,10 +54,11 @@ services:
       retries: 30
 
   registrar:
-    image: mtpool-e2e-registrar:local
+    image: mtpool-e2e-registrar:${MTPOOL_E2E_TAG:-local}
     build:
       context: ..
       dockerfile: e2e/images/registrar/Dockerfile
+      args: *build-args
     environment:
       MTPOOL_LISTEN: 0.0.0.0:8080
       MTPOOL_RELEASES_DIR: /srv/releases
@@ -87,7 +95,7 @@ services:
   # a scenario asks for it by name.
   registrar-fresh:
     <<: *node
-    image: mtpool-e2e-fresh:local
+    image: mtpool-e2e-fresh:${MTPOOL_E2E_TAG:-local}
     build:
       context: ..
       dockerfile: e2e/images/registrar/Dockerfile

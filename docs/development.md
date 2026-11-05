@@ -51,6 +51,8 @@ cargo run -p mtpool-registrar -- openapi > docs/openapi.json
 cargo test -p mtpool-e2e -- --ignored
 ```
 
+Сценарии можно запускать одновременно из разных рабочих каталогов. У каждого каталога свой тестовый ключ в `e2e/keys`, и по его идентификатору названы образы `mtpool-e2e-*:<id>` и кэш сборки. Поэтому первая сборка в новом каталоге идёт с нуля. Удалённый каталог оставляет образы и кэш в Docker: образы снимает `docker rmi`, кэш `docker buildx prune --filter id=<ID>`, где `<ID>` берётся из `docker buildx du --verbose`.
+
 Веб-часть:
 
 ```bash

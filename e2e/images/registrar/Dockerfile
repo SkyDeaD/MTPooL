@@ -10,15 +10,17 @@ COPY deploy ./deploy
 # The registrar verifies nothing itself but hands the key to the installer it serves: the public
 # half of the stand's test key.
 COPY e2e/keys/minisign.pub ./deploy/minisign.pub
-# The target directory is a cache shared by every build of this image, and cargo goes by the
-# file's time: a key older than the last build would leave that build's key in the binary.
+# One target directory per tag: cargo goes by file times, so a directory shared with another working
+# copy would leave that copy's key and code in the binary, and the layer cache would keep them.
+# Within a tag the key can still change, and a key older than the last build would be missed.
+ARG MTPOOL_E2E_TAG=local
 RUN touch deploy/minisign.pub
 # A registrar hands out no agent newer than itself, so the stand's registrar is stamped above what
 # the scenarios release: the unstamped 0.0.0 would hand out none. The second build is the same code
 # one version on, for the scenario that rolls the registrar back. Cargo.lock follows the version,
 # hence no --locked here.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,target=/src/target,sharing=locked \
+    --mount=type=cache,id=mtpool-e2e-target-${MTPOOL_E2E_TAG},target=/src/target,sharing=locked \
     sed -i 's/^version = "0.0.0"/version = "0.9.0"/' Cargo.toml \
  && cargo build --release -p mtpool-registrar -p mtpool-fakes \
  && install -D target/release/mtpool-registrar /out/mtpool-registrar \
@@ -44,7 +46,7 @@ CMD ["/sbin/init"]
 # The load generator (`e2e/load.sh`). Built only when asked for: `--target loadgen`.
 FROM build AS build-load
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,target=/src/target,sharing=locked \
+    --mount=type=cache,id=mtpool-e2e-target-${MTPOOL_E2E_TAG},target=/src/target,sharing=locked \
     cargo build --release --locked -p mtpool-loadgen \
  && install -D target/release/mtpool-loadgen /out/mtpool-loadgen
 
