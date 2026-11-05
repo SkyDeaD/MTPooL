@@ -20,7 +20,7 @@ A pool of MTProto proxies for Telegram. One permanent link for clients, healthy 
 </div>
 
 > [!NOTE]
-> The first release is not out yet. The installers download binaries from GitHub Releases, so the quick start works once it is published. The end-to-end scenarios pass on a test stand, and the check on a real server comes before the release.
+> Early version: [0.0.x](https://github.com/SkyDeaD/MTPooL/releases) releases are out and already run a real pool. Before code changes are merged, the end-to-end scenarios pass on a test stand.
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/panel-dark.png"><img alt="Panel overview: node states, client chart, domains and their masters" src="docs/images/panel-light.png"></picture>
 
