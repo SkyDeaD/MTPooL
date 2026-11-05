@@ -157,6 +157,38 @@ async fn install_waits_for_a_registrar_that_was_rolled_back() {
     assert!(version.starts_with("0.9.1"), "{version}");
 }
 
+/// A registrar that has not fetched a release yet: the directory is empty.
+#[tokio::test]
+#[ignore = "needs Docker and the internet; run with --ignored"]
+async fn install_says_when_the_pool_has_no_release_yet() {
+    let stand = Stand::up().await.expect("the stand comes up");
+    let node = stand.node(1);
+    let run = node
+        .install(&InstallOptions {
+            name: "node-one",
+            token: Token::Env(stand.enroll_token()),
+            preset: None,
+            port: None,
+        })
+        .await
+        .expect("the installer runs");
+    assert!(!run.success, "the installer must stop:\n{}", run.output);
+    assert!(
+        run.output.contains("на пуле пока нет релиза"),
+        "it says why:\n{}",
+        run.output
+    );
+    assert!(
+        run.output.contains("повторите установку через минуту"),
+        "it says what to do:\n{}",
+        run.output
+    );
+    assert!(
+        node.node_id().await.unwrap().is_none(),
+        "the node did not enroll"
+    );
+}
+
 /// The registrar was installed from the newest release, so its version is that release's and no
 /// newer one is out yet (the stand's registrar is 0.9.0, `e2e/images/registrar/Dockerfile`).
 #[tokio::test]
