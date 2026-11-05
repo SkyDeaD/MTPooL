@@ -103,7 +103,11 @@ impl EventFan {
         event_stream(
             self.inner.tx.subscribe(),
             self.inner.closed.subscribe(),
-            self.inner.keepalive,
+            StreamTerms {
+                keepalive: self.inner.keepalive,
+                retry_ms: RETRY_MS,
+                max_age: None,
+            },
             actor,
             None,
             (),
@@ -111,12 +115,21 @@ impl EventFan {
     }
 }
 
+/// What differs between one kind of stream and another.
+pub(super) struct StreamTerms {
+    pub keepalive: Duration,
+    /// What the browser waits before it reconnects, in milliseconds.
+    pub retry_ms: u64,
+    /// When the stream ends by itself, however well the client reads it.
+    pub max_age: Option<Duration>,
+}
+
 /// A `text/event-stream` response fed from a broadcast channel. `first` goes out before anything
 /// else; `guard` is held for as long as the stream lives.
 pub(super) fn event_stream<G: Send + 'static>(
     mut frames: broadcast::Receiver<Bytes>,
     mut closed: watch::Receiver<bool>,
-    keepalive: Duration,
+    terms: StreamTerms,
     actor: ActorHandle,
     first: Option<Bytes>,
     guard: G,
@@ -124,7 +137,7 @@ pub(super) fn event_stream<G: Send + 'static>(
     let (out, chunks) = mpsc::channel::<Bytes>(CLIENT_BUFFER);
     tokio::spawn(async move {
         let _guard = guard;
-        let hello = Bytes::from(format!("retry: {RETRY_MS}\n\n"));
+        let hello = Bytes::from(format!("retry: {}\n\n", terms.retry_ms));
         if *closed.borrow() || out.send(hello).await.is_err() {
             return;
         }
@@ -133,10 +146,17 @@ pub(super) fn event_stream<G: Send + 'static>(
         {
             return;
         }
-        let mut tick = tokio::time::interval(keepalive);
+        let mut tick = tokio::time::interval(terms.keepalive);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // The first tick is immediate.
         tick.tick().await;
+        let aged = async {
+            match terms.max_age {
+                Some(age) => tokio::time::sleep(age).await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::pin!(aged);
         loop {
             let chunk = tokio::select! {
                 frame = frames.recv() => match frame {
@@ -151,6 +171,7 @@ pub(super) fn event_stream<G: Send + 'static>(
                 _ = closed.changed() => break,
                 () = actor.stopped() => break,
                 () = out.closed() => break,
+                () = &mut aged => break,
             };
             // A connection that stopped reading must not hold this task or the drain.
             let sent = tokio::select! {
