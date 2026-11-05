@@ -92,10 +92,18 @@ curl -s -X POST https://pool.example.com/api/v1/admin/tokens \
 | `name` | имя ноды |
 | `state_dir` | каталог состояния; по умолчанию `/var/lib/mtpool` |
 | `port` | порт прокси; если ключа нет, его сообщает адаптер движка |
-| `antiscan` | `true` включает защиту от сканеров (список ipsum, ipset и цепочка iptables); установщик пишет `true` |
+| `antiscan` | `true` включает защиту от сканеров (список ipsum, ipset и цепочка iptables); установщик пишет `true` и ставит `ipset` и `iptables` |
 | `[intervals]` | `heartbeat_sec`, `globalping_sec`, `metrics_sec`, `sync_sec`: действуют, пока регистратор не вернёт настройки |
 
 Интервалы по умолчанию: heartbeat 15 секунд, Globalping 300, метрики 60, синхронизация 60. Их можно менять для всего пула в настройках регистратора.
+
+На ноде, установленной раньше, этих пакетов может не быть. Тогда защита от сканеров не работает, а в журнале агента есть `antiscan: the old list stays` с ошибкой `ipset: No such file or directory`. На работу прокси это не влияет. Поставьте пакеты:
+
+```bash
+sudo apt-get install -y ipset iptables
+```
+
+Агент повторит попытку сам в течение 5 минут, перезапускать его не нужно. В журнале появится `antiscan list in place`.
 
 ## Как агент обращается с конфигурацией движка
 

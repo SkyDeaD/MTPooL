@@ -471,7 +471,8 @@ main() {
 
     step_begin 'Инструменты'
     missing=
-    for tool in curl minisign jq; do
+    # ipset and iptables are for antiscan, which the agent's configuration below switches on.
+    for tool in curl minisign jq ipset iptables; do
         command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
     done
     [ -r /etc/ssl/certs/ca-certificates.crt ] || missing="$missing ca-certificates"
