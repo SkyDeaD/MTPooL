@@ -3,10 +3,14 @@
 //! One worker makes each frame and a broadcast channel hands it to every open stream, so the
 //! work does not grow with the audience. The numbers come from the published snapshot: neither
 //! the worker nor a new stream talks to the state owner. A client that falls behind is dropped
-//! and reconnects; the numbers it missed are of no use to it.
+//! and reconnects; the numbers it missed are of no use to it. A client that reads well leaves
+//! too when its stream is old, so that no one holds a place for good. The browser reconnects by
+//! itself, and each stream has its own age and its own wait, so that the tabs of one moment do
+//! not leave or come back at one moment.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::ops::RangeInclusive;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -16,15 +20,18 @@ use axum::response::Response;
 use mtpool_core::{Effect, EventKind, LiveCounts, Ts};
 use mtpool_protocol::public::LiveClients;
 use mtpool_protocol::rfc3339;
+use rand::RngExt;
 use tokio::sync::{broadcast, watch};
 use tokio::time::MissedTickBehavior;
 
-use super::stream::{KEEPALIVE, event_stream};
+use super::stream::{KEEPALIVE, StreamTerms, event_stream};
 use crate::actor::{ActorHandle, Clock, DriverFuture, EffectDriver};
 use crate::auth::ratelimit::key;
 
 /// Frames a client may be behind before it is dropped.
 const CAPACITY: usize = 8;
+/// What the browser waits before it reconnects, in milliseconds.
+const RETRY_MS: RangeInclusive<u64> = 5_000..=15_000;
 
 /// How the streams tick and how many may be open.
 #[derive(Debug, Clone, Copy)]
@@ -39,6 +46,8 @@ pub struct LiveOptions {
     pub max_streams: usize,
     /// Streams of one address. Not one: many people may share an address behind CGNAT.
     pub max_per_address: usize,
+    /// The longest a stream stays open. Each one lives between half of this and all of it.
+    pub max_age: Duration,
 }
 
 impl Default for LiveOptions {
@@ -49,6 +58,7 @@ impl Default for LiveOptions {
             keepalive: KEEPALIVE,
             max_streams: 2000,
             max_per_address: 20,
+            max_age: Duration::from_secs(30 * 60),
         }
     }
 }
@@ -127,10 +137,17 @@ impl LiveFan {
     pub fn subscribe(&self, actor: ActorHandle, now: Ts, ip: IpAddr) -> Option<Response> {
         let slot = self.take_slot(ip)?;
         let first = clients_frame(&actor.snapshots().load().live, now);
+        let options = &self.inner.options;
+        let mut rng = rand::rng();
+        let terms = StreamTerms {
+            keepalive: options.keepalive,
+            retry_ms: rng.random_range(RETRY_MS),
+            max_age: Some(rng.random_range(options.max_age / 2..=options.max_age)),
+        };
         Some(event_stream(
             self.inner.tx.subscribe(),
             self.inner.closed.subscribe(),
-            self.inner.options.keepalive,
+            terms,
             actor,
             Some(first),
             slot,

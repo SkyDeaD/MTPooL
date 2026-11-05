@@ -280,3 +280,116 @@ async fn closing_ends_the_streams_and_refuses_new_ones() {
     let mut after = open(&env).await.into_body();
     ended(&mut after).await;
 }
+
+/// The wait the stream tells the browser to keep before it reconnects, in milliseconds.
+async fn retry_of(response: axum::response::Response) -> u64 {
+    let mut body = response.into_body();
+    let mut seen = String::new();
+    pump(&mut body, &mut seen, "\n\n").await;
+    let line = seen.lines().next().unwrap();
+    line.strip_prefix("retry: ")
+        .unwrap_or_else(|| panic!("the stream does not start with its wait: {seen:?}"))
+        .parse()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn each_stream_gets_its_own_wait_before_it_reconnects() {
+    let env = env(busy_pool());
+    let mut waits = Vec::new();
+    for _ in 0..12 {
+        waits.push(retry_of(open(&env).await).await);
+    }
+    for wait in &waits {
+        assert!((5_000..=15_000).contains(wait), "{waits:?}");
+    }
+    // Tabs that lost one service must not come back at one moment.
+    waits.sort_unstable();
+    waits.dedup();
+    assert!(waits.len() > 1, "every stream got the same wait: {waits:?}");
+}
+
+#[tokio::test]
+async fn a_stream_ends_by_itself_when_it_is_old() {
+    let env = env_with_live(
+        busy_pool(),
+        LiveOptions {
+            max_age: Duration::from_millis(300),
+            ..fast()
+        },
+    );
+    let opened = tokio::time::Instant::now();
+    let mut body = open(&env).await.into_body();
+    ended(&mut body).await;
+    let lived = opened.elapsed();
+    // A client that keeps reading is still sent away, and not before half of the age.
+    assert!(lived >= Duration::from_millis(150), "{lived:?}");
+}
+
+#[tokio::test]
+async fn an_old_stream_gives_its_place_back() {
+    let env = env_with_live(
+        busy_pool(),
+        LiveOptions {
+            max_per_address: 1,
+            max_age: Duration::from_millis(200),
+            ..fast()
+        },
+    );
+    let mut first = open(&env).await.into_body();
+    assert_eq!(open(&env).await.status(), StatusCode::TOO_MANY_REQUESTS);
+    ended(&mut first).await;
+    // The body is still held: only the age could have freed the place.
+    assert_eq!(open(&env).await.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn streams_opened_together_do_not_end_together() {
+    let env = env_with_live(
+        busy_pool(),
+        LiveOptions {
+            max_age: Duration::from_millis(800),
+            ..fast()
+        },
+    );
+    let opened = tokio::time::Instant::now();
+    let mut streams = tokio::task::JoinSet::new();
+    for _ in 0..12 {
+        let mut body = open(&env).await.into_body();
+        streams.spawn(async move {
+            ended(&mut body).await;
+            opened.elapsed()
+        });
+    }
+    let lives = streams.join_all().await;
+    let (first, last) = (lives.iter().min().unwrap(), lives.iter().max().unwrap());
+    // After a restart the tabs come back within seconds of each other. They must not all leave
+    // again together when their age runs out.
+    assert!(
+        *last - *first >= Duration::from_millis(50),
+        "they ended together: {lives:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_stream_of_the_panel_has_no_age_and_keeps_its_wait() {
+    let env = env_with_live(
+        busy_pool(),
+        LiveOptions {
+            max_age: Duration::from_millis(50),
+            ..fast()
+        },
+    );
+    let admin = token(&env, TokenKind::Admin, None);
+    let response = env
+        .app
+        .clone()
+        .oneshot(request("GET", "/api/v1/admin/stream", Some(&admin), None))
+        .await
+        .unwrap();
+    let mut body = response.into_body();
+    let mut seen = String::new();
+    pump(&mut body, &mut seen, "retry: 5000\n\n").await;
+    let more = tokio::time::timeout(Duration::from_millis(300), body.frame()).await;
+    assert!(more.is_err(), "the stream of the panel ended: {more:?}");
+}

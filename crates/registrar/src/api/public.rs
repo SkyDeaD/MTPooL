@@ -107,7 +107,7 @@ pub async fn list_nodes(State(app): State<AppState>, headers: HeaderMap) -> Resp
     path = "/api/v1/stream",
     tag = "public",
     responses(
-        (status = 200, description = "Server-sent events: `event: clients` with the numbers of the pool at once and every 5 seconds, `event: changed` with an empty document when the pool has changed and the lists are worth reading again", body = LiveClients, content_type = "text/event-stream"),
+        (status = 200, description = "Server-sent events: `event: clients` with the numbers of the pool at once and every 5 seconds, `event: changed` with an empty document when the pool has changed and the lists are worth reading again. A stream ends by itself after 15 to 30 minutes, whatever the client does; its `retry:` field says how long to wait before opening a new one", body = LiveClients, content_type = "text/event-stream"),
         (status = 429, description = "Too many open streams or requests", body = Problem, content_type = "application/problem+json",
             headers(("Retry-After" = u64, description = "Seconds to wait before trying again")))
     )

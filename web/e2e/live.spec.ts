@@ -60,6 +60,18 @@ test('live: the numbers of a node reach its public page within one tick', async 
   }
 });
 
+// The service ends a stream when it is old. The browser opens a new one by itself, after the wait the
+// stream told it.
+test('live: a stream that ended opens again by itself after its wait', async ({ page }) => {
+  let asked = 0;
+  await page.route('**/api/v1/stream', (route) => {
+    asked += 1;
+    return route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'retry: 50\n\n' });
+  });
+  await page.goto('/');
+  await expect.poll(() => asked, { timeout: 5000 }).toBeGreaterThanOrEqual(3);
+});
+
 // A refused stream ends for good in the browser: only the page itself can ask again.
 test('live: a page refused the stream keeps working and asks again later', async ({ page }) => {
   let asked = 0;

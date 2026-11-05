@@ -4752,7 +4752,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Server-sent events: `event: clients` with the numbers of the pool at once and every 5 seconds, `event: changed` with an empty document when the pool has changed and the lists are worth reading again */
+            /** @description Server-sent events: `event: clients` with the numbers of the pool at once and every 5 seconds, `event: changed` with an empty document when the pool has changed and the lists are worth reading again. A stream ends by itself after 15 to 30 minutes, whatever the client does; its `retry:` field says how long to wait before opening a new one */
             200: {
                 headers: {
                     [name: string]: unknown;
