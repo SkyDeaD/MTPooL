@@ -19,6 +19,17 @@ export interface Group {
   fields: Field[];
 }
 
+/**
+ * How long a measurement is good for, in minutes, when three Globalping intervals outlast
+ * `report_max_age_sec`: the pool then holds the longer of the two. Null when the setting is in
+ * force as it stands.
+ */
+export function reportFreshMin(doc: { report_max_age_sec?: number; globalping_interval_sec?: number } | null): number | null {
+  if (!doc || doc.report_max_age_sec === undefined || doc.globalping_interval_sec === undefined) return null;
+  const fresh = doc.globalping_interval_sec * 3;
+  return fresh > doc.report_max_age_sec ? Math.round(fresh / 60) : null;
+}
+
 const sec = (key: string): Field => ({ key, kind: 'sec', min: 1, max: 86400 });
 const mn = (key: string, min = 1, max = 86400): Field => ({ key, kind: 'sec', min, max, unit: 'min' });
 const count = (key: string, max = 1000): Field => ({ key, kind: 'count', min: 1, max });

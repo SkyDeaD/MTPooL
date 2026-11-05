@@ -225,6 +225,14 @@ fn positive(v: u32, field: &'static str) -> Result<(), SettingsError> {
 }
 
 impl Settings {
+    /// How long a report with a verified measurement keeps the node healthy: the setting, but
+    /// never less than three intervals of measurement, so one missed measurement is no reason to
+    /// leave the masters.
+    pub fn report_fresh_sec(&self) -> u32 {
+        self.report_max_age_sec
+            .max(self.globalping_interval_sec.saturating_mul(3))
+    }
+
     pub fn validate(&self) -> Result<(), SettingsError> {
         for (v, field) in [
             (self.heartbeat_interval_sec, "heartbeat_interval_sec"),

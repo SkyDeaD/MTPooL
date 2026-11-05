@@ -333,3 +333,89 @@ async fn no_job_no_measurement() {
     assert!(requests(&server).await.is_empty());
     assert_eq!(gp.take_result(), None);
 }
+
+fn job_every(seconds: u64) -> GpJob {
+    GpJob {
+        interval: Duration::from_secs(seconds),
+        ..job()
+    }
+}
+
+async fn posts(server: &MockServer) -> usize {
+    requests(server)
+        .await
+        .iter()
+        .filter(|r| r.method.as_str() == "POST")
+        .count()
+}
+
+#[tokio::test]
+async fn asked_out_of_turn_the_node_measures_five_minutes_after_the_last_one() {
+    let server = MockServer::start().await;
+    mount_create(&server, 202, CREATE).await;
+    mount_get(&server, 200, FINISHED).await;
+    let ports = FakePorts::new(true);
+    let gp = gp(&server, &ports);
+    gp.set_job(Some(job_every(600)));
+    let t0 = Instant::now();
+
+    gp.tick(t0).await;
+    assert_eq!(posts(&server).await, 1);
+
+    gp.measure_soon(t0 + Duration::from_secs(60));
+    gp.tick(t0 + Duration::from_secs(60)).await;
+    gp.tick(t0 + Duration::from_secs(299)).await;
+    assert_eq!(
+        posts(&server).await,
+        1,
+        "not sooner than 5 minutes after the last"
+    );
+
+    gp.tick(t0 + Duration::from_secs(300)).await;
+    assert_eq!(posts(&server).await, 2, "the planned one would be at 600");
+
+    // The measurement out of turn moved the plan: the next one is an interval after it.
+    gp.tick(t0 + Duration::from_secs(600)).await;
+    assert_eq!(posts(&server).await, 2);
+    gp.tick(t0 + Duration::from_secs(900)).await;
+    assert_eq!(posts(&server).await, 3);
+}
+
+#[tokio::test]
+async fn a_measurement_already_due_soon_is_not_put_off() {
+    let server = MockServer::start().await;
+    mount_create(&server, 202, CREATE).await;
+    mount_get(&server, 200, FINISHED).await;
+    let ports = FakePorts::new(true);
+    let gp = gp(&server, &ports);
+    gp.set_job(Some(job_every(300)));
+    let t0 = Instant::now();
+
+    gp.tick(t0).await;
+    gp.measure_soon(t0 + Duration::from_secs(10));
+    gp.tick(t0 + Duration::from_secs(300)).await;
+    assert_eq!(posts(&server).await, 2);
+}
+
+#[tokio::test]
+async fn after_a_429_the_node_is_not_asked_out_of_turn_for_an_interval() {
+    let server = MockServer::start().await;
+    mount_create(&server, 429, "{}").await;
+    let ports = FakePorts::new(true);
+    let gp = gp(&server, &ports);
+    gp.set_job(Some(job_every(600)));
+    let t0 = Instant::now();
+
+    gp.tick(t0).await;
+    assert_eq!(gp.take_result(), Some(no_data("rate_limited")));
+
+    gp.measure_soon(t0 + Duration::from_secs(300));
+    gp.tick(t0 + Duration::from_secs(300)).await;
+    assert_eq!(
+        posts(&server).await,
+        1,
+        "the limit of Globalping is not pressed"
+    );
+    gp.tick(t0 + Duration::from_secs(600)).await;
+    assert_eq!(posts(&server).await, 2);
+}

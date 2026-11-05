@@ -34,6 +34,10 @@ pub struct GpJob {
     pub interval: Duration,
 }
 
+/// A measurement asked for out of turn comes no sooner than this after the last one began: at
+/// most 12 an hour, 240 probes of the 250 Globalping gives an address.
+pub const OUT_OF_TURN_GAP: Duration = Duration::from_secs(300);
+
 /// How long one request may take.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long the loop sleeps between two ticks.
@@ -62,6 +66,10 @@ struct State {
     result: Option<GpReport>,
     /// Bumped by `restart`: the result of a measurement that began before it is dropped.
     epoch: u64,
+    /// When the last measurement began.
+    started_at: Option<Instant>,
+    /// After a 429 the registrar's requests wait for the plan: the limit is not pressed.
+    limited_until: Option<Instant>,
 }
 
 struct Inner {
@@ -128,6 +136,25 @@ impl GpLoop {
         state.result = None;
     }
 
+    /// The registrar asks for a measurement out of turn. It moves the next planned one to `now`,
+    /// but no sooner than [`OUT_OF_TURN_GAP`] after the last one began, nor before the plan after
+    /// a 429. The plan then counts from it.
+    pub fn measure_soon(&self, now: Instant) {
+        let mut state = self.state();
+        let mut earliest = now;
+        if let Some(started) = state.started_at {
+            earliest = earliest.max(started + OUT_OF_TURN_GAP);
+        }
+        if let Some(limited) = state.limited_until {
+            earliest = earliest.max(limited);
+        }
+        if let Some(next) = state.next_at
+            && earliest < next
+        {
+            state.next_at = Some(earliest);
+        }
+    }
+
     /// The result that has not been reported yet. A measurement id is good for one report, so it
     /// is handed out once.
     pub fn take_result(&self) -> Option<GpReport> {
@@ -165,9 +192,13 @@ impl GpLoop {
             return;
         }
 
+        self.state().started_at = Some(now);
         let report = match self.measure(&job).await {
             Ok(id) => GpReport::Measured { id },
             Err(reason) => {
+                if reason == RATE_LIMITED {
+                    self.state().limited_until = Some(now + job.interval);
+                }
                 tracing::warn!(
                     reason,
                     next_try_sec = job.interval.as_secs(),

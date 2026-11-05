@@ -167,6 +167,11 @@ pub struct AgentConfig {
     /// plain fields, as older agents did.
     #[serde(default)]
     pub report_other_users: bool,
+    /// The registrar asks for a Globalping measurement out of turn: the planned one is late, or
+    /// the node is suspected of a block. The agent keeps its own limits: no sooner than 5 minutes
+    /// after the last measurement began, nor within an interval after a 429.
+    #[serde(default)]
+    pub measure_now: bool,
 }
 
 /// `POST /agent/update`: the agent says which version it runs and asks whether to update.

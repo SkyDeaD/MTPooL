@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import { messages, t, type Key } from './i18n';
-  import { FIELDS, type Form, type Problem } from './settings-fields';
+  import { FIELDS, reportFreshMin, type Form, type Problem } from './settings-fields';
   import type { SettingsStore } from './settings-store.svelte';
   import Icon from './ui/Icon.svelte';
 
@@ -24,6 +24,8 @@
     return t(`settings.error.${p.code}` as Key);
   }
   const hint = (key: string): string => (`settings.h.${key}` in messages ? t(`settings.h.${key}` as Key) : '');
+  // The saved values, not the ones being typed: the note says what the pool holds now.
+  const fresh = $derived(reportFreshMin(store.doc as Parameters<typeof reportFreshMin>[0]));
 
   async function submit(event: SubmitEvent): Promise<void> {
     event.preventDefault();
@@ -73,6 +75,7 @@
       </div>
     {/if}
     {#if h}<span class="h">{h}</span>{/if}
+    {#if key === 'report_max_age_sec' && fresh !== null}<span class="h">{t('settings.h.report_fresh', { min: fresh })}</span>{/if}
     {#if err}<span class="e"><Icon name="alert" /><span>{problemText(err)}</span></span>{/if}
   </div>
 {/snippet}

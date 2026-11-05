@@ -428,8 +428,8 @@ pub fn is_alive(n: &NodeRecord, now: Ts, s: &Settings) -> bool {
 ///
 /// A reverify node always needs its decisive round. A node in `Quarantine` needs sensors only
 /// while it is alive (a dead server is not a blocked one) and its last Globalping check is
-/// failed, missing or aged out, or the quarantine is already `suspected`. Alive with a good
-/// Globalping check throughout and another condition failing: no sensors.
+/// failed or missing, or the quarantine is already `suspected`. Alive with a good Globalping
+/// check throughout and another condition failing, a stale report included: no sensors.
 pub fn needs_sensors(n: &NodeRecord, now: Ts, s: &Settings) -> bool {
     match n.state {
         NodeState::Pending => n.reverify,
@@ -443,23 +443,39 @@ pub fn needs_sensors(n: &NodeRecord, now: Ts, s: &Settings) -> bool {
             if failed.contains(&FailedCondition::PoolUserTaken) {
                 return false;
             }
-            n.suspected || globalping_unproven(&n.health, &failed)
+            n.suspected || globalping_unproven(&n.health)
         }
         _ => false,
     }
 }
 
-/// The last Globalping check is failed, missing or aged out. `failed` is the node's failed
-/// conditions at the same moment.
-fn globalping_unproven(h: &NodeHealth, failed: &[FailedCondition]) -> bool {
+/// The last Globalping check is failed or missing. A report that aged out is not: the
+/// measurement may not have come for the limit of Globalping, and the first fresh one decides.
+fn globalping_unproven(h: &NodeHealth) -> bool {
     matches!(h.gp, GpStatus::Unknown | GpStatus::Failed { .. })
-        || failed.contains(&FailedCondition::ReportStale)
 }
 
-/// When the next round is due, if the node runs rounds at all.
+/// Whether the registrar asks the agent to measure out of turn: its planned measurement is
+/// late, or the node is suspected and only a fresh measurement can clear it. The agent keeps
+/// its own limits, so asking again on every sync costs nothing.
+pub fn wants_measurement(n: &NodeRecord, now: Ts, s: &Settings) -> bool {
+    if !is_live_state(n.state) {
+        return false;
+    }
+    let late = !younger_than(
+        n.health.last_report,
+        now,
+        s.globalping_interval_sec.saturating_add(60),
+    );
+    late || (n.state == NodeState::Quarantine && n.suspected)
+}
+
+/// When the next round is due, if the node runs rounds at all. A quarantine runs them only
+/// while it is suspected: a node out of the queue for a port, metrics or a stale report has no
+/// round to wait for.
 pub fn next_round_at(n: &NodeRecord, s: &Settings) -> Option<Ts> {
     let runs_rounds = match n.state {
-        NodeState::Quarantine => true,
+        NodeState::Quarantine => n.suspected && !n.health.pool_user_taken,
         NodeState::Pending => n.reverify,
         _ => false,
     };
@@ -471,10 +487,22 @@ pub fn next_round_at(n: &NodeRecord, s: &Settings) -> Option<Ts> {
     } else {
         s.round_interval_sec
     };
-    Some(match n.last_round_at {
+    let paced = match n.last_round_at {
         Some(last) => add_sec(last, interval),
         None => n.state_since,
-    })
+    };
+    // A suspected node that measured green since its last round need not wait: a round can
+    // confirm it at once. Measurements are at least 5 minutes apart, and so are such rounds.
+    // Only when the round could be clean: every other condition held when it measured.
+    if n.state == NodeState::Quarantine
+        && n.suspected
+        && let GpStatus::Ok { at } = n.health.gp
+        && n.last_round_at.is_some_and(|last| at > last)
+        && failed_conditions(&n.health, at, s).is_empty()
+    {
+        return Some(paced.min(at));
+    }
+    Some(paced)
 }
 
 /// Time-driven transitions: triggers, recovery, dead timer, prune timer.
@@ -516,7 +544,7 @@ pub fn tick_node(n: &mut NodeRecord, now: Ts, s: &Settings) -> Vec<LifecycleEven
                 {
                     return Vec::new();
                 }
-                let suspected = is_alive(n, now, s) && globalping_unproven(&n.health, &failed);
+                let suspected = is_alive(n, now, s) && globalping_unproven(&n.health);
                 n.enter_quarantine(now, suspected, failed.clone());
                 return vec![LifecycleEvent::Quarantined { reason: failed }];
             }
@@ -533,7 +561,7 @@ pub fn tick_node(n: &mut NodeRecord, now: Ts, s: &Settings) -> Vec<LifecycleEven
 
 fn tick_quarantine(n: &mut NodeRecord, now: Ts, s: &Settings) -> Vec<LifecycleEvent> {
     let failed = failed_conditions(&n.health, now, s);
-    if is_alive(n, now, s) && globalping_unproven(&n.health, &failed) {
+    if is_alive(n, now, s) && globalping_unproven(&n.health) {
         n.suspected = true;
     }
     if failed.is_empty() {
@@ -953,7 +981,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_no_data_report_runs_sensors() {
+    fn a_stale_report_alone_runs_no_sensors() {
         let mut n = healthy(T0);
         n.health.gp = GpStatus::NoData { at: T0 };
         let now = at(16 * 60);
@@ -964,7 +992,17 @@ mod tests {
                 reason: vec![FailedCondition::ReportStale]
             }]
         );
-        assert!(needs_sensors(&n, now, &s()));
+        assert!(
+            !n.suspected,
+            "a measurement that did not come is no sign of a block"
+        );
+        assert!(!needs_sensors(&n, now, &s()));
+        // Still alive a quarter of an hour later, and still no sensors.
+        let later = at(30 * 60);
+        beat(&mut n, later);
+        assert!(is_alive(&n, later, &s()));
+        assert!(!needs_sensors(&n, later, &s()));
+        assert_eq!(next_round_at(&n, &s()), None, "no round is due either");
     }
 
     #[test]
@@ -1023,7 +1061,7 @@ mod tests {
     }
 
     #[test]
-    fn report_stale_then_fresh_ok_still_needs_clean_rounds() {
+    fn a_stale_report_ends_with_the_first_fresh_green_measurement() {
         let mut n = healthy(T0);
         let now = at(16 * 60);
         beat(&mut n, now);
@@ -1033,26 +1071,106 @@ mod tests {
                 reason: vec![FailedCondition::ReportStale]
             }]
         );
-        assert!(n.suspected);
 
         let later = at(17 * 60);
         n.health = good_health(later);
-        assert!(tick_node(&mut n, later, &s()).is_empty());
-        assert_eq!(n.state, NodeState::Quarantine);
-        assert!(needs_sensors(&n, later, &s()));
-
-        let mut blocks = Vec::new();
-        for (i, now) in [later, at(22 * 60)].into_iter().enumerate() {
-            n.health = good_health(now);
-            let r = round(&n, &clean_votes());
-            let events = apply_round(&mut n, &r, &mut blocks, now, &s());
-            if i == 0 {
-                assert!(events.is_empty());
-            } else {
-                assert_eq!(events, vec![LifecycleEvent::Recovered]);
-            }
-        }
+        assert_eq!(
+            tick_node(&mut n, later, &s()),
+            vec![LifecycleEvent::Recovered]
+        );
         assert_eq!(n.state, NodeState::Healthy);
+    }
+
+    #[test]
+    fn a_stale_report_then_a_red_measurement_runs_rounds() {
+        let mut n = healthy(T0);
+        let now = at(16 * 60);
+        beat(&mut n, now);
+        tick_node(&mut n, now, &s());
+        assert!(!n.suspected);
+
+        let later = at(17 * 60);
+        n.health = good_health(later);
+        n.health.gp = GpStatus::Failed { at: later };
+        assert!(tick_node(&mut n, later, &s()).is_empty());
+        assert!(n.suspected);
+        assert!(needs_sensors(&n, later, &s()));
+    }
+
+    #[test]
+    fn a_fresh_green_measurement_makes_the_round_due_at_once() {
+        let mut n = quarantined_gp_failed(T0);
+        let mut blocks = Vec::new();
+        let r = round(&n, &undecided_votes());
+        apply_round(&mut n, &r, &mut blocks, T0, &s());
+        assert_eq!(next_round_at(&n, &s()), Some(at(300)));
+
+        // Still red: the round waits for its interval.
+        n.health.gp = GpStatus::Failed { at: at(60) };
+        assert_eq!(next_round_at(&n, &s()), Some(at(300)));
+
+        // Green: a round can confirm it now.
+        n.health = good_health(at(120));
+        assert_eq!(next_round_at(&n, &s()), Some(at(120)));
+
+        // The round that used it paces the next one again.
+        let r = round(&n, &clean_votes());
+        apply_round(&mut n, &r, &mut blocks, at(120), &s());
+        assert_eq!(next_round_at(&n, &s()), Some(at(420)));
+    }
+
+    #[test]
+    fn a_green_measurement_with_another_condition_failing_keeps_the_pace() {
+        let mut n = quarantined_gp_failed(T0);
+        let mut blocks = Vec::new();
+        let r = round(&n, &undecided_votes());
+        apply_round(&mut n, &r, &mut blocks, T0, &s());
+
+        // Green, but the metrics are down: a round now could not be clean.
+        n.health = good_health(at(120));
+        n.health.metrics.up = false;
+        assert_eq!(next_round_at(&n, &s()), Some(at(300)));
+    }
+
+    #[test]
+    fn clean_votes_of_other_sensors_do_not_clear_a_red_globalping() {
+        let mut n = quarantined_gp_failed(T0);
+        let mut blocks = Vec::new();
+        let votes = [(Gp, ABSTAIN), (Chebur, Vote::Clear), (Rf, Vote::Clear)];
+        for t in [0, 300] {
+            beat(&mut n, at(t));
+            let r = round(&n, &votes);
+            assert!(apply_round(&mut n, &r, &mut blocks, at(t), &s()).is_empty());
+        }
+        assert_eq!(n.state, NodeState::Quarantine);
+        assert_eq!(n.clean_rounds, 0);
+    }
+
+    #[test]
+    fn the_registrar_asks_for_a_measurement_when_the_planned_one_is_late() {
+        let n = healthy(T0);
+        let interval = i64::from(s().globalping_interval_sec);
+        assert!(!wants_measurement(&n, at(interval + 59), &s()));
+        assert!(wants_measurement(&n, at(interval + 60), &s()));
+    }
+
+    #[test]
+    fn the_registrar_asks_for_a_measurement_of_a_suspected_node() {
+        let n = quarantined_gp_failed(T0);
+        assert!(wants_measurement(&n, T0, &s()));
+
+        let mut not_suspected = healthy(T0);
+        not_suspected.health.port_ok = false;
+        tick_node(&mut not_suspected, T0, &s());
+        assert_eq!(not_suspected.state, NodeState::Quarantine);
+        assert!(!wants_measurement(&not_suspected, T0, &s()));
+    }
+
+    #[test]
+    fn a_gone_node_is_not_asked_to_measure() {
+        let mut n = healthy(T0);
+        n.enter_final(NodeState::Dead, T0);
+        assert!(!wants_measurement(&n, at(3600), &s()));
     }
 
     #[test]

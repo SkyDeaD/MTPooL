@@ -51,6 +51,7 @@ export const messages = {
   'vote.reason.timeout': 'сервис не ответил вовремя',
   'vote.reason.unknown_answer': 'ответ не распознан',
   'vote.reason.no_data': 'нет данных',
+  'vote.reason.port_refused': 'порт закрыт',
   'vote.reason.other': 'причина не распознана',
 
   'check.label': 'Проверки ноды',
@@ -77,16 +78,20 @@ export const messages = {
   'quarantine.title': 'Почему нода в карантине',
   'quarantine.unknown': 'Причина не записана: нода попала в карантин до обновления пула.',
   'quarantine.next': 'Нода вернётся в работу, когда причина исчезнет и проверки подтвердят, что адрес доступен.',
+  'outside.title': 'Почему нода вне очереди',
+  'outside.next': 'В блокировке нода не подозревается, сенсоры её не проверяют. Она вернётся в очередь, как только причина исчезнет.',
 
   // Node cells
   'node.state.healthy': 'Работает',
   'node.state.quarantine': 'Карантин',
+  'node.state.outside': 'Вне очереди',
   'node.state.banned': 'Забанена',
   'node.role.master': 'Мастер',
   'node.role.queue': 'В очереди, {n}-я',
   'node.role.nextMaster': 'следующая на смену',
   'node.role.rotates': 'смена через {time}',
   'node.role.outside': 'Вне очереди',
+  'node.role.none': '—',
   'node.role.nextRound': 'следующий раунд через {time}',
 
   // Bans table
@@ -176,6 +181,7 @@ export const messages = {
   'stats.group.masters': 'Мастера',
   'stats.group.queue': 'В очереди',
   'stats.group.quarantine': 'Карантин',
+  'stats.group.outside': 'Вне очереди',
   'stats.col.node': 'Нода',
   'stats.col.state': 'Состояние',
   'stats.col.role': 'Роль',

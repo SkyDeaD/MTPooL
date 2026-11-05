@@ -907,6 +907,7 @@ async fn mtproxyl_is_a_sink_for_the_registrars_config() {
         },
         antiscan: true,
         report_other_users: false,
+        measure_now: false,
     };
     rig.engine.apply(&config).await;
     assert_eq!(rig.cli().last().map(String::as_str), Some("restart"));

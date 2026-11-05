@@ -25,7 +25,8 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use mtpool_core::{
     AbstainReason, Command, EngineKind, Event, EventKind, Generation, NodeAction, NodeId,
-    NodeState, Reply, ReplyId, TrafficCounters, Ts, Vote, lifecycle::RejectReason,
+    NodeState, Reply, ReplyId, TrafficCounters, Ts, Vote,
+    lifecycle::{RejectReason, wants_measurement},
 };
 use mtpool_protocol::agent::{
     AgentConfig, AgentUser, ERROR_POOL_USER_TAKEN, Empty, EmptyRequest, EnrollRequest,
@@ -982,6 +983,7 @@ pub async fn report(
 )]
 pub async fn config(State(app): State<AppState>, auth: NodeAuth) -> Result<Response, Failure> {
     let id = auth.node_id;
+    let now = (app.clock)();
     let seen = app
         .actor
         .inspect(move |state| {
@@ -1009,6 +1011,7 @@ pub async fn config(State(app): State<AppState>, auth: NodeAuth) -> Result<Respo
                 },
                 antiscan: true,
                 report_other_users: true,
+                measure_now: wants_measurement(node, now, s),
             }))
         })
         .await

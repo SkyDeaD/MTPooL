@@ -143,6 +143,19 @@ describe('settings', () => {
     expect(key('rotation_ttl_sec').closest('.f')?.textContent).toContain(t('settings.unit.min'));
   });
 
+  it('settings_say_when_three_measurement_intervals_outlast_the_report_age', async () => {
+    // 3 × 300 s is not longer than 900 s: the setting is in force as it stands.
+    await openSettings();
+    const note = t('settings.h.report_fresh', { min: 30 });
+    expect(key('report_max_age_sec').closest('.f')?.textContent).not.toContain(note);
+    if (app) unmount(app);
+    app = undefined;
+    api = fakeAdmin();
+    api.mock.state.settings.globalping_interval_sec = 600;
+    await openSettings();
+    expect(key('report_max_age_sec').closest('.f')?.textContent).toContain(note);
+  });
+
   it('settings_unsaved_warning', async () => {
     await openSettings();
     const form = formOf('rotation_ttl_sec');
@@ -236,6 +249,36 @@ describe('nodes list and search', () => {
     await click(chip(t('panel.nodes.filter.prob')));
     expect(rowsOf()[0]).toBe('theta-m1d7z');
     expect(rowsOf()).not.toContain('alpha-k3m2q');
+  });
+
+  it('nodes_split_a_quarantine_from_nodes_only_out_of_the_queue', async () => {
+    const theta = api.mock.state.nodes.find((n) => n.id === 'theta-m1d7z');
+    api.mock.state.nodes.push({ ...theta, id: 'iota-p2k8v', suspected: undefined, quarantine_reasons: ['tcp'], failed: ['tcp'], next_round_at: null });
+    start('#/nodes');
+    await login();
+    await settle(50);
+    await click(chip(t('panel.nodes.filter.prob')));
+    expect(chip(t('panel.nodes.filter.prob')).querySelector('b')?.textContent).toBe('2');
+    const groups = [...document.querySelectorAll('tbody tr.grp')].map((g) => g.textContent ?? '');
+    expect(groups).toHaveLength(2);
+    expect(groups[0]).toContain(t('panel.nodes.group.quarantine'));
+    expect(groups[1]).toContain(t('panel.nodes.group.outside'));
+    expect(rowsOf().slice(0, 2)).toEqual(['theta-m1d7z', 'iota-p2k8v']);
+  });
+
+  it('the_overview_tells_a_quarantine_from_a_node_out_of_the_queue', async () => {
+    const theta = api.mock.state.nodes.find((n) => n.id === 'theta-m1d7z');
+    api.mock.state.nodes.push({ ...theta, id: 'iota-p2k8v', suspected: undefined, quarantine_reasons: ['tcp'], failed: ['tcp'], next_round_at: null });
+    start('#/overview');
+    await login();
+    await settle(50);
+    expect(text()).toContain(t('panel.overview.quarantined', { id: 'theta-m1d7z' }));
+    expect(text()).toContain(t('panel.overview.outside', { id: 'iota-p2k8v' }));
+    expect(text()).not.toContain(t('panel.overview.quarantined', { id: 'iota-p2k8v' }));
+    expect(text()).toContain(`${t('panel.overview.nodesTrouble', { n: 1 })}${t('panel.overview.nodesOutside', { n: 1 })}`);
+    // The copy keeps the old round of theta, one sensor saw a block there; it is not said of iota.
+    const iota = [...document.querySelectorAll('.attn .it')].find((it) => it.textContent?.includes('iota-p2k8v'))!;
+    expect(iota.textContent).not.toContain(t('panel.overview.oneVote'));
   });
 
   it('nodes_sort_by_clients_and_search_text', async () => {

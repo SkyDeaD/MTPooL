@@ -961,6 +961,12 @@ export interface components {
             /** @description Whether the agent defends the port against active probing. */
             antiscan: boolean;
             intervals: components["schemas"]["Intervals"];
+            /**
+             * @description The registrar asks for a Globalping measurement out of turn: the planned one is late, or
+             *     the node is suspected of a block. The agent keeps its own limits: no sooner than 5 minutes
+             *     after the last measurement began, nor within an interval after a 429.
+             */
+            measure_now?: boolean;
             /** Format: int32 */
             port: number;
             /**
@@ -1249,7 +1255,8 @@ export interface components {
         LastVote: {
             /**
              * @description Why the sensor abstained: `not_configured`, `key_rejected`, `unavailable`, `rate_limited`,
-             *     `timeout`, `unknown_answer` or `no_data`. Only for `abstain`.
+             *     `timeout`, `unknown_answer`, `no_data` or `port_refused` (most probes were refused the
+             *     connection: the port is closed). Only for `abstain`.
              */
             reason?: string | null;
             /** @example globalping */
@@ -1541,7 +1548,10 @@ export interface components {
             last_round?: components["schemas"]["LastRound"] | null;
             /** @description For a master: since when it has been master (its earliest slot start, RFC 3339, UTC). */
             master_since?: string | null;
-            /** @description When the next sensor round of the node is due (RFC 3339, UTC). */
+            /**
+             * @description When the next sensor round of the node is due (RFC 3339, UTC). Only for a node the
+             *     sensors check: suspected of a block in quarantine, or a node on reverify.
+             */
             next_round_at?: string | null;
             /**
              * Format: int64
@@ -1581,6 +1591,12 @@ export interface components {
             state: components["schemas"]["NodeState"];
             /** @description When the node entered its current state. RFC 3339, UTC. */
             state_since: string;
+            /**
+             * @description In quarantine and suspected of a block: the sensors check the address. A node in
+             *     quarantine without it is only out of the queue (a port, metrics, a stale report). Absent
+             *     in other states.
+             */
+            suspected?: boolean;
         };
         /** @description A ban in the activity feed. */
         RecentBan: {

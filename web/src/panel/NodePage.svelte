@@ -65,7 +65,7 @@
       <h1>{id}</h1>
       {#if node.data}
         {@const n = node.data}
-        <StateCell state={n.state} />
+        <StateCell state={n.state} suspected={n.suspected} />
         {#if n.is_master}<MasterTag domain={n.domains[0] ? shortDomain(n.domains[0]) : undefined} />{/if}
         <span class="sub"><span class="mono">{n.full_ip}:{n.port}</span>, {t('node.engine', { name: ENGINE_NAMES[n.engine] ?? n.engine })}, <a href={`/node/?id=${encodeURIComponent(id)}`}>{t('panel.node.public')}</a></span>
         <span class="sp"></span>
@@ -111,7 +111,7 @@
         </section>
       </div>
 
-      {#if n.state === 'quarantine'}<QuarantineNote reasons={n.quarantine_reasons?.length ? n.quarantine_reasons : n.failed} />{/if}
+      {#if n.state === 'quarantine'}<QuarantineNote reasons={n.quarantine_reasons?.length ? n.quarantine_reasons : n.failed} suspected={n.suspected} />{/if}
 
       {#if n.last_round}
         <section class="t">

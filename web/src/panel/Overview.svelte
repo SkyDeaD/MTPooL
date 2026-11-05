@@ -40,9 +40,9 @@
   const nodes = $derived(data.nodes.data);
   const status = $derived(data.status.data);
   const groups = $derived(nodes ? panelGroups(nodes) : null);
-  const pool = $derived(groups ? groups.masters.length + groups.queue.length + groups.quarantine.length : 0);
+  const outOfWork = $derived(groups ? [...groups.quarantine, ...groups.outside] : []);
+  const pool = $derived(groups ? groups.masters.length + groups.queue.length + outOfWork.length : 0);
   const working = $derived(groups ? groups.masters.length + groups.queue.length : 0);
-  const trouble = $derived(groups ? groups.quarantine.length : 0);
 
   const hosts = $derived((domains.data ?? []).filter((d) => !d.folded_into));
   const withMaster = $derived(hosts.filter((d) => d.masters.length > 0).length);
@@ -63,7 +63,7 @@
 
   const dnsBroken = $derived(!!status?.dns.last_error);
   const silent = $derived(status ? status.sensors.filter((s) => !s.configured) : []);
-  const attention = $derived((groups?.quarantine.length ?? 0) + (dnsBroken ? 1 : 0) + silent.length);
+  const attention = $derived(outOfWork.length + (dnsBroken ? 1 : 0) + silent.length);
   const calm = $derived(groups !== null && status !== null && attention === 0);
 
   const unban = (id: string) =>
@@ -75,7 +75,8 @@
     const next = left !== null && left > 0 ? t('panel.overview.nextRound', { span: formatSpan(left) }) : '';
     const failed = whyText(n.quarantine_reasons?.length ? n.quarantine_reasons : n.failed);
     const why = failed && `${failed[0].toUpperCase()}${failed.slice(1)}.`;
-    return [why, blocked === 1 ? t('panel.overview.oneVote') : '', next].filter(Boolean).join(' ');
+    // A node out of the queue is not checked by the sensors: an old round says nothing of it now.
+    return [why, n.suspected && blocked === 1 ? t('panel.overview.oneVote') : '', next].filter(Boolean).join(' ');
   }
   const stale = $derived(data.nodes.stale || data.status.stale || domains.stale);
 </script>
@@ -94,11 +95,11 @@
     <section class={['t', dnsBroken ? 'bad-e' : 'warn-e']}>
       <div class="th"><h2>{t('panel.overview.attention', { n: attention })}</h2></div>
       <div class="attn">
-        {#each groups.quarantine as n (n.id)}
+        {#each outOfWork as n (n.id)}
           <div class="it">
             <Icon name="alert" lg />
             <div class="tx">
-              <div class="b">{t('panel.overview.quarantined', { id: n.id })}</div>
+              <div class="b">{n.suspected ? t('panel.overview.quarantined', { id: n.id }) : t('panel.overview.outside', { id: n.id })}</div>
               <div class="muted sm">{quarantineText(n)}</div>
             </div>
             <a class="btn s" href={hrefOf('node', n.id)}>{t('panel.overview.openNode')}</a>
@@ -139,7 +140,7 @@
       <span class="v">{groups ? t('panel.overview.of', { a: working, b: pool }) : '—'}</span>
       <span class="s">
         {#if groups}
-          {t('panel.overview.nodesNote', { m: groups.masters.length, q: groups.queue.length })}{trouble > 0 ? t('panel.overview.nodesTrouble', { n: trouble }) : ''}
+          {t('panel.overview.nodesNote', { m: groups.masters.length, q: groups.queue.length })}{groups.quarantine.length > 0 ? t('panel.overview.nodesTrouble', { n: groups.quarantine.length }) : ''}{groups.outside.length > 0 ? t('panel.overview.nodesOutside', { n: groups.outside.length }) : ''}
         {/if}
       </span>
     </section>

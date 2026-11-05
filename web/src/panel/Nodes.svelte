@@ -38,10 +38,10 @@
     return !q || `${n.id} ${n.full_ip} ${ENGINE_NAMES[n.engine]}`.toLowerCase().includes(q);
   };
   const count = $derived({
-    all: groups ? groups.masters.length + groups.queue.length + groups.quarantine.length : 0,
+    all: groups ? groups.masters.length + groups.queue.length + groups.quarantine.length + groups.outside.length : 0,
     master: groups?.masters.length ?? 0,
     queue: groups?.queue.length ?? 0,
-    prob: groups?.quarantine.length ?? 0,
+    prob: groups ? groups.quarantine.length + groups.outside.length : 0,
   });
   const order = (rows: AdminNode[]) => {
     if (!sort) return rows;
@@ -51,11 +51,12 @@
   const sections = $derived(
     groups
       ? [
-          { key: 'prob', title: t('panel.nodes.group.quarantine'), rows: groups.quarantine },
-          { key: 'master', title: t('panel.nodes.group.masters'), rows: groups.masters },
-          { key: 'queue', title: t('panel.nodes.group.queue'), rows: groups.queue },
+          { key: 'quarantine', chip: 'prob', title: t('panel.nodes.group.quarantine'), rows: groups.quarantine },
+          { key: 'outside', chip: 'prob', title: t('panel.nodes.group.outside'), rows: groups.outside },
+          { key: 'master', chip: 'master', title: t('panel.nodes.group.masters'), rows: groups.masters },
+          { key: 'queue', chip: 'queue', title: t('panel.nodes.group.queue'), rows: groups.queue },
         ]
-          .filter((s) => filter === 'all' || filter === s.key)
+          .filter((s) => filter === 'all' || filter === s.chip)
           .map((s) => ({ ...s, rows: order(s.rows.filter(match)) }))
           .filter((s) => s.rows.length > 0)
       : [],
@@ -134,7 +135,7 @@
                         <span class="mono">{node.full_ip}:{node.port}</span>, {ENGINE_NAMES[node.engine]}{#if node.owner_name}, {node.owner_name}{/if}
                       </div></td
                     >
-                    <td data-l={t('stats.col.state')}><StateCell state={node.state} reasons={node.quarantine_reasons} /></td>
+                    <td data-l={t('stats.col.state')}><StateCell state={node.state} suspected={node.suspected} reasons={node.quarantine_reasons} /></td>
                     <td data-l={t('stats.col.role')}><RoleCell {node} now={clock.ms} /></td>
                     <td data-l={t('stats.col.checks')}><ChecksCell checks={node.checks} /></td>
                     <td class="n" data-l={t('stats.col.availability')}>{formatAvailability(node.availability_bp)}</td>

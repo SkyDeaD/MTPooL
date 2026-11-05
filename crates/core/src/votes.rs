@@ -23,6 +23,8 @@ pub enum AbstainReason {
     Timeout,
     UnknownAnswer,
     NoData,
+    /// Most probes were refused the connection: the port is closed, which is not a block.
+    PortRefused,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +156,7 @@ mod tests {
             AbstainReason::Timeout,
             AbstainReason::UnknownAnswer,
             AbstainReason::NoData,
+            AbstainReason::PortRefused,
         ] {
             let a = Vote::Abstain(reason);
             assert_eq!(

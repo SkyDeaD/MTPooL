@@ -37,6 +37,17 @@ describe('model', () => {
     expect(g.masters.map((n) => n.id)).toEqual(['alpha-k3m2q', 'beta-r8t4w', 'gamma-x2n9d']);
     expect(g.queue.map((n) => n.id)).toEqual(['epsilon-h4j6s', 'zeta-w9b3y', 'eta-c5f8l']);
     expect(g.quarantine.map((n) => n.id)).toEqual(['theta-m1d7z']);
+    expect(g.outside).toEqual([]);
+  });
+
+  it('a_quarantine_without_a_suspicion_is_only_out_of_the_queue', () => {
+    const outside = { ...list[0], id: 'iota-p2k8v', is_master: false, state: 'quarantine', quarantine_reasons: ['tcp'] } as PublicNode;
+    const g = groupNodes([...list, outside]);
+    expect(g.quarantine.map((n) => n.id)).toEqual(['theta-m1d7z']);
+    expect(g.outside.map((n) => n.id)).toEqual(['iota-p2k8v']);
+    const c = poolCounts([...list, outside]);
+    expect(c.shown).toBe(8);
+    expect(c.working).toBe(6);
   });
 
   it('counts_working_nodes_and_mean_availability', () => {

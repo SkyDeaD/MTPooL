@@ -1915,6 +1915,7 @@ fn agent_config(users: &[(&str, &str)], sni: &str, port: u16) -> AgentConfig {
         },
         antiscan: false,
         report_other_users: false,
+        measure_now: false,
     }
 }
 
