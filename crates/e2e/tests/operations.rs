@@ -9,8 +9,8 @@ use std::time::Instant;
 
 use common::{enroll_healthy, run_registrar_build, secs, settings};
 use mtpool_e2e::{
-    InstallOptions, PROXY_USER_SECRET, ReleaseSpec, Stand, TLS_DOMAIN, TestKey, Token,
-    ensure_test_key, eventually, registrar_release,
+    InstallOptions, PROXY_USER_SECRET, ReleaseSpec, Stand, StandOptions, TLS_DOMAIN, TestKey,
+    Token, ensure_test_key, eventually, pool_release, registrar_release,
 };
 use serde_json::Value;
 
@@ -155,6 +155,65 @@ async fn install_waits_for_a_registrar_that_was_rolled_back() {
         .await
         .expect("the agent answers");
     assert!(version.starts_with("0.9.1"), "{version}");
+}
+
+/// The registrar was installed from the newest release, so its version is that release's and no
+/// newer one is out yet (the stand's registrar is 0.9.0, `e2e/images/registrar/Dockerfile`).
+#[tokio::test]
+#[ignore = "needs Docker and the internet; run with --ignored"]
+async fn first_node_installs_on_a_registrar_of_the_newest_release() {
+    let stand = Stand::up_with(StandOptions {
+        self_update: true,
+        ..StandOptions::default()
+    })
+    .await
+    .expect("the stand comes up");
+    let key = ensure_test_key().expect("the stand's key");
+    let node = stand.node(1);
+    let agent = std::fs::read(node.fetch_agent_binary().await.expect("the agent build"))
+        .expect("the agent build is readable");
+    let registrar = std::fs::read(stand.fetch_registrar_binary().await.expect("the build"))
+        .expect("the registrar build is readable");
+    let target = node.target().await.expect("the target");
+    stand
+        .publish_github_release(&pool_release("0.9.0", &target, &agent, &registrar, &key).unwrap())
+        .await
+        .expect("the release is published");
+
+    // The registrar has looked at the release, and has had the time to act on it.
+    eventually("the registrar reads the release", secs(60), || async {
+        let downloads = stand.github_downloads().await.map_err(|e| e.to_string())?;
+        if downloads.iter().any(|d| d.ends_with("manifest.json")) {
+            Ok(())
+        } else {
+            Err(format!("{downloads:?}"))
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(secs(15)).await;
+    let listing = stand.registrar_exec("ls -la /srv/releases").await.unwrap();
+    eprintln!("the releases directory:\n{}", listing.output);
+    eprintln!(
+        "the release stand-in served: {:?}",
+        stand.github_downloads().await.unwrap()
+    );
+
+    let run = node
+        .install(&InstallOptions {
+            name: "node-one",
+            token: Token::Env(stand.enroll_token()),
+            preset: None,
+            port: None,
+        })
+        .await
+        .expect("the installer runs");
+    eprintln!("the installer said:\n{}", run.output);
+    assert!(run.success, "the first node installs:\n{}", run.output);
+    assert!(
+        node.node_id().await.unwrap().is_some(),
+        "the first node enrolled"
+    );
 }
 
 #[tokio::test]

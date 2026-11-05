@@ -48,6 +48,53 @@ pub fn registrar_release(
     })
 }
 
+/// A whole release as the release job makes it: the agent and the registrar for `target`, and a
+/// manifest signed by `key`.
+pub fn pool_release(
+    version: &str,
+    target: &str,
+    agent: &[u8],
+    registrar: &[u8],
+    key: &TestKey,
+) -> Result<RegistrarRelease> {
+    let sum = |bytes: &[u8]| -> String {
+        Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    };
+    let agent_name = format!("mtpool-agent-{target}");
+    let registrar_name = format!("mtpool-registrar-{target}");
+    let manifest = serde_json::to_vec_pretty(&json!({
+        "version": version,
+        "artifacts": [
+            {
+                "component": "mtpool-agent",
+                "target": target,
+                "name": agent_name,
+                "sha256": sum(agent),
+            },
+            {
+                "component": "mtpool-registrar",
+                "target": target,
+                "name": registrar_name,
+                "sha256": sum(registrar),
+            },
+        ],
+    }))
+    .map_err(|e| StandError(format!("cannot write the manifest: {e}")))?;
+    let signature = key.sign(&manifest)?;
+    Ok(RegistrarRelease {
+        version: version.to_owned(),
+        files: vec![
+            (agent_name, agent.to_vec()),
+            (registrar_name, registrar.to_vec()),
+            ("manifest.json".to_owned(), manifest),
+            ("manifest.json.minisig".to_owned(), signature.into_bytes()),
+        ],
+    })
+}
+
 impl Stand {
     /// The registrar build of the stand's image, copied to this machine.
     pub async fn fetch_registrar_binary(&self) -> Result<PathBuf> {

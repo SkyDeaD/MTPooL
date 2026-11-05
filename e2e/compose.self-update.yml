@@ -1,0 +1,9 @@
+# Added to compose.yml for the scenarios of a registrar that polls for releases: it looks at the
+# GitHub stand-in every two seconds, as a real one looks at GitHub every five minutes.
+services:
+  registrar:
+    environment:
+      MTPOOL_RELEASE_REPO: stand/mtpool
+      MTPOOL_GITHUB_URL: http://fakes:9000/github
+      MTPOOL_GITHUB_DOWNLOAD_URL: http://fakes:9000/github/dl
+      MTPOOL_UPDATE_POLL_SECS: "2"
