@@ -315,6 +315,47 @@ async fn install_says_when_the_pool_refuses_the_node() {
     );
 }
 
+/// The node image has these tools for the other scenarios; a real server may not.
+#[tokio::test]
+#[ignore = "needs Docker and the internet; run with --ignored"]
+async fn install_puts_the_antiscan_tools_in_place() {
+    let stand = Stand::up().await.expect("the stand comes up");
+    offer_release(&stand, &ensure_test_key().expect("the test key")).await;
+    let node = stand.node(1);
+    node.exec("dpkg -r --force-depends ipset iptables")
+        .await
+        .unwrap();
+    let without = node
+        .try_exec("command -v ipset || command -v iptables", &[])
+        .await
+        .unwrap();
+    assert!(!without.success, "the tools are gone before the install");
+
+    let run = node
+        .install(&InstallOptions {
+            name: "node-one",
+            token: Token::Env(stand.enroll_token()),
+            preset: None,
+            port: None,
+        })
+        .await
+        .expect("the installer runs");
+    assert!(run.success, "the installer works:\n{}", run.output);
+
+    eventually("the antiscan list is in place", secs(60), || async {
+        let run = node
+            .try_exec(
+                "ipset list -n ANTISCAN_MTPOOL && iptables -L ANTISCAN_MTPOOL -n",
+                &[],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        if run.success { Ok(()) } else { Err(run.output) }
+    })
+    .await
+    .expect("antiscan works on the installed node");
+}
+
 #[tokio::test]
 #[ignore = "needs Docker and the internet; run with --ignored"]
 async fn preset_telemt_installs_engine() {

@@ -110,6 +110,7 @@ jobs:
             tests: >-
               release_rolls_through_canary_and_batches_and_stops_on_failure
               preset_telemt_installs_engine
+              install_puts_the_antiscan_tools_in_place
           - shard: "3"
             tests: >-
               registrar_updates_and_rolls_back_when_readyz_fails_60s
