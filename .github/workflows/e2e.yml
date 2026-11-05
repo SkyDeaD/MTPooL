@@ -2,11 +2,6 @@ name: E2E
 
 on:
   pull_request:
-    # The stand checks the servers, not the pages: those have the browser job in CI.
-    paths-ignore:
-      - 'web/**'
-      - 'docs/**'
-      - '**/*.md'
   workflow_dispatch:
 
 concurrency:
@@ -21,9 +16,38 @@ defaults:
     shell: bash
 
 jobs:
+  # The stand checks the servers, not the pages: those have the browser job in CI. The job `e2e`
+  # below is required on main, so this is decided inside the run and not with `paths-ignore`: a
+  # required check of a run that never starts holds a pull request forever.
+  scope:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      servers: ${{ steps.files.outputs.servers }}
+    steps:
+      - name: Does this touch more than the pages and the documents
+        id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          servers=true
+          if [ -n "$PR" ]; then
+            files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename')
+            if ! grep -Evq '^(web/|docs/)|\.md$' <<<"$files"; then
+              servers=false
+            fi
+          fi
+          echo "servers=$servers" | tee -a "$GITHUB_OUTPUT"
+
   # The images take most of the time of a stand that has to build them, and the jobs below would
   # each build them from nothing. They are built once and handed over with the key they embed.
   images:
+    needs: scope
+    if: needs.scope.outputs.servers == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -168,3 +192,25 @@ jobs:
           for project in $(docker compose ls --all --format json | jq -r '.[].Name | select(startswith("mtpool-e2e-"))'); do
             docker compose -p "$project" -f e2e/compose.yml down -v || true
           done
+
+  # The one check main requires: the jobs above are many, and they do not run for every change.
+  e2e:
+    needs: [scope, images, stand]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Everything that had to run passed
+        env:
+          SCOPE: ${{ needs.scope.result }}
+          SERVERS: ${{ needs.scope.outputs.servers }}
+          IMAGES: ${{ needs.images.result }}
+          STAND: ${{ needs.stand.result }}
+        run: |
+          echo "scope=$SCOPE servers=$SERVERS images=$IMAGES stand=$STAND"
+          if [ "$SCOPE" != success ]; then
+            exit 1
+          fi
+          if [ "$SERVERS" = true ] && { [ "$IMAGES" != success ] || [ "$STAND" != success ]; }; then
+            exit 1
+          fi
