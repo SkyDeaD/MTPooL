@@ -800,9 +800,6 @@ async fn empty_pool_returns_empty_lists_not_500() {
         "traffic_ingress_bytes": 0,
         "traffic_egress_bytes": 0,
         "traffic_total_bytes": 0,
-        "other_traffic_ingress_bytes": 0,
-        "other_traffic_egress_bytes": 0,
-        "other_traffic_total_bytes": 0,
     });
     let summary = get(&env, "/api/v1/stats/summary").await;
     assert_eq!(summary.status, StatusCode::OK, "{}", summary.body);
@@ -817,7 +814,8 @@ async fn empty_pool_returns_empty_lists_not_500() {
             "kpi",
             "by_reason",
             "recent",
-            "history_ok"
+            "history_ok",
+            "traffic_all_time"
         ])
     );
     assert_eq!(summary["range"], "24h");
@@ -1050,35 +1048,35 @@ async fn bans_newest_first_with_paging_and_fields() {
 }
 
 #[tokio::test]
-async fn stats_keep_the_traffic_of_node_owners_apart() {
+async fn stats_sum_all_the_traffic_of_the_pool_and_of_the_node_owners_apart() {
     let env = env(pool());
+    let long_ago = NOW - 400 * 24 * 3_600_000;
     traffic(&env.store, "alpha-00001", NOW - 3_600_000, 100, 200);
+    traffic(&env.store, "gone-00002", long_ago, 1000, 2000);
     other_traffic(&env.store, "alpha-00001", NOW - 3_500_000, 30, 40);
-    other_traffic(&env.store, "alpha-00001", NOW - 90_000_000, 7, 8);
+    other_traffic(&env.store, "gone-00002", long_ago, 7, 8);
     env.store.flush().unwrap();
+    env.store.retain(Ts(NOW)).unwrap();
 
     let summary = get(&env, "/api/v1/stats/summary?range=24h").await.json();
-    assert_eq!(summary["kpi"]["traffic_ingress_bytes"], 100);
-    assert_eq!(summary["kpi"]["traffic_egress_bytes"], 200);
-    assert_eq!(summary["kpi"]["traffic_total_bytes"], 300);
-    assert_eq!(summary["kpi"]["other_traffic_ingress_bytes"], 30);
-    assert_eq!(summary["kpi"]["other_traffic_egress_bytes"], 40);
-    assert_eq!(summary["kpi"]["other_traffic_total_bytes"], 70);
+    assert_eq!(
+        summary["traffic_all_time"],
+        json!({
+            "ingress_bytes": 1100,
+            "egress_bytes": 2200,
+            "total_bytes": 3300,
+            "other_ingress_bytes": 37,
+            "other_egress_bytes": 48,
+            "other_total_bytes": 85,
+        })
+    );
+    assert_eq!(
+        summary["kpi"]["traffic_total_bytes"], 300,
+        "the figures of a range hold the pool's users of that range"
+    );
 
-    let series = get(&env, "/api/v1/stats/series?range=24h").await.json();
-    let buckets = series["buckets"].as_array().unwrap();
-    let sum = |key: &str| {
-        buckets
-            .iter()
-            .map(|bucket| bucket[key].as_i64().unwrap())
-            .sum::<i64>()
-    };
-    assert_eq!(sum("traffic_total_bytes"), 300);
-    assert_eq!(sum("other_traffic_total_bytes"), 70);
-
-    let month = get(&env, "/api/v1/stats/summary?range=30d").await.json();
-    assert_eq!(month["kpi"]["traffic_total_bytes"], 300);
-    assert_eq!(month["kpi"]["other_traffic_total_bytes"], 85);
+    let week = get(&env, "/api/v1/stats/summary?range=7d").await.json();
+    assert_eq!(week["traffic_all_time"], summary["traffic_all_time"]);
 }
 
 #[tokio::test]
@@ -1103,9 +1101,6 @@ async fn stats_count_bans_traffic_and_reasons() {
             "traffic_ingress_bytes": 1200,
             "traffic_egress_bytes": 4800,
             "traffic_total_bytes": 6000,
-            "other_traffic_ingress_bytes": 0,
-            "other_traffic_egress_bytes": 0,
-            "other_traffic_total_bytes": 0,
         })
     );
     assert_eq!(
@@ -1163,9 +1158,6 @@ async fn stats_count_bans_traffic_and_reasons() {
                     "traffic_ingress_bytes": 1000,
                     "traffic_egress_bytes": 4000,
                     "traffic_total_bytes": 5000,
-                    "other_traffic_ingress_bytes": 0,
-                    "other_traffic_egress_bytes": 0,
-                    "other_traffic_total_bytes": 0,
                 })
             ),
             23 => assert_eq!(
@@ -1178,9 +1170,6 @@ async fn stats_count_bans_traffic_and_reasons() {
                     "traffic_ingress_bytes": 200,
                     "traffic_egress_bytes": 800,
                     "traffic_total_bytes": 1000,
-                    "other_traffic_ingress_bytes": 0,
-                    "other_traffic_egress_bytes": 0,
-                    "other_traffic_total_bytes": 0,
                 })
             ),
             _ => {

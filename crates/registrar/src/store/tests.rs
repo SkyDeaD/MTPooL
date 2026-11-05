@@ -1075,7 +1075,7 @@ fn lift_ban_closes_the_open_rows_of_that_ip() {
 }
 
 #[test]
-fn retention_removes_old_events_30d_traffic_35d() {
+fn retention_removes_old_events_30d_and_keeps_traffic() {
     let (_dir, path) = temp_db();
     let store = Store::open(&path).unwrap();
     let at = |days: i64, extra_ms: i64| Ts(NOW.0 - days * DAY_MS + extra_ms);
@@ -1083,13 +1083,12 @@ fn retention_removes_old_events_30d_traffic_35d() {
     // Events: 29d23h and 30d1h old.
     store.send(event(EventKind::NodeRegistered, at(30, 3_600_000)));
     store.send(event(EventKind::NodeBanned, at(30, -3_600_000)));
-    // Traffic: 34d23h (kept) and 35d1h (removed) old, and one 31d old (kept: not an event).
-    store.send(traffic(at(35, 3_600_000)));
-    store.send(traffic(at(35, -3_600_000)));
+    // Traffic is the total of the pool: a year-old hour stays.
+    store.send(traffic(at(365, 0)));
     store.send(traffic(at(31, 0)));
     store.flush().unwrap();
     assert_eq!(count(&path, "SELECT count(*) FROM events"), 2);
-    assert_eq!(count(&path, "SELECT count(*) FROM traffic"), 3);
+    assert_eq!(count(&path, "SELECT count(*) FROM traffic"), 2);
 
     store.retain(NOW).unwrap();
 
@@ -1102,13 +1101,6 @@ fn retention_removes_old_events_30d_traffic_35d() {
         1
     );
     assert_eq!(count(&path, "SELECT count(*) FROM traffic"), 2);
-    assert_eq!(
-        count(
-            &path,
-            &format!("SELECT count(*) FROM traffic WHERE at < {}", at(35, 0).0)
-        ),
-        0
-    );
 }
 
 #[test]
@@ -1520,41 +1512,100 @@ fn the_migration_finds_old_bans_in_the_journal_of_registrations() {
     );
 }
 
+const HOUR_MS: i64 = 3_600_000;
+
 #[test]
-fn the_migration_keeps_the_traffic_stored_so_far_as_the_pools() {
+fn the_migration_merges_stored_traffic_by_hour_and_keeps_it_the_pools() {
     let (_dir, path) = temp_db();
     database_at(&path, 8);
     let conn = fresh(&path);
-    conn.execute(
-        "INSERT INTO traffic(node, at, from_client, to_client) VALUES ('old-00001', 1000, 10, 20)",
-        [],
-    )
-    .unwrap();
+    let row = |node: &str, at: i64, from: i64, to: i64| {
+        conn.execute(
+            "INSERT INTO traffic(node, at, from_client, to_client) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![node, at, from, to],
+        )
+        .unwrap();
+    };
+    row("old-00001", 10 * HOUR_MS + 1, 10, 20);
+    row("old-00001", 10 * HOUR_MS + 2, 1, 2);
+    row("old-00001", 11 * HOUR_MS, 100, 200);
+    row("new-00002", 10 * HOUR_MS + 3, 5, 6);
     drop(conn);
 
     Store::open(&path).unwrap().close().unwrap();
 
+    assert_eq!(count(&path, "SELECT count(*) FROM traffic"), 3);
     assert_eq!(
         count(
             &path,
-            "SELECT count(*) FROM traffic WHERE node = 'old-00001' AND from_client = 10 \
-             AND to_client = 20 AND other_from_client = 0 AND other_to_client = 0"
+            &format!(
+                "SELECT count(*) FROM traffic WHERE node = 'old-00001' AND at = {} \
+                 AND from_client = 11 AND to_client = 22 \
+                 AND other_from_client = 0 AND other_to_client = 0",
+                10 * HOUR_MS
+            )
         ),
         1
     );
 }
 
 #[test]
-fn traffic_keeps_the_other_users_apart() {
+fn the_migration_keeps_what_the_nodes_counted_of_the_other_users() {
     let (_dir, path) = temp_db();
-    let store = Store::open(&path).unwrap();
-    store.send(traffic(NOW));
-    store.close().unwrap();
+    database_at(&path, 8);
+    let conn = fresh(&path);
+    let stats = |node: &str, json: &str| {
+        conn.execute(
+            "INSERT INTO node_stats(node, stats) VALUES (?1, ?2)",
+            rusqlite::params![node, json],
+        )
+        .unwrap();
+    };
+    stats(
+        "own-00001",
+        r#"{"other_from_client_total": 30, "other_to_client_total": 40}"#,
+    );
+    stats(
+        "none-00002",
+        r#"{"other_from_client_total": 0, "other_to_client_total": 0}"#,
+    );
+    stats(
+        "older-00003",
+        r#"{"from_client_total": 7, "to_client_total": 8}"#,
+    );
+    drop(conn);
+
+    Store::open(&path).unwrap().close().unwrap();
+
+    assert_eq!(count(&path, "SELECT count(*) FROM traffic"), 1);
     assert_eq!(
         count(
             &path,
-            "SELECT count(*) FROM traffic WHERE from_client = 10 AND to_client = 20 \
-             AND other_from_client = 30 AND other_to_client = 40"
+            "SELECT count(*) FROM traffic WHERE node = 'own-00001' AND from_client = 0 \
+             AND to_client = 0 AND other_from_client = 30 AND other_to_client = 40"
+        ),
+        1
+    );
+}
+
+#[test]
+fn traffic_of_one_hour_is_one_row() {
+    let (_dir, path) = temp_db();
+    let store = Store::open(&path).unwrap();
+    let hour = NOW.0 - NOW.0 % HOUR_MS;
+    store.send(traffic(Ts(hour + 1)));
+    store.send(traffic(Ts(hour + HOUR_MS - 1)));
+    store.send(traffic(Ts(hour + HOUR_MS)));
+    store.close().unwrap();
+
+    assert_eq!(count(&path, "SELECT count(*) FROM traffic"), 2);
+    assert_eq!(
+        count(
+            &path,
+            &format!(
+                "SELECT count(*) FROM traffic WHERE at = {hour} AND from_client = 20 \
+                 AND to_client = 40 AND other_from_client = 60 AND other_to_client = 80"
+            )
         ),
         1
     );

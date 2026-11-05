@@ -10,10 +10,7 @@
     "avg_gap_sec": 172800,
     "traffic_ingress_bytes": 25423773696,
     "traffic_egress_bytes": 211864780800,
-    "traffic_total_bytes": 237288554496,
-    "other_traffic_ingress_bytes": 79096184832,
-    "other_traffic_egress_bytes": 118644277248,
-    "other_traffic_total_bytes": 197740462080
+    "traffic_total_bytes": 237288554496
   },
   "by_reason": {
     "cheburcheck+globalping": 2,
@@ -41,5 +38,13 @@
       "lifetime_sec": 5400,
       "gap_sec": null
     }
-  ]
+  ],
+  "traffic_all_time": {
+    "ingress_bytes": 7340032000,
+    "egress_bytes": 61203283968,
+    "total_bytes": 68543315968,
+    "other_ingress_bytes": 2147483648,
+    "other_egress_bytes": 45097156608,
+    "other_total_bytes": 47244640256
+  }
 }

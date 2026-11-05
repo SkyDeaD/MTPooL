@@ -12,6 +12,9 @@ use serde_json::json;
 
 use super::{Shared, StoreError, StoreOptions, WriteOp, now_ts};
 
+/// `traffic` holds one row per node and this length of time.
+const TRAFFIC_ROW_MS: i64 = 3_600_000;
+
 pub(super) type Reply = Sender<Result<(), StoreError>>;
 
 pub(super) enum Msg {
@@ -397,13 +400,19 @@ fn apply_op(conn: &Connection, op: &PersistOp) -> Result<(), StoreError> {
             other_from_client,
             other_to_client,
         } => {
+            // One row per node and hour, whatever the reporting interval.
             conn.prepare_cached(
                 "INSERT INTO traffic(node, at, from_client, to_client, \
-                 other_from_client, other_to_client) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                 other_from_client, other_to_client) VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                 ON CONFLICT(node, at) DO UPDATE SET \
+                 from_client = from_client + excluded.from_client, \
+                 to_client = to_client + excluded.to_client, \
+                 other_from_client = other_from_client + excluded.other_from_client, \
+                 other_to_client = other_to_client + excluded.other_to_client",
             )?
             .execute(params![
                 node.as_str(),
-                at.0,
+                at.0 - at.0.rem_euclid(TRAFFIC_ROW_MS),
                 int(*from_client),
                 int(*to_client),
                 int(*other_from_client),

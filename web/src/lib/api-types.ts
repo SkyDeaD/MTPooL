@@ -1770,18 +1770,6 @@ export interface components {
             bans: number;
             /**
              * Format: int64
-             * @description Bytes from the nodes to clients of the node owners' own users. Not part of `traffic_*`.
-             */
-            other_traffic_egress_bytes: number;
-            /**
-             * Format: int64
-             * @description Bytes from clients of the node owners' own users to the nodes. Not part of `traffic_*`.
-             */
-            other_traffic_ingress_bytes: number;
-            /** Format: int64 */
-            other_traffic_total_bytes: number;
-            /**
-             * Format: int64
              * @description Bytes from the nodes to the pool's clients.
              */
             traffic_egress_bytes: number;
@@ -1820,7 +1808,7 @@ export interface components {
             };
             /** @description RFC 3339, UTC: the start of the range, aligned down to a step. */
             from: string;
-            /** @description Whether the stored history reaches back to `from` (traffic is kept for 35 days). */
+            /** @description Whether the stored history reaches back to `from`. */
             history_ok: boolean;
             kpi: components["schemas"]["StatsPoint"];
             /** @description RFC 3339, UTC: when the figures were computed. */
@@ -1830,6 +1818,7 @@ export interface components {
             recent: components["schemas"]["RecentBan"][];
             /** Format: int64 */
             step_sec: number;
+            traffic_all_time: components["schemas"]["TrafficAllTime"];
         };
         /** @description Counts of things that happened lately. */
         StatusCounts: {
@@ -1877,6 +1866,33 @@ export interface components {
             prefix: string;
             revoked_at?: string | null;
             scope: string;
+        };
+        /** @description All the traffic counted since the pool began, including nodes it no longer has. */
+        TrafficAllTime: {
+            /**
+             * Format: int64
+             * @description Bytes from the nodes to the pool's clients.
+             */
+            egress_bytes: number;
+            /**
+             * Format: int64
+             * @description Bytes from the pool's clients to the nodes.
+             */
+            ingress_bytes: number;
+            /**
+             * Format: int64
+             * @description Bytes from the nodes to clients of the node owners' own users. Not part of `total_bytes`.
+             */
+            other_egress_bytes: number;
+            /**
+             * Format: int64
+             * @description Bytes from clients of the node owners' own users to the nodes. Not part of `total_bytes`.
+             */
+            other_ingress_bytes: number;
+            /** Format: int64 */
+            other_total_bytes: number;
+            /** Format: int64 */
+            total_bytes: number;
         };
         /** @description The answer to `POST /agent/update`. */
         UpdateOffer: {

@@ -14,7 +14,7 @@
   // How often the pool loses nodes and how long they live: three figures, a chart and the log.
   let { fetchFn }: { fetchFn?: typeof fetch } = $props();
 
-  type Metric = 'bans' | 'gap' | 'life' | 'traffic' | 'other';
+  type Metric = 'bans' | 'gap' | 'life';
   let range = $state<StatsRange>('7d');
   let metric = $state<Metric>('bans');
 
@@ -43,13 +43,8 @@
       ? b.bans
       : metric === 'gap'
         ? (b.avg_gap_sec ?? null)
-        : metric === 'life'
-          ? (b.avg_lifetime_sec ?? null)
-          : metric === 'traffic'
-            ? b.traffic_total_bytes
-            : b.other_traffic_total_bytes;
-  const isTraffic = $derived(metric === 'traffic' || metric === 'other');
-  const unit = $derived(metric === 'bans' ? 'count' : isTraffic ? 'bytes' : 'span');
+        : (b.avg_lifetime_sec ?? null);
+  const unit = $derived(metric === 'bans' ? 'count' : 'span');
 
   const bars = $derived<Bar[]>(
     (ser?.buckets ?? []).map((b) => ({
@@ -61,10 +56,10 @@
   const reasons = $derived(
     sum ? Object.entries(sum.by_reason).sort((a, b) => b[1] - a[1]) : [],
   );
-  const noBansToday = $derived(range === '24h' && !isTraffic && sum !== null && sum.kpi.bans === 0);
+  const noBansToday = $derived(range === '24h' && sum !== null && sum.kpi.bans === 0);
 
   const rangeItems = (['24h', '7d', '30d'] as const).map((value) => ({ value, label: t(`dash.range.${value}`) }));
-  const metricItems = (['bans', 'gap', 'life', 'traffic', 'other'] as const).map((value) => ({ value, label: t(`dash.metric.${value}`) }));
+  const metricItems = (['bans', 'gap', 'life'] as const).map((value) => ({ value, label: t(`dash.metric.${value}`) }));
 </script>
 
 <PublicShell active="dashboard" updatedAt={summary.updatedAt} {stale}>
@@ -93,12 +88,11 @@
       </section>
       <section class="t kpi">
         <span class="l">{t('dash.kpi.traffic')}</span>
-        <span class="v">{sum ? formatBytes(sum.kpi.traffic_total_bytes) : '—'}</span>
-        <span class="s">
-          {sum ? t('dash.kpi.trafficNote', { egress: formatBytes(sum.kpi.traffic_egress_bytes), ingress: formatBytes(sum.kpi.traffic_ingress_bytes) }) : ''}
-        </span>
-        {#if sum && sum.kpi.other_traffic_total_bytes > 0}
-          <span class="s" title={t('clients.otherHint')}>{t('dash.kpi.trafficOther', { size: formatBytes(sum.kpi.other_traffic_total_bytes) })}</span>
+        <span class="v">{sum ? formatBytes(sum.traffic_all_time.total_bytes) : '—'}</span>
+        <span class="s">{t('dash.kpi.trafficPool')}</span>
+        {#if sum && sum.traffic_all_time.other_total_bytes > 0}
+          <span class="v">{formatBytes(sum.traffic_all_time.other_total_bytes)}</span>
+          <span class="s" title={t('clients.otherHint')}>{t('dash.kpi.trafficOther')}</span>
         {/if}
       </section>
     </div>
