@@ -71,6 +71,8 @@ export class Agent {
       port: node.port,
       sni,
       gp: { kind: 'measured', id },
+      // A simulated node runs no check-host check: the sensor abstains at once and does not wait for one.
+      check_host: { kind: 'disabled' },
       metrics: {
         ok: true,
         from_client_total: 1_000_000 + (opts.clients ?? 0) * 1000,
