@@ -22,7 +22,7 @@ const NODES: u8 = 8;
 const IPS: u8 = 6;
 const KINDS: [SensorKind; 3] = [
     SensorKind::Globalping,
-    SensorKind::Cheburcheck,
+    SensorKind::CheckHost,
     SensorKind::RedFlag,
 ];
 

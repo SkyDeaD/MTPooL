@@ -49,4 +49,6 @@ pub use traffic::{TrafficCounters, traffic_delta};
 pub use types::{
     EngineKind, Generation, IdError, NodeId, NodeState, OwnerId, Ts, is_public_ipv4, mask_ip,
 };
-pub use votes::{AbstainReason, RoundVerdict, SensorKind, SensorVote, Vote, judge_round};
+pub use votes::{
+    AbstainReason, RoundVerdict, SensorKind, SensorVote, Vote, judge_reverify, judge_round,
+};
