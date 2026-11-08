@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use mtpool_core::{SensorKind, SensorVote};
 
 pub mod cheburcheck;
+pub mod check_host;
 pub mod globalping;
 pub mod redflag;
 pub mod round;
