@@ -2,6 +2,7 @@
 //! runs the heartbeat, report and config loops. The agent opens no listening socket.
 
 pub mod antiscan;
+pub mod check_host;
 pub mod client;
 pub mod config;
 pub mod dead_kill;

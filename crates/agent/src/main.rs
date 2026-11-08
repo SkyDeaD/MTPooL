@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use mtpool_agent::antiscan::{Antiscan, AntiscanSink, IpsumHttp};
+use mtpool_agent::check_host::{CheckHostLoop, IpSource};
 use mtpool_agent::client::RegistrarClient;
 use mtpool_agent::config::{DEFAULT_CONFIG_PATH, LocalConfig, Overrides};
 use mtpool_agent::engine::http::ReqwestHttp;
@@ -192,6 +193,18 @@ async fn run(config_path: PathBuf) -> ExitCode {
         }
     };
     let gp_task = tokio::spawn(gp.clone().run());
+    let check_host = match CheckHostLoop::new(
+        &overrides.check_host_url,
+        config.check_host_port,
+        IpSource::default(),
+    ) {
+        Ok(check_host) => check_host,
+        Err(error) => {
+            tracing::error!("cannot build the HTTP client for check-host: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let check_host_task = tokio::spawn(check_host.clone().run());
     let memory = ConfigMemory::new();
     let checks = NodeChecks::new(ChecksSetup {
         engine,
@@ -202,6 +215,7 @@ async fn run(config_path: PathBuf) -> ExitCode {
             .with_sources(overrides.ip_sources.clone())
             .with_allow_private(overrides.allow_private_ips),
         gp,
+        check_host,
         memory: memory.clone(),
     });
     let hooks = Hooks {
@@ -230,6 +244,7 @@ async fn run(config_path: PathBuf) -> ExitCode {
     tracing::info!(version = env!("CARGO_PKG_VERSION"), name = %config.name, "mtpool-agent starts");
     let outcome = lifecycle.run(shutdown_signal()).await;
     gp_task.abort();
+    check_host_task.abort();
     antiscan_task.abort();
     if let Some(task) = update_task {
         task.abort();
