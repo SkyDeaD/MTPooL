@@ -189,3 +189,92 @@ async fn without_a_port_nothing_is_read() {
     assert!(runner.calls().is_empty());
     assert_eq!(watch.current(), None);
 }
+
+fn input_rules(rules: &str) -> String {
+    format!("*filter\n:INPUT ACCEPT [0:0]\n:C - [0:0]\n{rules}COMMIT\n")
+}
+
+const DROP_443: &str = "-A INPUT -p tcp -m tcp --dport 443 -m set --match-set scan src -j DROP\n";
+
+#[test]
+fn an_accept_for_the_port_before_the_drop_hides_it() {
+    for accept in [
+        "-A INPUT -p tcp -m tcp --dport 443 -j ACCEPT\n",
+        "-A INPUT -j ACCEPT\n",
+        "-A INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT\n",
+    ] {
+        let save = input_rules(&format!("{accept}{DROP_443}"));
+        assert_eq!(find_port_filter(&save, 443), None, "{accept}");
+    }
+    let in_chain = input_rules(&format!("-A INPUT -j C\n-A C -j ACCEPT\n{DROP_443}"));
+    assert_eq!(
+        find_port_filter(&in_chain, 443),
+        None,
+        "accept in a chain is final"
+    );
+}
+
+#[test]
+fn an_accept_for_another_port_does_not_hide_it() {
+    let save = input_rules(&format!(
+        "-A INPUT -p tcp -m tcp --dport 22 -j ACCEPT\n-A INPUT -p udp -j ACCEPT\n{DROP_443}"
+    ));
+    assert_eq!(find_port_filter(&save, 443), Some("scan".into()));
+}
+
+#[test]
+fn accepting_established_or_loopback_does_not_hide_it() {
+    let save = input_rules(&format!(
+        "-A INPUT -i lo -j ACCEPT\n\
+         -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n\
+         -A INPUT -s 10.0.0.0/8 -j ACCEPT\n\
+         -A INPUT -p tcp -m tcp --dport 443 -m state --state NEW -j ACCEPT\n\
+         -A INPUT -p tcp -m tcp ! --dport 22 -s 10.0.0.1/32 -j ACCEPT\n{DROP_443}"
+    ));
+    assert_eq!(find_port_filter(&save, 443), Some("scan".into()));
+}
+
+#[test]
+fn an_accept_after_the_drop_changes_nothing() {
+    let save = input_rules(&format!("{DROP_443}-A INPUT -j ACCEPT\n"));
+    assert_eq!(find_port_filter(&save, 443), Some("scan".into()));
+}
+
+#[test]
+fn a_return_ends_only_its_own_chain() {
+    let save = input_rules(&format!(
+        "-A INPUT -j C\n-A C -j RETURN\n-A C -m set --match-set hidden src -j DROP\n{DROP_443}"
+    ));
+    assert_eq!(find_port_filter(&save, 443), Some("scan".into()));
+}
+
+#[tokio::test]
+async fn a_failed_read_keeps_the_known_filter() {
+    let runner = Arc::new(ScriptedRunner::new());
+    runner.push_output(0, fixture("direct").as_bytes());
+    runner.push_error(std::io::Error::other("boom"));
+    runner.push_failure(1, "x");
+    runner.push_output(0, fixture("none").as_bytes());
+    let watch = PortFilterWatch::new(runner.clone());
+    let t0 = Instant::now();
+    watch.tick(t0, Some(443)).await;
+    watch.tick(secs(t0, 1800), Some(443)).await;
+    assert_eq!(watch.current(), Some("scan".into()), "error kept it");
+    watch.tick(secs(t0, 3600), Some(443)).await;
+    assert_eq!(watch.current(), Some("scan".into()), "bad status kept it");
+    watch.tick(secs(t0, 5400), Some(443)).await;
+    assert_eq!(watch.current(), None, "a good read clears it");
+}
+
+#[tokio::test]
+async fn a_failed_read_after_a_port_change_knows_no_filter() {
+    let runner = Arc::new(ScriptedRunner::new());
+    runner.push_output(0, fixture("direct").as_bytes());
+    runner.push_failure(1, "x");
+    let watch = PortFilterWatch::new(runner);
+    let t0 = Instant::now();
+    watch.tick(t0, Some(443)).await;
+    assert_eq!(watch.current(), Some("scan".into()));
+    watch.tick(secs(t0, 5), Some(8443)).await;
+    assert_eq!(watch.current(), None);
+}

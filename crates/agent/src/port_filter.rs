@@ -34,6 +34,9 @@ struct Rule<'a> {
     /// The set the rule matches the source address against, if it does so without negation and it
     /// is not the pool's own.
     set: Option<String>,
+    /// Whether nothing but the protocol and the port narrows the rule: it acts on all the pool's
+    /// traffic that gets this far.
+    plain: bool,
     target: Option<&'a str>,
 }
 
@@ -97,6 +100,7 @@ fn parse_rule(tokens: &[String], port: u16) -> Option<Rule<'_>> {
         chain: tokens.get(1)?,
         applies: true,
         set: None,
+        plain: true,
         target: None,
     };
     let mut negated = false;
@@ -120,7 +124,14 @@ fn parse_rule(tokens: &[String], port: u16) -> Option<Rule<'_>> {
                     rule.applies = false;
                 }
             }
+            "-m" | "--match" => {
+                if negated || !matches!(value, "tcp" | "multiport" | "comment") {
+                    rule.plain = false;
+                }
+            }
+            "--comment" if !negated => {}
             "--match-set" => {
+                rule.plain = false;
                 let flags = tokens.get(i + 2).map(String::as_str).unwrap_or_default();
                 let own = value == antiscan::NAME || value == antiscan::TMP_NAME;
                 if !negated && !own && rule.set.is_none() && flags.split(',').next() == Some("src")
@@ -131,6 +142,7 @@ fn parse_rule(tokens: &[String], port: u16) -> Option<Rule<'_>> {
             }
             "-j" | "-g" | "--jump" | "--goto" => rule.target = Some(value),
             _ => {
+                rule.plain = false;
                 negated = false;
                 i += 1;
                 continue;
@@ -163,7 +175,20 @@ pub fn find_port_filter(save: &str, port: u16) -> Option<String> {
         .iter()
         .filter_map(|line| parse_rule(line, port))
         .collect();
-    walk("INPUT", &rules, &declared, &mut vec!["INPUT"])
+    match walk("INPUT", &rules, &declared, &mut vec!["INPUT"]) {
+        Walk::Found(name) => Some(name),
+        _ => None,
+    }
+}
+
+/// How the search of a chain ended.
+enum Walk {
+    Found(String),
+    /// A rule accepts all the pool's traffic: nothing after it is reached.
+    Accepted,
+    /// A rule returns for all the pool's traffic: the rest of the chain is not reached.
+    Returned,
+    End,
 }
 
 fn walk<'a>(
@@ -171,29 +196,35 @@ fn walk<'a>(
     rules: &[Rule<'a>],
     declared: &HashSet<&str>,
     path: &mut Vec<&'a str>,
-) -> Option<String> {
+) -> Walk {
     for rule in rules.iter().filter(|r| r.chain == chain && r.applies) {
         let Some(target) = rule.target else {
             continue;
         };
-        if matches!(target, "DROP" | "REJECT") {
-            if let Some(name) = &rule.set {
-                return Some(name.clone());
+        match target {
+            "DROP" | "REJECT" => {
+                if let Some(name) = &rule.set {
+                    return Walk::Found(name.clone());
+                }
             }
-        } else if declared.contains(target)
-            && target != antiscan::NAME
-            && path.len() <= MAX_DEPTH
-            && !path.contains(&target)
-        {
-            path.push(target);
-            let found = walk(target, rules, declared, path);
-            path.pop();
-            if found.is_some() {
-                return found;
+            "ACCEPT" if rule.plain => return Walk::Accepted,
+            "RETURN" if rule.plain => return Walk::Returned,
+            _ if declared.contains(target)
+                && target != antiscan::NAME
+                && path.len() <= MAX_DEPTH
+                && !path.contains(&target) =>
+            {
+                path.push(target);
+                let outcome = walk(target, rules, declared, path);
+                path.pop();
+                if matches!(outcome, Walk::Found(_) | Walk::Accepted) {
+                    return outcome;
+                }
             }
+            _ => {}
         }
     }
-    None
+    Walk::End
 }
 
 type SaveFuture = Pin<Box<dyn Future<Output = io::Result<Output>> + Send>>;
@@ -242,7 +273,8 @@ impl PortFilterWatch {
             self.set(None);
             return;
         };
-        let due = last.port != Some(port)
+        let changed = last.port != Some(port);
+        let due = changed
             || last
                 .at
                 .is_none_or(|at| now.saturating_duration_since(at) >= READ_EVERY);
@@ -253,11 +285,14 @@ impl PortFilterWatch {
             port: Some(port),
             at: Some(now),
         };
-        let name = self
-            .read()
-            .await
-            .and_then(|save| find_port_filter(&save, port));
-        self.set(name);
+        if changed {
+            // What was found was for another port.
+            self.set(None);
+        }
+        // A read that failed knows nothing: what was found before stays.
+        if let Some(save) = self.read().await {
+            self.set(find_port_filter(&save, port));
+        }
     }
 
     /// The output of `iptables-save`; what goes wrong is logged without the output.
