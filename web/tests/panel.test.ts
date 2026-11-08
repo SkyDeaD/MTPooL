@@ -376,6 +376,19 @@ describe('node page', () => {
     expect(text()).toContain(t('panel.node.hint'));
   });
 
+  it('the_panel_explains_a_disputed_globalping', async () => {
+    api.mock.state.nodes.find((n: any) => n.id === 'alpha-k3m2q').globalping_disputed = true;
+    start('#/nodes/alpha-k3m2q');
+    await login();
+    expect(text()).toContain(t('check.disputed.globalping'));
+  });
+
+  it('the_panel_says_nothing_of_a_dispute_for_an_undisputed_node', async () => {
+    start('#/nodes/alpha-k3m2q');
+    await login();
+    expect(text()).not.toContain(t('check.disputed.globalping'));
+  });
+
   it('the_panel_shows_the_port_filter', async () => {
     api.mock.state.nodes.find((n: any) => n.id === 'theta-m1d7z').port_filter = 'drop';
     start('#/nodes/theta-m1d7z');

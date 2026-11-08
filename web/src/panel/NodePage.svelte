@@ -119,6 +119,8 @@
 
       {#if n.state === 'quarantine'}<QuarantineNote reasons={n.quarantine_reasons?.length ? n.quarantine_reasons : n.failed} suspected={n.suspected} />{/if}
 
+      {#if n.state === 'healthy' && n.globalping_disputed}<p class="note" role="status">{t('check.disputed.globalping')}</p>{/if}
+
       {#if n.last_round}
         <section class="t">
           <div class="th">
