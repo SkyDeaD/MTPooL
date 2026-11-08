@@ -266,10 +266,7 @@ impl Rollout {
                     m.stage = Stage::Missed { at: now };
                 }
                 Stage::Updated { .. } => {
-                    let down = nodes
-                        .iter()
-                        .find(|n| n.id == *id)
-                        .is_some_and(dropped);
+                    let down = nodes.iter().find(|n| n.id == *id).is_some_and(dropped);
                     if down {
                         tripped.get_or_insert((
                             "health_drop",
@@ -374,10 +371,7 @@ impl Rollout {
         // A node that dropped is given up on, or the rollout would stop again at once.
         for (id, m) in &mut self.members {
             if matches!(m.stage, Stage::Updated { .. })
-                && nodes
-                    .iter()
-                    .find(|n| n.id == *id)
-                    .is_some_and(dropped)
+                && nodes.iter().find(|n| n.id == *id).is_some_and(dropped)
             {
                 m.stage = Stage::Failed {
                     at: now,
