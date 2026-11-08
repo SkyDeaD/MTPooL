@@ -39,7 +39,7 @@ The project fits if you run several servers with telemt, MTProxyL or MEKO, alone
 - **Joining by token.** A node joins with one command, and the agent finds the installed engine by itself. Your configuration is extended, not overwritten.
 - **Masters and rotation.** A master is a node a domain points at right now. The pool picks masters from the queue of healthy nodes and by default changes them every 30 minutes. The next node replaces a master that fails.
 - **DNS in Cloudflare.** Pool records carry the comment `MTPooL`, and the pool leaves the rest of the zone alone. Optionally, the pool fits the number of domains to the size of the queue.
-- **A ban only on confirmation.** An IP is blocked when at least two sensors out of three see the block: Globalping, Cheburcheck and RedFlag. A faulty sensor does not vote, and a server that is switched off counts as dead, not blocked.
+- **A ban only on confirmation.** An IP is blocked when at least two sensors out of three see the block: Globalping, RedFlag and check-host. A faulty sensor does not vote, and a server that is switched off counts as dead, not blocked.
 
 **People and bots**
 
@@ -76,7 +76,7 @@ The project fits if you run several servers with telemt, MTProxyL or MEKO, alone
 
 - **Node:** a server with an MTProto engine and the `mtpool-agent` agent. The agent reports health and applies pool settings.
 - **Registrar:** one service, `mtpool-registrar`: HTTP API, SQLite database, sensors, DNS, webhooks, public pages and panel.
-- **Sensors:** the outside services Globalping, Cheburcheck and RedFlag. They check whether an IP is blocked from Russia. They vote `Blocked`, `Clear` or `Abstain`. A sensor fault or an unfamiliar answer gives `Abstain`, which is not a vote.
+- **Sensors:** the outside services Globalping, RedFlag and check-host. They check whether an IP is blocked from Russia. They vote `Blocked`, `Clear` or `Abstain`. A sensor fault or an unfamiliar answer gives `Abstain`, which is not a vote.
 
 More, in Russian: [node lifecycle and ban logic](docs/lifecycle.md), [sensors and their limits](docs/sensors.md).
 
@@ -145,7 +145,7 @@ The guides are in Russian.
 | For | Document | About |
 |---|---|---|
 | Pool operators | [Installing the registrar](docs/install-registrar.md) | server, Cloudflare, service keys |
-| Pool operators | [Sensors](docs/sensors.md) | Globalping, Cheburcheck, RedFlag and their limits |
+| Pool operators | [Sensors](docs/sensors.md) | Globalping, RedFlag, check-host and their limits |
 | Pool operators | [Lifecycle](docs/lifecycle.md) | node states, bans, masters, DNS |
 | Pool operators | [Operations](docs/operations.md) | updates, rollback, backups, diagnostics |
 | Node owners | [Adding a node](docs/add-node.md) | `install.sh`, `agent.toml`, leaving the pool |
