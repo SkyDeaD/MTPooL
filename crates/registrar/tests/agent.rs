@@ -2284,7 +2284,8 @@ async fn an_old_vote_of_cheburcheck_stays_readable() {
         .collect();
     assert_eq!(
         names,
-        ["globalping", "check_host", "red_flag", "cheburcheck"]
+        ["globalping", "check_host", "red_flag"],
+        "the old votes are history only: the status does not list the sensor"
     );
 }
 
