@@ -245,3 +245,23 @@ async fn a_restart_inside_the_limit_pause_makes_no_request_until_it_ends() {
     check.tick(t0 + LIMIT_PAUSE).await;
     assert_eq!(requests(&server).await, 2);
 }
+
+#[tokio::test]
+async fn a_shorter_gap_lets_the_next_check_come_sooner() {
+    let server = MockServer::start().await;
+    answer(&server, 200, START).await;
+    let ip = IpSource::default();
+    ip.set(Some("1.1.1.1".parse::<Ipv4Addr>().unwrap()));
+    let check = CheckHostLoop::with_gap(&server.uri(), 22, ip, Duration::from_secs(20)).unwrap();
+    check.set_allowed(true);
+    check.restart();
+    let t0 = Instant::now();
+    check.tick(t0).await;
+    assert_eq!(requests(&server).await, 1);
+
+    check.run_soon(t0 + Duration::from_secs(1));
+    check.tick(t0 + Duration::from_secs(19)).await;
+    assert_eq!(requests(&server).await, 1, "not within the gap");
+    check.tick(t0 + Duration::from_secs(20)).await;
+    assert_eq!(requests(&server).await, 2, "after the gap");
+}

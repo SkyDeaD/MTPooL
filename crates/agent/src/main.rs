@@ -194,10 +194,11 @@ async fn run(config_path: PathBuf) -> ExitCode {
         }
     };
     let gp_task = tokio::spawn(gp.clone().run());
-    let check_host = match CheckHostLoop::new(
+    let check_host = match CheckHostLoop::with_gap(
         &overrides.check_host_url,
         config.check_host_port,
         IpSource::default(),
+        overrides.check_host_gap,
     ) {
         Ok(check_host) => check_host,
         Err(error) => {

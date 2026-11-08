@@ -94,6 +94,10 @@ struct Inner {
     /// The check-host starts by id (the latest start owns a shared id), and in order.
     check_host_starts: BTreeMap<String, CheckHostStart>,
     check_host_log: Vec<Value>,
+    /// Starts the stub turned away with `limit_exceeded`.
+    check_host_limited: Vec<Value>,
+    /// Every read of an answer, with the mode it was answered in.
+    check_host_fetches: Vec<Value>,
     check_host_serial: u64,
     records: Vec<Record>,
     next_record: u64,
@@ -231,7 +235,11 @@ async fn state(State(fakes): State<Fakes>) -> Response {
         StatusCode::OK,
         &json!({
             "dns": dns, "dns_log": inner.dns_log,
-            "check_host": {"starts": inner.check_host_log},
+            "check_host": {
+                "starts": inner.check_host_log,
+                "limited": inner.check_host_limited,
+                "fetches": inner.check_host_fetches,
+            },
             "measurements": inner.created, "calls": inner.calls,
             "github": {
                 "tag": inner.github_release.as_ref().map(|r| r.tag.clone()),
@@ -547,9 +555,6 @@ fn check_host(
     let mode = fakes.mode("check_host");
     match (method, segments) {
         (&Method::GET, ["check-tcp"]) => {
-            if mode == "limited" {
-                return json_response(StatusCode::OK, &json!({"error": "limit_exceeded"}));
-            }
             let target = query.get("host").map(String::as_str).unwrap_or_default();
             let Some((host, port)) = target.rsplit_once(':') else {
                 return json_response(StatusCode::OK, &json!({"error": "invalid_host"}));
@@ -557,6 +562,13 @@ fn check_host(
             let Ok(port) = port.parse::<u64>() else {
                 return json_response(StatusCode::OK, &json!({"error": "invalid_host"}));
             };
+            if mode == "limited" {
+                fakes
+                    .lock()
+                    .check_host_limited
+                    .push(json!({"host": host, "port": port}));
+                return json_response(StatusCode::OK, &json!({"error": "limit_exceeded"}));
+            }
             let mut inner = fakes.lock();
             inner.check_host_serial += 1;
             let id = if mode == "same_id" {
@@ -580,7 +592,10 @@ fn check_host(
             json_response(StatusCode::OK, &document)
         }
         (&Method::GET, ["check-result-extended", id]) => {
-            let inner = fakes.lock();
+            let mut inner = fakes.lock();
+            inner
+                .check_host_fetches
+                .push(json!({"id": id, "mode": mode}));
             let Some(start) = inner.check_host_starts.get(*id) else {
                 return json_response(StatusCode::OK, &json!({}));
             };
@@ -1056,6 +1071,29 @@ mod tests {
         assert_eq!(state["check_host"]["starts"][0]["host"], "192.0.2.7");
         assert_eq!(state["check_host"]["starts"][0]["port"], 443);
         assert!(state["calls"]["check_host"].as_u64() >= Some(7));
+        // Every read of an answer is kept with the mode it was answered in.
+        let fetches = state["check_host"]["fetches"].as_array().expect("fetches");
+        assert_eq!(fetches.len(), 6, "{fetches:?}");
+        assert_eq!(fetches[0], json!({"id": id, "mode": "ok"}));
+        assert_eq!(fetches[5], json!({"id": id, "mode": "garbage"}));
+    }
+
+    #[tokio::test]
+    async fn a_limited_start_is_kept_apart_from_the_starts() {
+        let app = router(Fakes::default());
+        assert_eq!(control(&app, "check_host", "limited").await, StatusCode::OK);
+        let (_, answer) = json_of(
+            &app,
+            get("/check-host/check-tcp?host=192.0.2.9:443&node=ru1.node.check-host.net"),
+        )
+        .await;
+        assert_eq!(answer["error"], "limit_exceeded");
+        let state = json_of(&app, get("/__state")).await.1;
+        assert_eq!(state["check_host"]["starts"], json!([]));
+        assert_eq!(
+            state["check_host"]["limited"],
+            json!([{"host": "192.0.2.9", "port": 443}])
+        );
     }
 
     #[tokio::test]

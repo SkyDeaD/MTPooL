@@ -120,7 +120,8 @@ jobs:
           - shard: "4"
             tests: >-
               restart_under_load_no_false_deaths
-              one_vote_no_ban_two_votes_ban
+              globalping_and_check_host_ban
+              a_closed_check_port_abstains
               token_not_visible_in_ps
               install_rejects_bad_signature
           - shard: "5"
@@ -139,7 +140,7 @@ jobs:
             tests: >-
               stopped_engine_dead_not_banned
               gp_403_with_tls_healthy
-              cheburcheck_fast_flag_alone_no_vote
+              false_globalping_returns_after_one_clean_round
               first_node_installs_on_a_registrar_of_the_newest_release
           - shard: "8"
             tests: >-
@@ -149,6 +150,11 @@ jobs:
               install_rejects_port_mismatch
               install_says_when_the_pool_refuses_the_node
               install_waits_for_a_registrar_that_was_rolled_back
+          - shard: "9"
+            tests: >-
+              a_disputed_node_returns_to_quarantine_on_blocked
+              a_filtered_node_needs_both_russian_checks_to_ban
+              check_host_answers_that_give_no_vote
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

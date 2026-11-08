@@ -60,6 +60,8 @@ struct Inner {
     base: String,
     port: u16,
     ip: IpSource,
+    /// The least time between two starts. [`GAP`] unless a test stand shortens it.
+    gap: Duration,
     state: Mutex<State>,
 }
 
@@ -73,6 +75,17 @@ impl CheckHostLoop {
     /// `base` is the address of the service, `https://check-host.net` for the real one. `port` is
     /// the port to check, 0 switches the check off.
     pub fn new(base: &str, port: u16, ip: IpSource) -> Result<CheckHostLoop, reqwest::Error> {
+        CheckHostLoop::with_gap(base, port, ip, GAP)
+    }
+
+    /// [`CheckHostLoop::new`] with another least time between two starts. The real service counts
+    /// by the node's address, so only a test stand has a reason to lower it.
+    pub fn with_gap(
+        base: &str,
+        port: u16,
+        ip: IpSource,
+        gap: Duration,
+    ) -> Result<CheckHostLoop, reqwest::Error> {
         let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
@@ -86,6 +99,7 @@ impl CheckHostLoop {
                 base: base.trim_end_matches('/').to_owned(),
                 port,
                 ip,
+                gap,
                 state: Mutex::new(State::default()),
             }),
         })
@@ -118,7 +132,7 @@ impl CheckHostLoop {
         state.wanted = true;
         state.not_before = state
             .started_at
-            .map(|started| started + GAP)
+            .map(|started| started + self.inner.gap)
             .into_iter()
             .chain(state.limited_until)
             .max();
@@ -130,7 +144,7 @@ impl CheckHostLoop {
         let mut state = self.state();
         let mut at = now;
         if let Some(started) = state.started_at {
-            at = at.max(started + GAP);
+            at = at.max(started + self.inner.gap);
         }
         if let Some(limited) = state.limited_until {
             at = at.max(limited);

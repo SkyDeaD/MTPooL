@@ -238,6 +238,9 @@ pub const ENV_IP_SOURCES: &str = "MTPOOL_IP_SOURCES";
 pub const ENV_IPSUM_URL: &str = "MTPOOL_IPSUM_URL";
 /// Lets the node run on a private test network. Only for a test stand.
 pub const ENV_ALLOW_PRIVATE_IPS: &str = "MTPOOL_ALLOW_PRIVATE_IPS";
+/// Seconds between two check-host starts. It exists for test stands, whose stand-in service has no
+/// limit; the real service counts by address and wants five minutes.
+pub const ENV_CHECK_HOST_GAP_SEC: &str = "MTPOOL_CHECK_HOST_GAP_SEC";
 
 /// What the environment changes in the binary: the external services it talks to (a test stand
 /// points them at stand-ins) and the private-network switch. The defaults are the real ones.
@@ -249,6 +252,8 @@ pub struct Overrides {
     pub ip_sources: Vec<String>,
     pub ipsum_url: String,
     pub allow_private_ips: bool,
+    /// The least time between two check-host starts.
+    pub check_host_gap: std::time::Duration,
 }
 
 impl Overrides {
@@ -282,12 +287,25 @@ impl Overrides {
                 sources
             }
         };
+        let check_host_gap = match get(ENV_CHECK_HOST_GAP_SEC) {
+            None => crate::check_host::GAP,
+            Some(value) => match value.parse::<u64>() {
+                Ok(secs) if secs > 0 => std::time::Duration::from_secs(secs),
+                _ => {
+                    tracing::warn!(
+                        "{ENV_CHECK_HOST_GAP_SEC}={value:?} is not a positive number of seconds, using the default"
+                    );
+                    crate::check_host::GAP
+                }
+            },
+        };
         Ok(Overrides {
             globalping_url: url(ENV_GLOBALPING_URL, crate::gp::DEFAULT_BASE)?,
             check_host_url: url(ENV_CHECK_HOST_URL, crate::check_host::DEFAULT_BASE)?,
             ip_sources,
             ipsum_url: url(ENV_IPSUM_URL, crate::antiscan::IPSUM_URL)?,
             allow_private_ips: get(ENV_ALLOW_PRIVATE_IPS).as_deref() == Some("true"),
+            check_host_gap,
         })
     }
 }

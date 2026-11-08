@@ -169,3 +169,66 @@ pub async fn check_host_starts(stand: &Stand) -> Vec<Value> {
         .cloned()
         .unwrap_or_default()
 }
+
+/// The reads of an answer the stand-in served for the check `check_id`: `{id, mode}` in order,
+/// the mode being the one it answered in.
+pub async fn check_host_fetches(stand: &Stand, check_id: &str) -> Vec<Value> {
+    let state = stand.fakes_state().await.expect("the stand-ins answer");
+    state["check_host"]["fetches"]
+        .as_array()
+        .map(|all| {
+            all.iter()
+                .filter(|f| f["id"] == check_id)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The starts the stand-in turned away with `limit_exceeded`: `{host, port}` in order.
+pub async fn check_host_limited(stand: &Stand) -> Vec<Value> {
+    let state = stand.fakes_state().await.expect("the stand-ins answer");
+    state["check_host"]["limited"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Waits for an event of `kind` about the node and returns the events found, newest first.
+pub async fn wait_event(stand: &Stand, kind: &str, node_id: &str, within: u64) -> Vec<Value> {
+    eventually(&format!("an event {kind}"), secs(within), || async {
+        match stand.events(Some(kind), Some(node_id)).await {
+            Ok(events) if !events.is_empty() => Ok(events),
+            Ok(_) => Err(format!("no {kind} event yet")),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+    .unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// Waits for a round of the node that is newer than `after` (the `at` of an earlier round, or an
+/// empty string) and that `accept` takes, and returns it.
+pub async fn wait_round_after(
+    stand: &Stand,
+    node_id: &str,
+    after: &str,
+    what: &str,
+    within: u64,
+    accept: impl Fn(&Value) -> bool,
+) -> Value {
+    wait_round(stand, node_id, what, within, |r| {
+        r["at"].as_str().is_some_and(|at| at > after) && accept(r)
+    })
+    .await
+}
+
+/// The time of the latest round of the node, or an empty string when it had none.
+pub async fn last_round_at(stand: &Stand, node_id: &str) -> String {
+    stand
+        .node_info(node_id)
+        .await
+        .ok()
+        .and_then(|info| info["last_round"]["at"].as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
