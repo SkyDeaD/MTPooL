@@ -75,6 +75,9 @@
             {:else if n.state === 'healthy'}
               <span class="v">{n.queue_position ? t('node.kpi.queuePlace', { n: n.queue_position }) : t('node.kpi.queue')}</span>
               <span class="s">{t('node.kpi.queueText')}</span>
+            {:else if n.state === 'pending'}
+              <span class="v">{t('node.role.notYet')}</span>
+              <span class="s">{t('node.kpi.pendingText')}</span>
             {:else}
               <span class="v">{t('node.role.outside')}</span>
               {#if round !== null}<span class="s">{t('node.role.nextRound', { time: clock(round) })}</span>{/if}
@@ -88,6 +91,8 @@
         </div>
 
         {#if n.state === 'quarantine'}<QuarantineNote reasons={n.quarantine_reasons ?? []} suspected={n.suspected} />{/if}
+
+        {#if n.state === 'healthy' && n.globalping_disputed}<p class="note" role="status">{t('check.disputed.globalping')}</p>{/if}
 
         {#if n.last_round}
           <section class="t">

@@ -16,6 +16,8 @@
 {#if state === 'quarantine'}
   <span class="st warn"><Icon name="alert" />{suspected ? t('node.state.quarantine') : t('node.state.outside')}</span>
   {#if reasons.length > 0}<div class="nm-s why">{whyText(reasons)}</div>{/if}
+{:else if state === 'pending'}
+  <span class="st"><Icon name="clock" />{t('node.state.pending')}</span>
 {:else if state === 'banned'}
   <span class="st bad"><Icon name="stop" />{t('node.state.banned')}</span>
 {:else}

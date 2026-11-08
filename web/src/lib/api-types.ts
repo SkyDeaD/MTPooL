@@ -927,6 +927,11 @@ export interface components {
             owner_id: number;
             /** @description Absent when the owner is gone. */
             owner_name?: string | null;
+            /**
+             * @description The name of the set whose addresses another pool's firewall rules drop on the proxy port,
+             *     as its agent last reported; absent when there is no such filter.
+             */
+            port_filter?: string | null;
         };
         /** @description `GET /admin/nodes/{id}`. */
         AdminNodeDetail: components["schemas"]["AdminNode"] & {
@@ -960,6 +965,11 @@ export interface components {
         AgentConfig: {
             /** @description Whether the agent defends the port against active probing. */
             antiscan: boolean;
+            /**
+             * @description The registrar asks for a check-host measurement out of turn: a decisive check of a node
+             *     suspected of a block is due.
+             */
+            check_host_now?: boolean;
             intervals: components["schemas"]["Intervals"];
             /**
              * @description The registrar asks for a Globalping measurement out of turn: the planned one is late, or
@@ -969,6 +979,11 @@ export interface components {
             measure_now?: boolean;
             /** Format: int32 */
             port: number;
+            /**
+             * @description This registrar takes `check_host` and `port_filter` in a report. Without it the agent
+             *     leaves them out.
+             */
+            report_check_host?: boolean;
             /**
              * @description This registrar takes the `other_*` fields of a report. A registrar that does not say so may
              *     refuse a report with them, so the agent then sums all the users of the engine into the
@@ -1035,6 +1050,30 @@ export interface components {
         BanVote: {
             sensor: string;
             vote: components["schemas"]["Vote"];
+        };
+        /** @description What the agent says about its check-host measurement. */
+        CheckHostReport: {
+            /** @example abc123 */
+            id: string;
+            /** @enum {string} */
+            kind: "started";
+            /**
+             * Format: int32
+             * @description The port the check connected to.
+             * @example 443
+             */
+            port: number;
+        } | {
+            /** @enum {string} */
+            kind: "no_data";
+            /**
+             * @description `rate_limited`, `unavailable`, `timeout`; anything else counts as no data.
+             * @example rate_limited
+             */
+            reason: string;
+        } | {
+            /** @enum {string} */
+            kind: "disabled";
         };
         /** @description An event on the time axis of the chart. No node, no address: only when and what. */
         ClientsMark: {
@@ -1255,8 +1294,9 @@ export interface components {
         LastVote: {
             /**
              * @description Why the sensor abstained: `not_configured`, `key_rejected`, `unavailable`, `rate_limited`,
-             *     `timeout`, `unknown_answer`, `no_data` or `port_refused` (most probes were refused the
-             *     connection: the port is closed). Only for `abstain`.
+             *     `timeout`, `unknown_answer`, `no_data`, `port_refused` (most probes were refused the
+             *     connection: the port is closed), `port_filter` (the node's own firewall filters the port)
+             *     or `port_closed` (check-host found the port closed). Only for `abstain`.
              */
             reason?: string | null;
             /** @example globalping */
@@ -1536,6 +1576,12 @@ export interface components {
             /** @description The domains the node is master of. */
             domains: string[];
             engine: components["schemas"]["Engine"];
+            /**
+             * @description A healthy node whose Globalping check is red: the pool keeps checking it with check-host
+             *     and does not quarantine it on Globalping alone. Says nothing about a port filter; the
+             *     panel shows that.
+             */
+            globalping_disputed?: boolean;
             /** @example alpha-a1b2c */
             id: string;
             /**
@@ -1550,7 +1596,8 @@ export interface components {
             master_since?: string | null;
             /**
              * @description When the next sensor round of the node is due (RFC 3339, UTC). Only for a node the
-             *     sensors check: suspected of a block in quarantine, or a node on reverify.
+             *     sensors check: suspected of a block in quarantine, a node on reverify, or a healthy node
+             *     whose Globalping check is red.
              */
             next_round_at?: string | null;
             /**
@@ -1612,6 +1659,7 @@ export interface components {
         };
         /** @description `POST /agent/report`. Fields this version does not name are ignored. */
         ReportRequest: {
+            check_host?: components["schemas"]["CheckHostReport"] | null;
             /**
              * @description When the agent made the checks, RFC 3339. Must be within 10 minutes before and one
              *     minute after the registrar's clock.
@@ -1635,6 +1683,12 @@ export interface components {
             metrics: components["schemas"]["MetricsReport"];
             /** Format: int32 */
             port: number;
+            /**
+             * @description The name of the set whose addresses another pool's firewall rules drop on the proxy port,
+             *     as the agent reads it; absent when there is no such filter or the agent cannot tell.
+             * @example blocklist
+             */
+            port_filter?: string | null;
             /**
              * @description The TLS domain the measurement used.
              * @example tls.example.com

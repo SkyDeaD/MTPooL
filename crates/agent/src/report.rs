@@ -7,12 +7,13 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mtpool_protocol::agent::{
-    AgentConfig, Dc2Report, ERROR_POOL_USER_TAKEN, GpReport, HostReport, MetricsReport,
-    ReportRequest,
+    AgentConfig, CheckHostReport, Dc2Report, ERROR_POOL_USER_TAKEN, GpReport, HostReport,
+    MetricsReport, ReportRequest,
 };
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::Instant;
 
+use crate::check_host::CheckHostLoop;
 use crate::dead_kill::verdict;
 use crate::engine::http::HttpGet;
 use crate::engine::telemt::REASON_USER_TELEMETRY_DISABLED;
@@ -22,6 +23,7 @@ use crate::hoststats::HostStats;
 use crate::ip_detect::{IpEvent, IpWatch};
 use crate::lifecycle::{ConfigSink, ReportSource, Watch};
 use crate::local_health::{LocalHealth, PortCheck, check_once};
+use crate::port_filter::PortFilterWatch;
 use crate::state_files::Fs;
 
 /// Everything one report is made of.
@@ -30,6 +32,11 @@ pub struct ReportInputs {
     pub port: u16,
     pub sni: String,
     pub gp: GpReport,
+    /// `None` for a registrar that does not take the field.
+    pub check_host: Option<CheckHostReport>,
+    /// The set of another pool's filter on the port; `None` for a registrar that does not take the
+    /// field, or when there is no filter.
+    pub port_filter: Option<String>,
     pub metrics: EngineResult<MetricsReport>,
     pub dc2: Option<Dc2Report>,
     pub host: Option<HostReport>,
@@ -100,6 +107,8 @@ pub fn build_report(inputs: ReportInputs) -> ReportRequest {
         port: inputs.port,
         sni: inputs.sni,
         gp: inputs.gp,
+        check_host: inputs.check_host,
+        port_filter: inputs.port_filter,
         metrics,
         dc2: inputs.dc2,
         host: inputs.host,
@@ -115,6 +124,10 @@ pub struct ConfigMemory {
     slot: Arc<Mutex<Option<(String, u32, bool)>>>,
     /// The registrar asked for a measurement out of turn and the loop has not been told yet.
     measure_now: Arc<AtomicBool>,
+    /// The registrar takes `check_host` in a report.
+    report_check_host: Arc<AtomicBool>,
+    /// The registrar asked for a check-host check out of turn and the loop has not been told yet.
+    check_host_now: Arc<AtomicBool>,
 }
 
 impl ConfigMemory {
@@ -137,11 +150,26 @@ impl ConfigMemory {
         if config.measure_now {
             self.measure_now.store(true, Ordering::Relaxed);
         }
+        self.report_check_host
+            .store(config.report_check_host, Ordering::Relaxed);
+        if config.check_host_now {
+            self.check_host_now.store(true, Ordering::Relaxed);
+        }
     }
 
     /// Whether the registrar asked for a measurement out of turn since the last call.
     pub fn take_measure_now(&self) -> bool {
         self.measure_now.swap(false, Ordering::Relaxed)
+    }
+
+    /// Whether the registrar takes `check_host` in a report.
+    pub fn reports_check_host(&self) -> bool {
+        self.report_check_host.load(Ordering::Relaxed)
+    }
+
+    /// Whether the registrar asked for a check-host check out of turn since the last call.
+    pub fn take_check_host_now(&self) -> bool {
+        self.check_host_now.swap(false, Ordering::Relaxed)
     }
 
     pub fn get(&self) -> Option<(String, u32)> {
@@ -176,6 +204,8 @@ pub struct ChecksSetup<H> {
     pub fs: Arc<dyn Fs>,
     pub ip: IpWatch<H>,
     pub gp: GpLoop,
+    pub check_host: CheckHostLoop,
+    pub port_filter: PortFilterWatch,
     pub memory: ConfigMemory,
 }
 
@@ -186,6 +216,8 @@ struct Shared<H> {
     fs: Arc<dyn Fs>,
     ip: AsyncMutex<IpWatch<H>>,
     gp: GpLoop,
+    check_host: CheckHostLoop,
+    port_filter: PortFilterWatch,
     memory: ConfigMemory,
     health: Mutex<LocalHealth>,
 }
@@ -215,6 +247,8 @@ impl<H: HttpGet + 'static> NodeChecks<H> {
                 fs: setup.fs,
                 ip: AsyncMutex::new(setup.ip),
                 gp: setup.gp,
+                check_host: setup.check_host,
+                port_filter: setup.port_filter,
                 memory: setup.memory,
                 health: Mutex::new(LocalHealth::new()),
             }),
@@ -243,6 +277,13 @@ impl<H: HttpGet + 'static> NodeChecks<H> {
         self.shared.gp.set_job(job);
     }
 
+    /// Tells the check-host loop where the node is and whether the registrar takes its result.
+    fn update_check_host(&self, ip: Option<Ipv4Addr>) {
+        let check_host = &self.shared.check_host;
+        check_host.ip_source().set(ip);
+        check_host.set_allowed(self.shared.memory.reports_check_host());
+    }
+
     /// The port of the proxy: the local configuration's, else the engine's own.
     fn port(&self) -> Option<u16> {
         self.shared.port.or_else(|| self.shared.engine.port())
@@ -266,17 +307,31 @@ impl<H: HttpGet + 'static> ReportSource for NodeChecks<H> {
         // The first report comes right after the first config: the first measurement starts now,
         // not at the next round of checks.
         self.update_gp_job(Some(ip), Some(port));
+        self.update_check_host(Some(ip));
         let engine = &self.shared.engine;
         let (metrics, dc2, health) = tokio::join!(engine.metrics(), engine.dc2(), engine.health());
         let host = HostStats::read(&*self.shared.fs).map(HostStats::into_report);
         let gp = self.shared.gp.take_result().unwrap_or(GpReport::NoData {
             reason: gp::NO_DATA.into(),
         });
+        // A registrar that does not take the field gets nothing: it might refuse the report.
+        let check_host = if self.shared.memory.reports_check_host() {
+            self.shared.check_host.take_report()
+        } else {
+            None
+        };
+        let port_filter = if self.shared.memory.reports_check_host() {
+            self.shared.port_filter.current()
+        } else {
+            None
+        };
         Some(build_report(ReportInputs {
             ip,
             port,
             sni,
             gp,
+            check_host,
+            port_filter,
             metrics,
             dc2,
             host,
@@ -305,6 +360,13 @@ impl<H: HttpGet + 'static> ReportSource for NodeChecks<H> {
         if self.shared.memory.take_measure_now() {
             self.shared.gp.measure_soon(now);
         }
+        self.update_check_host(ip);
+        if self.shared.memory.take_check_host_now() {
+            self.shared.check_host.run_soon(now);
+        }
+        // The rules are read only for a registrar that takes the answer.
+        let filter_port = port.filter(|_| self.shared.memory.reports_check_host());
+        self.shared.port_filter.tick(now, filter_port).await;
 
         Watch {
             ip_changed: matches!(event, IpEvent::Changed { .. }),
@@ -313,12 +375,13 @@ impl<H: HttpGet + 'static> ReportSource for NodeChecks<H> {
     }
 
     fn has_measurement(&self) -> bool {
-        self.shared.gp.has_measurement()
+        self.shared.gp.has_measurement() || self.shared.check_host.has_result()
     }
 
     fn enrolled(&self) {
         *self.health() = LocalHealth::new();
         self.shared.gp.restart();
+        self.shared.check_host.restart();
         // The lifecycle is one task: nothing else holds the lock. If something did, the stored
         // address would only stay as it was, which is as current as the last look.
         if let Ok(mut watch) = self.shared.ip.try_lock() {

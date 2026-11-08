@@ -265,3 +265,39 @@ fn private_ip_registrar_over_plain_http_needs_the_flag() {
         .is_ok()
     );
 }
+
+#[test]
+fn check_host_port_defaults_to_22() {
+    let config = parse("registrar = \"https://pool.example.test\"\nname = \"alpha\"\n").unwrap();
+    assert_eq!(config.check_host_port, 22);
+    let config = parse(
+        "registrar = \"https://pool.example.test\"\nname = \"alpha\"\ncheck_host_port = 2222\n",
+    )
+    .unwrap();
+    assert_eq!(config.check_host_port, 2222);
+    invalid(
+        "registrar = \"https://pool.example.test\"\nname = \"alpha\"\ncheck_host_port = 70000\n",
+    );
+}
+
+#[test]
+fn zero_turns_it_off() {
+    let config =
+        parse("registrar = \"https://pool.example.test\"\nname = \"alpha\"\ncheck_host_port = 0\n")
+            .unwrap();
+    assert_eq!(config.check_host_port, 0);
+}
+
+#[test]
+fn the_check_host_gap_defaults_to_five_minutes_and_follows_the_environment() {
+    use std::time::Duration;
+    let o = Overrides::from_lookup(env_of(&[])).unwrap();
+    assert_eq!(o.check_host_gap, Duration::from_secs(300));
+    let o = Overrides::from_lookup(env_of(&[("MTPOOL_CHECK_HOST_GAP_SEC", "20")])).unwrap();
+    assert_eq!(o.check_host_gap, Duration::from_secs(20));
+    // Nothing usable means the default, never a gap of zero.
+    for bad in ["0", "soon", "-5", "1.5", ""] {
+        let o = Overrides::from_lookup(env_of(&[("MTPOOL_CHECK_HOST_GAP_SEC", bad)])).unwrap();
+        assert_eq!(o.check_host_gap, Duration::from_secs(300), "{bad:?}");
+    }
+}

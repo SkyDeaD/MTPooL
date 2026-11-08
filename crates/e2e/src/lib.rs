@@ -77,6 +77,9 @@ fn fail<T>(message: impl Into<String>) -> Result<T> {
 const POLL_EVERY: Duration = Duration::from_secs(1);
 /// The pool's name for the domain the stand serves; the fake Cloudflare knows `example.com`.
 pub const DOMAIN: &str = "pool.example.com";
+/// The port of the engine on every node, which is the port check-host.net is asked to open (the
+/// stand has no SSH).
+pub const CHECK_HOST_PORT: u16 = 443;
 /// The TLS domain the proxies of the stand impersonate.
 pub const TLS_DOMAIN: &str = "www.example.com";
 /// The secret of the stand's proxy user `e2e`: a value for tests, not a secret.
@@ -385,7 +388,7 @@ impl Stand {
         }
     }
 
-    /// Switches what a stand-in sensor answers (`globalping`, `cheburcheck`, `redflag` or
+    /// Switches what a stand-in sensor answers (`globalping`, `check_host`, `redflag` or
     /// `cloudflare`; the modes are those of `mtpool-fakes`).
     pub async fn set_sensor(&self, sensor: &str, mode: &str) -> Result<()> {
         let response = self
@@ -698,8 +701,15 @@ impl Node<'_> {
     /// Gives the agent its configuration and enroll token, starts it, and returns the id the
     /// registrar gave the node.
     pub async fn enroll(&self, name: &str) -> Result<String> {
+        self.enroll_checking_port(name, CHECK_HOST_PORT).await
+    }
+
+    /// Like `enroll`, but the port check-host.net is asked to open is `port`. The stand has no
+    /// SSH, so the default is the port of the engine.
+    pub async fn enroll_checking_port(&self, name: &str, port: u16) -> Result<String> {
         let config = format!(
-            "registrar = \"http://registrar:8080\"\nname = \"{name}\"\nantiscan = false\n\n\
+            "registrar = \"http://registrar:8080\"\nname = \"{name}\"\nantiscan = false\n\
+             check_host_port = {port}\n\n\
              [intervals]\nheartbeat_sec = 1\nglobalping_sec = 5\nmetrics_sec = 1\nsync_sec = 1\n"
         );
         self.exec_with(

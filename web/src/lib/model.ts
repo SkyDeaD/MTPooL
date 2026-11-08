@@ -16,28 +16,32 @@ export interface NodeGroups {
   quarantine: PublicNode[];
   /** In quarantine for a port, metrics or a stale report: only out of the queue. */
   outside: PublicNode[];
+  /** Passing registration: on the page, but not in the pool yet. */
+  pending: PublicNode[];
 }
 
 /**
- * The nodes the pool shows, in four groups. Nodes that are pending, dead or pruned are neither
- * shown nor counted; banned nodes do not come in this list at all.
+ * The nodes the pool shows, in five groups. Dead and pruned nodes are neither shown nor counted;
+ * banned nodes do not come in this list at all.
  */
 export function groupNodes(nodes: readonly PublicNode[]): NodeGroups {
   const masters: PublicNode[] = [];
   const queue: PublicNode[] = [];
   const quarantine: PublicNode[] = [];
   const outside: PublicNode[] = [];
+  const pending: PublicNode[] = [];
   for (const node of nodes) {
-    if (node.state === 'quarantine') (node.suspected ? quarantine : outside).push(node);
+    if (node.state === 'pending') pending.push(node);
+    else if (node.state === 'quarantine') (node.suspected ? quarantine : outside).push(node);
     else if (node.state === 'healthy') (node.is_master ? masters : queue).push(node);
   }
   const place = (n: PublicNode) => n.queue_position ?? Number.MAX_SAFE_INTEGER;
   queue.sort((a, b) => place(a) - place(b));
-  return { masters, queue, quarantine, outside };
+  return { masters, queue, quarantine, outside, pending };
 }
 
 export interface PoolCounts {
-  /** Nodes shown in the table. */
+  /** Nodes in the pool. A node passing registration is in the table, but not here yet. */
   shown: number;
   /** Of them, the healthy ones. */
   working: number;
@@ -64,7 +68,7 @@ export function formatAvailability(bp: number | null | undefined): string {
   return `${text} %`;
 }
 
-export type CheckState = 'ok' | 'bad' | 'none';
+export type CheckState = 'ok' | 'warn' | 'bad' | 'none';
 export type CheckName = 'tcp' | 'metrics' | 'globalping';
 
 export interface CheckRow {
@@ -74,24 +78,33 @@ export interface CheckRow {
 }
 
 /** Every check of a node, passed or not, in the order the table lists them. */
-export function checkRows(checks: NodeChecks): CheckRow[] {
-  const gp: CheckState = checks.globalping === 'ok' ? 'ok' : checks.globalping === 'failed' ? 'bad' : 'none';
+export function checkRows(checks: NodeChecks, disputed = false): CheckRow[] {
+  const gp: CheckState =
+    checks.globalping === 'ok' ? 'ok' : checks.globalping === 'failed' ? (disputed ? 'warn' : 'bad') : 'none';
   return [
     { name: 'tcp', state: checks.tcp ? 'ok' : 'bad', title: checks.tcp ? 'check.ok.tcp' : 'check.bad.tcp' },
     { name: 'metrics', state: checks.metrics ? 'ok' : 'bad', title: checks.metrics ? 'check.ok.metrics' : 'check.bad.metrics' },
     {
       name: 'globalping',
       state: gp,
-      title: gp === 'ok' ? 'check.ok.globalping' : gp === 'bad' ? 'check.bad.globalping' : 'check.none.globalping',
+      title:
+        gp === 'ok'
+          ? 'check.ok.globalping'
+          : gp === 'warn'
+            ? 'check.disputed.globalping'
+            : gp === 'bad'
+              ? 'check.bad.globalping'
+              : 'check.none.globalping',
     },
   ];
 }
 
 /** Why a node is not working, in words; a code the page does not know is shown as it came. */
-/** The owner's own users of the nodes the pool counts. A node in no such state keeps a stale number. */
+/** The owner's own users of the nodes in the pool. A pending node is not in the pool yet, and a
+ * node in any other state keeps a stale number. */
 export function otherClientsTotal(nodes: readonly PublicNode[]): number {
   return nodes
-    .filter((n) => n.state === 'pending' || n.state === 'healthy' || n.state === 'quarantine')
+    .filter((n) => n.state === 'healthy' || n.state === 'quarantine')
     .reduce((sum, n) => sum + (n.other_clients ?? 0), 0);
 }
 

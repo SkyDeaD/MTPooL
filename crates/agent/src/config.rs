@@ -8,6 +8,9 @@ use reqwest::Url;
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/mtpool/agent.toml";
 pub const DEFAULT_STATE_DIR: &str = "/var/lib/mtpool";
 
+/// The port check-host checks unless the configuration says otherwise: SSH.
+pub const DEFAULT_CHECK_HOST_PORT: u16 = 22;
+
 /// Intervals until the registrar's `/agent/config` says otherwise.
 pub const DEFAULT_INTERVALS: Intervals = Intervals {
     heartbeat_sec: 15,
@@ -48,6 +51,9 @@ pub struct LocalConfig {
     /// The port of the proxy. When absent the engine adapter reports it.
     pub port: Option<u16>,
     pub antiscan: bool,
+    /// The port check-host opens from Russia to tell whether the address is blocked; 0 switches
+    /// the check off.
+    pub check_host_port: u16,
     pub intervals: IntervalOverrides,
 }
 
@@ -59,6 +65,7 @@ struct Raw {
     state_dir: Option<PathBuf>,
     port: Option<i64>,
     antiscan: Option<bool>,
+    check_host_port: Option<i64>,
     intervals: Option<RawIntervals>,
 }
 
@@ -124,6 +131,11 @@ impl LocalConfig {
                     .ok_or_else(|| invalid("port must be between 1 and 65535".to_owned()))?,
             ),
         };
+        let check_host_port = match raw.check_host_port {
+            None => DEFAULT_CHECK_HOST_PORT,
+            Some(p) => u16::try_from(p)
+                .map_err(|_| invalid("check_host_port must be between 0 and 65535".to_owned()))?,
+        };
         let raw_intervals = raw.intervals.unwrap_or(RawIntervals {
             heartbeat_sec: None,
             globalping_sec: None,
@@ -150,6 +162,7 @@ impl LocalConfig {
                 .unwrap_or_else(|| PathBuf::from(DEFAULT_STATE_DIR)),
             port,
             antiscan: raw.antiscan.unwrap_or(true),
+            check_host_port,
             intervals: IntervalOverrides {
                 heartbeat_sec: raw_intervals.heartbeat_sec,
                 globalping_sec: raw_intervals.globalping_sec,
@@ -220,20 +233,27 @@ fn valid_name(name: &str) -> bool {
 }
 
 pub const ENV_GLOBALPING_URL: &str = "MTPOOL_GLOBALPING_URL";
+pub const ENV_CHECK_HOST_URL: &str = "MTPOOL_CHECK_HOST_URL";
 pub const ENV_IP_SOURCES: &str = "MTPOOL_IP_SOURCES";
 pub const ENV_IPSUM_URL: &str = "MTPOOL_IPSUM_URL";
 /// Lets the node run on a private test network. Only for a test stand.
 pub const ENV_ALLOW_PRIVATE_IPS: &str = "MTPOOL_ALLOW_PRIVATE_IPS";
+/// Seconds between two check-host starts. It exists for test stands, whose stand-in service has no
+/// limit; the real service counts by address and wants five minutes.
+pub const ENV_CHECK_HOST_GAP_SEC: &str = "MTPOOL_CHECK_HOST_GAP_SEC";
 
 /// What the environment changes in the binary: the external services it talks to (a test stand
 /// points them at stand-ins) and the private-network switch. The defaults are the real ones.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Overrides {
     pub globalping_url: String,
+    pub check_host_url: String,
     /// Two to eight URLs of plain-text address services.
     pub ip_sources: Vec<String>,
     pub ipsum_url: String,
     pub allow_private_ips: bool,
+    /// The least time between two check-host starts.
+    pub check_host_gap: std::time::Duration,
 }
 
 impl Overrides {
@@ -267,11 +287,25 @@ impl Overrides {
                 sources
             }
         };
+        let check_host_gap = match get(ENV_CHECK_HOST_GAP_SEC) {
+            None => crate::check_host::GAP,
+            Some(value) => match value.parse::<u64>() {
+                Ok(secs) if secs > 0 => std::time::Duration::from_secs(secs),
+                _ => {
+                    tracing::warn!(
+                        "{ENV_CHECK_HOST_GAP_SEC}={value:?} is not a positive number of seconds, using the default"
+                    );
+                    crate::check_host::GAP
+                }
+            },
+        };
         Ok(Overrides {
             globalping_url: url(ENV_GLOBALPING_URL, crate::gp::DEFAULT_BASE)?,
+            check_host_url: url(ENV_CHECK_HOST_URL, crate::check_host::DEFAULT_BASE)?,
             ip_sources,
             ipsum_url: url(ENV_IPSUM_URL, crate::antiscan::IPSUM_URL)?,
             allow_private_ips: get(ENV_ALLOW_PRIVATE_IPS).as_deref() == Some("true"),
+            check_host_gap,
         })
     }
 }

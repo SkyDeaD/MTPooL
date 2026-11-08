@@ -126,7 +126,7 @@ impl Stand {
         .await
     }
 
-    /// The calls the stand-ins have counted for one sensor (`globalping`, `cheburcheck`, ...).
+    /// The calls the stand-ins have counted for one sensor (`globalping`, `check_host`, ...).
     pub async fn sensor_calls(&self, sensor: &str) -> Result<u64> {
         let state = self.fakes_state().await?;
         Ok(state["calls"][sensor].as_u64().unwrap_or(0))

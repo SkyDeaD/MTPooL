@@ -9,11 +9,12 @@ use std::net::Ipv4Addr;
 use serde::{Deserialize, Serialize};
 
 use crate::health::{
-    FailedCondition, GpStatus, Latch, NodeHealth, failed_conditions, younger_than,
+    FailedCondition, GpStatus, Latch, NodeHealth, failed_conditions, gp_disputed, ru_confirmed,
+    younger_than,
 };
 use crate::settings::Settings;
 use crate::types::{EngineKind, Generation, NodeId, NodeState, OwnerId, Ts};
-use crate::votes::{RoundVerdict, SensorKind, Vote, judge_round};
+use crate::votes::{RoundVerdict, SensorKind, Vote, judge_reverify, judge_round};
 
 /// Pauses before a pruned node or IP may enroll again: 15 min, 30 min, 1 h, 2 h, 3 h. After
 /// the last one the pause stays at 3 h.
@@ -24,6 +25,12 @@ const TOMBSTONE_TTL_MS: i64 = 7 * 24 * 3600 * 1000;
 const FINAL_RECORD_TTL_MS: i64 = 24 * 3600 * 1000;
 /// Retry hint while a reverify round for the same IP is running.
 const REVERIFY_IN_FLIGHT_RETRY_SEC: u32 = 60;
+/// A check-host result is asked for this long after the start of a round: the sensor waits for
+/// the next sync of the agent and for the probes of the service.
+const CHECK_HOST_ROUND_SEC: u32 = 120;
+/// A check-host measurement is asked this much earlier than one sync before a round, so that the
+/// agent has the time to make it.
+const CHECK_HOST_LEAD_SEC: u32 = 30;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeRecord {
@@ -51,9 +58,9 @@ pub struct NodeRecord {
     pub undecided_rounds: u32,
     /// Counted clean rounds in a row.
     pub clean_rounds: u32,
-    /// This quarantine has entered the sensor path: the node was alive while its Globalping
-    /// check was unproven (unknown, failed or aged out). Stays set until the node leaves
-    /// `Quarantine`; only counted clean rounds, not a fresh measurement, end it.
+    /// This quarantine has entered the sensor path: the node was alive on the right port while
+    /// its Globalping check was unproven and not confirmed from Russia. Stays set until the node
+    /// leaves `Quarantine`; only a clean round, not a fresh measurement, ends it.
     pub suspected: bool,
     /// Why the node entered `Quarantine`; empty in every other state.
     #[serde(default)]
@@ -90,6 +97,8 @@ impl NodeRecord {
                 last_report: Ts(0),
                 port_ok: port == s.proxy_port,
                 pool_user_taken: false,
+                ru_confirmed_at: None,
+                port_filter: false,
             },
             registered_at: now,
             queued_at: now,
@@ -141,8 +150,8 @@ impl NodeRecord {
         true
     }
 
-    /// Back to `Pending` with nothing proven about the IP: Globalping, the TCP latch and the
-    /// report age start over. The metrics latch and the heartbeat describe the agent, not the
+    /// Back to `Pending` with nothing proven about the IP: Globalping, its confirmation from
+    /// Russia, the port filter, the TCP latch and the report age start over. The metrics latch and the heartbeat describe the agent, not the
     /// IP, so they stay.
     fn reset_for_recheck(&mut self, now: Ts) {
         self.quarantine_reasons.clear();
@@ -152,6 +161,9 @@ impl NodeRecord {
         self.health.tcp = Latch::new();
         self.health.gp = GpStatus::Unknown;
         self.health.last_report = Ts(0);
+        // A confirmation and a filter both describe the old address.
+        self.health.ru_confirmed_at = None;
+        self.health.port_filter = false;
         self.not_alive_since = None;
         self.last_round_at = None;
         self.undecided_rounds = 0;
@@ -281,6 +293,8 @@ pub enum LifecycleEvent {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoundResult {
     pub generation: Generation,
+    /// A round that began before the present quarantine is not judged.
+    pub started_at: Ts,
     pub votes: Vec<(SensorKind, Vote)>,
 }
 
@@ -426,33 +440,36 @@ pub fn is_alive(n: &NodeRecord, now: Ts, s: &Settings) -> bool {
 
 /// Whether a sensor round should run for this node.
 ///
-/// A reverify node always needs its decisive round. A node in `Quarantine` needs sensors only
-/// while it is alive (a dead server is not a blocked one) and its last Globalping check is
-/// failed or missing, or the quarantine is already `suspected`. Alive with a good Globalping
-/// check throughout and another condition failing, a stale report included: no sensors.
+/// A reverify node always needs its decisive round. A `Healthy` node is checked from Russia for
+/// as long as Globalping does not settle it. A node in `Quarantine` needs sensors only while it
+/// is alive (a dead server is not a blocked one), on the right port, and its Globalping check is
+/// unproven, or the quarantine is already `suspected`. Alive with a good Globalping check
+/// throughout and another condition failing, a stale report included: no sensors.
 pub fn needs_sensors(n: &NodeRecord, now: Ts, s: &Settings) -> bool {
     match n.state {
         NodeState::Pending => n.reverify,
+        NodeState::Healthy => is_alive(n, now, s) && gp_disputed(&n.health),
         NodeState::Quarantine => {
             if !is_alive(n, now, s) {
                 return false;
             }
-            let failed = failed_conditions(&n.health, now, s);
-            // The pool's secret and domain are not on this node: a sensor would learn nothing
-            // about the address, and a vote made that way must not count towards a ban.
-            if failed.contains(&FailedCondition::PoolUserTaken) {
+            // The pool's secret and domain are not on this node, or the sensors would look at
+            // the wrong port: they would learn nothing about the address, and a vote made that
+            // way must not count towards a ban.
+            if n.health.pool_user_taken || !n.health.port_ok {
                 return false;
             }
-            n.suspected || globalping_unproven(&n.health)
+            n.suspected || globalping_unproven(&n.health, now, s)
         }
         _ => false,
     }
 }
 
-/// The last Globalping check is failed or missing. A report that aged out is not: the
-/// measurement may not have come for the limit of Globalping, and the first fresh one decides.
-fn globalping_unproven(h: &NodeHealth) -> bool {
-    matches!(h.gp, GpStatus::Unknown | GpStatus::Failed { .. })
+/// Globalping does not settle the node and no confirmation from Russia stands in for it. A report
+/// that aged out does not count: the measurement may not have come for the limit of Globalping,
+/// and the first fresh one decides.
+fn globalping_unproven(h: &NodeHealth, now: Ts, s: &Settings) -> bool {
+    gp_disputed(h) && !ru_confirmed(h, now, s)
 }
 
 /// Whether the registrar asks the agent to measure out of turn: its planned measurement is
@@ -470,13 +487,26 @@ pub fn wants_measurement(n: &NodeRecord, now: Ts, s: &Settings) -> bool {
     late || (n.state == NodeState::Quarantine && n.suspected)
 }
 
-/// When the next round is due, if the node runs rounds at all. A quarantine runs them only
-/// while it is suspected: a node out of the queue for a port, metrics or a stale report has no
-/// round to wait for.
+/// Whether the registrar asks the agent for a check-host measurement: a round is close enough
+/// for the agent to answer in time, or one has just started and waits for the answer.
+pub fn wants_check_host(n: &NodeRecord, now: Ts, s: &Settings) -> bool {
+    if !needs_sensors(n, now, s) {
+        return false;
+    }
+    let horizon = add_sec(now, s.sync_interval_sec.saturating_add(CHECK_HOST_LEAD_SEC));
+    next_round_at(n, s).is_some_and(|at| at <= horizon)
+        || n.last_round_at
+            .is_some_and(|at| younger_than(at, now, CHECK_HOST_ROUND_SEC))
+}
+
+/// When the next round is due, if the node runs rounds at all. A quarantine runs them only while
+/// it is suspected: a node out of the queue for a port, metrics or a stale report has no round to
+/// wait for. A `Healthy` node runs them while Globalping does not settle it.
 pub fn next_round_at(n: &NodeRecord, s: &Settings) -> Option<Ts> {
     let runs_rounds = match n.state {
-        NodeState::Quarantine => n.suspected && !n.health.pool_user_taken,
+        NodeState::Quarantine => n.suspected && !n.health.pool_user_taken && n.health.port_ok,
         NodeState::Pending => n.reverify,
+        NodeState::Healthy => return next_check_of_healthy(n, s),
         _ => false,
     };
     if !runs_rounds {
@@ -505,6 +535,20 @@ pub fn next_round_at(n: &NodeRecord, s: &Settings) -> Option<Ts> {
     Some(paced)
 }
 
+/// A confirmation is renewed every `ru_recheck_sec`. A round started or ended after it brought no
+/// new one, so the next try comes after the short interval. A record stored without a
+/// confirmation counts from the moment it became `Healthy`.
+fn next_check_of_healthy(n: &NodeRecord, s: &Settings) -> Option<Ts> {
+    if !gp_disputed(&n.health) {
+        return None;
+    }
+    let base = n.health.ru_confirmed_at.unwrap_or(n.state_since);
+    Some(match n.last_round_at {
+        Some(last) if last > base => add_sec(last, s.round_interval_sec),
+        _ => add_sec(base, s.ru_recheck_sec),
+    })
+}
+
 /// Time-driven transitions: triggers, recovery, dead timer, prune timer.
 ///
 /// At most one transition per call. `Banned`, `Dead` and `Pruned` are final here.
@@ -528,8 +572,11 @@ pub fn tick_node(n: &mut NodeRecord, now: Ts, s: &Settings) -> Vec<LifecycleEven
     match n.state {
         // Its decisive round, not a report, decides whether the block is lifted.
         NodeState::Pending if n.reverify => Vec::new(),
-        // No verified measurement yet: the first report decides.
-        NodeState::Pending if n.health.gp == GpStatus::Unknown => Vec::new(),
+        // No verified measurement yet: the first report decides. A filtered node has no such
+        // report to wait for: its conditions are judged now.
+        NodeState::Pending if n.health.gp == GpStatus::Unknown && !n.health.port_filter => {
+            Vec::new()
+        }
         NodeState::Pending | NodeState::Healthy => {
             let failed = failed_conditions(&n.health, now, s);
             if !failed.is_empty() {
@@ -544,7 +591,7 @@ pub fn tick_node(n: &mut NodeRecord, now: Ts, s: &Settings) -> Vec<LifecycleEven
                 {
                     return Vec::new();
                 }
-                let suspected = is_alive(n, now, s) && globalping_unproven(&n.health);
+                let suspected = may_be_suspected(n, now, s);
                 n.enter_quarantine(now, suspected, failed.clone());
                 return vec![LifecycleEvent::Quarantined { reason: failed }];
             }
@@ -559,9 +606,15 @@ pub fn tick_node(n: &mut NodeRecord, now: Ts, s: &Settings) -> Vec<LifecycleEven
     }
 }
 
+/// Alive on the right port with Globalping unproven. On another port a red Globalping says
+/// nothing about a block.
+fn may_be_suspected(n: &NodeRecord, now: Ts, s: &Settings) -> bool {
+    is_alive(n, now, s) && n.health.port_ok && globalping_unproven(&n.health, now, s)
+}
+
 fn tick_quarantine(n: &mut NodeRecord, now: Ts, s: &Settings) -> Vec<LifecycleEvent> {
     let failed = failed_conditions(&n.health, now, s);
-    if is_alive(n, now, s) && globalping_unproven(&n.health) {
+    if may_be_suspected(n, now, s) {
         n.suspected = true;
     }
     if failed.is_empty() {
@@ -594,11 +647,50 @@ pub fn apply_round(
         return Vec::new();
     }
     match n.state {
-        // Blocked answers about a server that has gone down prove nothing.
-        NodeState::Quarantine if is_alive(n, now, s) => quarantine_round(n, result, blocks, now, s),
+        // The round began before this quarantine: on a healthy node, whose round does not ban.
+        // The driver runs one round per node, so it dropped the round asked for on entering the
+        // quarantine, and the next tick has to ask again.
+        NodeState::Quarantine if result.started_at < n.state_since => {
+            n.last_round_at = None;
+            Vec::new()
+        }
+        // A result that came late for a node no round is due for changes nothing. Blocked answers
+        // about a server that has gone down, or that the sensors may not check, prove nothing.
+        NodeState::Healthy if needs_sensors(n, now, s) => ru_check_round(n, result, now, s),
+        NodeState::Quarantine if needs_sensors(n, now, s) => {
+            quarantine_round(n, result, blocks, now, s)
+        }
         NodeState::Pending if n.reverify => reverify_round(n, result, blocks, now, s),
         _ => Vec::new(),
     }
+}
+
+/// The check of a `Healthy` node from Russia. It never bans: a `Blocked` answer sends the node to
+/// `Quarantine`, and the round there decides.
+fn ru_check_round(
+    n: &mut NodeRecord,
+    result: &RoundResult,
+    now: Ts,
+    s: &Settings,
+) -> Vec<LifecycleEvent> {
+    n.last_round_at = Some(now);
+    let blocked_from_russia = result.votes.iter().any(|&(kind, vote)| {
+        matches!(kind, SensorKind::RedFlag | SensorKind::CheckHost) && vote == Vote::Blocked
+    });
+    if blocked_from_russia {
+        n.health.ru_confirmed_at = None;
+        let reasons = failed_conditions(&n.health, now, s);
+        n.enter_quarantine(now, true, reasons.clone());
+        return vec![LifecycleEvent::Quarantined { reason: reasons }];
+    }
+    if judge_round(&result.votes) == RoundVerdict::Clean
+        // A filtered node has no sign of a block, and a failure of the sensors must not take it
+        // out of work. A confirmation that is already over has nothing to extend.
+        || (n.health.port_filter && ru_confirmed(&n.health, now, s))
+    {
+        n.health.ru_confirmed_at = Some(now);
+    }
+    Vec::new()
 }
 
 fn quarantine_round(
@@ -627,7 +719,14 @@ fn quarantine_round(
                 votes: result.votes.clone(),
             }]
         }
-        RoundVerdict::Clean if failed_conditions(&n.health, now, s).is_empty() => {
+        RoundVerdict::Clean => {
+            n.health.ru_confirmed_at = Some(now);
+            // Clean votes next to a failed condition return nothing: undecided.
+            if !failed_conditions(&n.health, now, s).is_empty() {
+                n.undecided_rounds += 1;
+                n.clean_rounds = 0;
+                return Vec::new();
+            }
             n.undecided_rounds = 0;
             n.clean_rounds += 1;
             if n.clean_rounds >= s.clean_rounds_to_exit {
@@ -636,8 +735,7 @@ fn quarantine_round(
             }
             Vec::new()
         }
-        // Clean votes next to a failed condition prove nothing: undecided.
-        RoundVerdict::Clean | RoundVerdict::Undecided => {
+        RoundVerdict::Undecided => {
             n.undecided_rounds += 1;
             n.clean_rounds = 0;
             Vec::new()
@@ -653,7 +751,7 @@ fn reverify_round(
     s: &Settings,
 ) -> Vec<LifecycleEvent> {
     n.last_round_at = Some(now);
-    if judge_round(&result.votes) == RoundVerdict::Clean {
+    if judge_reverify(&result.votes) == RoundVerdict::Clean {
         n.reverify = false;
         n.last_round_at = None;
         return lift_blocks(n.ip, blocks);
@@ -754,7 +852,7 @@ fn secs_until(at: Ts, now: Ts) -> u32 {
 mod tests {
     use super::*;
     use crate::votes::AbstainReason;
-    use SensorKind::{Cheburcheck as Chebur, Globalping as Gp, RedFlag as Rf};
+    use SensorKind::{Cheburcheck as Chebur, CheckHost as Ch, Globalping as Gp, RedFlag as Rf};
 
     const T0: Ts = Ts(1_800_000_000_000);
     const ABSTAIN: Vote = Vote::Abstain(AbstainReason::Unavailable);
@@ -805,6 +903,8 @@ mod tests {
             last_report: now,
             port_ok: true,
             pool_user_taken: false,
+            ru_confirmed_at: None,
+            port_filter: false,
         }
     }
 
@@ -836,6 +936,7 @@ mod tests {
     fn round(n: &NodeRecord, votes: &[(SensorKind, Vote)]) -> RoundResult {
         RoundResult {
             generation: n.generation,
+            started_at: n.state_since,
             votes: votes.to_vec(),
         }
     }
@@ -845,7 +946,25 @@ mod tests {
     }
 
     fn clean_votes() -> [(SensorKind, Vote); 3] {
-        [(Gp, Vote::Clear), (Chebur, Vote::Clear), (Rf, ABSTAIN)]
+        [(Gp, Vote::Clear), (Rf, Vote::Clear), (Ch, ABSTAIN)]
+    }
+
+    fn silent_votes() -> [(SensorKind, Vote); 3] {
+        [(Gp, ABSTAIN), (Rf, ABSTAIN), (Ch, ABSTAIN)]
+    }
+
+    /// A healthy node with a red Globalping, confirmed from Russia at `now`.
+    fn disputed(now: Ts) -> NodeRecord {
+        let mut n = healthy(now);
+        n.health.gp = GpStatus::Failed { at: now };
+        n.health.ru_confirmed_at = Some(now);
+        n
+    }
+
+    /// The agent is alive and its report is fresh at `now`.
+    fn fresh(n: &mut NodeRecord, now: Ts) {
+        n.health.last_heartbeat = now;
+        n.health.last_report = now;
     }
 
     fn blocked_votes() -> [(SensorKind, Vote); 3] {
@@ -1030,7 +1149,7 @@ mod tests {
     }
 
     #[test]
-    fn gp_failed_then_ok_needs_two_clean_rounds() {
+    fn gp_failed_then_ok_returns_on_a_clean_round_and_not_before() {
         let mut n = quarantined_gp_failed(T0);
         assert!(n.suspected);
         let mut blocks = Vec::new();
@@ -1041,10 +1160,9 @@ mod tests {
         assert_eq!(n.state, NodeState::Quarantine);
         assert!(needs_sensors(&n, at(10), &s()));
 
-        // A clean round after it counts, one is not enough.
-        let r = round(&n, &clean_votes());
+        // A round without an answer from Russia does not end it either.
+        let r = round(&n, &undecided_votes());
         assert!(apply_round(&mut n, &r, &mut blocks, at(10), &s()).is_empty());
-        assert_eq!(n.clean_rounds, 1);
         n.health = good_health(at(20));
         assert!(tick_node(&mut n, at(20), &s()).is_empty());
         assert_eq!(n.state, NodeState::Quarantine);
@@ -1114,7 +1232,7 @@ mod tests {
         assert_eq!(next_round_at(&n, &s()), Some(at(120)));
 
         // The round that used it paces the next one again.
-        let r = round(&n, &clean_votes());
+        let r = round(&n, &undecided_votes());
         apply_round(&mut n, &r, &mut blocks, at(120), &s());
         assert_eq!(next_round_at(&n, &s()), Some(at(420)));
     }
@@ -1136,7 +1254,13 @@ mod tests {
     fn clean_votes_of_other_sensors_do_not_clear_a_red_globalping() {
         let mut n = quarantined_gp_failed(T0);
         let mut blocks = Vec::new();
-        let votes = [(Gp, ABSTAIN), (Chebur, Vote::Clear), (Rf, Vote::Clear)];
+        // Only the checks from Russia can confirm the node.
+        let votes = [
+            (Gp, Vote::Clear),
+            (Chebur, Vote::Clear),
+            (Rf, ABSTAIN),
+            (Ch, ABSTAIN),
+        ];
         for t in [0, 300] {
             beat(&mut n, at(t));
             let r = round(&n, &votes);
@@ -1144,6 +1268,7 @@ mod tests {
         }
         assert_eq!(n.state, NodeState::Quarantine);
         assert_eq!(n.clean_rounds, 0);
+        assert_eq!(n.health.ru_confirmed_at, None);
     }
 
     #[test]
@@ -1189,7 +1314,7 @@ mod tests {
     #[test]
     fn gp_failing_while_quarantined_marks_the_node_suspected() {
         let mut n = healthy(T0);
-        n.health.port_ok = false;
+        n.health.metrics = Latch::new();
         tick_node(&mut n, T0, &s());
         assert!(!n.suspected);
 
@@ -1228,7 +1353,7 @@ mod tests {
     }
 
     #[test]
-    fn two_clean_rounds_recover_one_does_not() {
+    fn one_clean_round_recovers() {
         let mut n = quarantined_gp_failed(T0);
         let mut blocks = Vec::new();
         // The fresh Globalping result arrived with the round, so every condition holds.
@@ -1236,31 +1361,28 @@ mod tests {
         beat(&mut n, at(10));
         n.health.last_report = at(10);
 
-        let r = round(&n, &clean_votes());
-        assert!(apply_round(&mut n, &r, &mut blocks, at(10), &s()).is_empty());
+        // The tick does not shortcut the round.
+        assert!(tick_node(&mut n, at(10), &s()).is_empty());
         assert_eq!(n.state, NodeState::Quarantine);
-        assert_eq!(n.clean_rounds, 1);
+        assert!(needs_sensors(&n, at(10), &s()), "the round must run");
 
-        // One clean round is not enough: the tick must not shortcut the streak.
-        assert!(tick_node(&mut n, at(20), &s()).is_empty());
-        assert_eq!(n.state, NodeState::Quarantine);
-        assert!(needs_sensors(&n, at(20), &s()), "the second round must run");
-        assert_eq!(next_round_at(&n, &s()), Some(at(310)));
-
-        beat(&mut n, at(310));
-        n.health.last_report = at(310);
         let r = round(&n, &clean_votes());
         assert_eq!(
-            apply_round(&mut n, &r, &mut blocks, at(310), &s()),
+            apply_round(&mut n, &r, &mut blocks, at(10), &s()),
             vec![LifecycleEvent::Recovered]
         );
         assert_eq!(n.state, NodeState::Healthy);
-        assert_eq!(n.queued_at, at(310));
+        assert_eq!(n.queued_at, at(10));
         assert!(blocks.is_empty());
     }
 
     #[test]
     fn a_broken_streak_starts_over() {
+        // Settings may still ask for more than one clean round.
+        let settings = Settings {
+            clean_rounds_to_exit: 2,
+            ..s()
+        };
         let mut n = quarantined_gp_failed(T0);
         let mut blocks = Vec::new();
         n.health = good_health(at(10));
@@ -1271,7 +1393,7 @@ mod tests {
             let now = at(10 + 300 * i as i64);
             n.health = good_health(now);
             let r = round(&n, &votes);
-            assert!(apply_round(&mut n, &r, &mut blocks, now, &s()).is_empty());
+            assert!(apply_round(&mut n, &r, &mut blocks, now, &settings).is_empty());
         }
         assert_eq!(n.state, NodeState::Quarantine);
         assert_eq!(n.clean_rounds, 1);
@@ -1280,6 +1402,7 @@ mod tests {
     #[test]
     fn clean_votes_with_failed_condition_do_not_count() {
         let mut n = quarantined_gp_failed(T0);
+        n.health.metrics = Latch::new();
         let mut blocks = Vec::new();
         for i in 0..3 {
             let now = at(300 * i);
@@ -1347,11 +1470,7 @@ mod tests {
     fn a_single_blocked_vote_or_abstentions_never_ban() {
         let mut blocks = Vec::new();
         for votes in [
-            vec![
-                (Gp, Vote::Blocked),
-                (Chebur, Vote::Clear),
-                (Rf, Vote::Clear),
-            ],
+            vec![(Rf, Vote::Blocked), (Ch, Vote::Clear), (Gp, ABSTAIN)],
             vec![(Gp, Vote::Blocked), (Chebur, ABSTAIN), (Rf, ABSTAIN)],
             vec![(Gp, ABSTAIN), (Chebur, ABSTAIN), (Rf, ABSTAIN)],
             vec![(Gp, Vote::Blocked), (Gp, Vote::Blocked)],
@@ -1361,6 +1480,19 @@ mod tests {
             assert!(apply_round(&mut n, &r, &mut blocks, at(5), &s()).is_empty());
             assert_eq!(n.state, NodeState::Quarantine);
         }
+        // A lone Blocked of Globalping does not stand in the way of a clean round.
+        let mut n = quarantined_gp_failed(T0);
+        let votes = [
+            (Gp, Vote::Blocked),
+            (Chebur, Vote::Clear),
+            (Rf, Vote::Clear),
+        ];
+        let r = round(&n, &votes);
+        assert_eq!(
+            apply_round(&mut n, &r, &mut blocks, at(5), &s()),
+            vec![LifecycleEvent::Recovered]
+        );
+        assert_eq!(n.state, NodeState::Healthy);
         assert!(blocks.is_empty());
     }
 
@@ -1385,6 +1517,7 @@ mod tests {
         let mut blocks = Vec::new();
         let stale = RoundResult {
             generation: Generation(1),
+            started_at: n.state_since,
             votes: blocked_votes().to_vec(),
         };
         assert!(apply_round(&mut n, &stale, &mut blocks, at(5), &s()).is_empty());
@@ -1394,6 +1527,7 @@ mod tests {
 
         let current = RoundResult {
             generation: Generation(2),
+            started_at: n.state_since,
             votes: blocked_votes().to_vec(),
         };
         assert_eq!(
@@ -1692,6 +1826,87 @@ mod tests {
     }
 
     #[test]
+    fn a_new_address_or_a_recheck_forgets_the_confirmation_and_the_filter() {
+        let mark = |n: &mut NodeRecord| {
+            n.health.ru_confirmed_at = Some(T0);
+            n.health.port_filter = true;
+        };
+        let mut n = healthy(T0);
+        mark(&mut n);
+        assert!(n.change_ip(ip("192.0.2.7"), at(10)));
+        assert_eq!(n.health.ru_confirmed_at, None);
+        assert!(!n.health.port_filter);
+
+        let mut n = healthy(T0);
+        n.state = NodeState::Banned;
+        mark(&mut n);
+        unban(&mut n, &mut Vec::new(), at(10));
+        assert_eq!(n.state, NodeState::Pending);
+        assert_eq!(n.health.ru_confirmed_at, None);
+        assert!(!n.health.port_filter);
+    }
+
+    /// A filtered node whose Globalping abstains: nothing but the sensors reports on it.
+    fn run_minutes(n: &mut NodeRecord, minutes: i64) -> Vec<(i64, NodeState)> {
+        let votes = [(Gp, ABSTAIN), (Rf, Vote::Clear), (Ch, Vote::Clear)];
+        let mut states = Vec::new();
+        for minute in 1..=minutes {
+            let now = at(minute * 60);
+            beat(n, now);
+            if next_round_at(n, &s()).is_some_and(|due| due <= now) {
+                let r = round(n, &votes);
+                apply_round(n, &r, &mut Vec::new(), now, &s());
+            }
+            tick_node(n, now, &s());
+            states.push((minute, n.state));
+        }
+        states
+    }
+
+    #[test]
+    fn a_filtered_node_stays_in_the_pool_through_clean_rounds() {
+        let mut n = healthy(T0);
+        n.health.port_filter = true;
+        n.health.ru_confirmed_at = Some(T0);
+        // No verified report ever comes: its Globalping abstains.
+        let states = run_minutes(&mut n, 74);
+        assert!(
+            states.iter().all(|&(_, st)| st == NodeState::Healthy),
+            "{states:?}"
+        );
+    }
+
+    #[test]
+    fn an_unfiltered_node_without_reports_still_goes_stale() {
+        let mut n = healthy(T0);
+        let states = run_minutes(&mut n, 74);
+        assert!(
+            states.iter().any(|&(_, st)| st != NodeState::Healthy),
+            "{states:?}"
+        );
+    }
+
+    #[test]
+    fn a_new_filtered_node_leaves_pending_through_a_clean_round() {
+        let mut n = pending("node-bbbbb", "192.0.2.9", T0);
+        n.health.tcp = up();
+        n.health.metrics = up();
+        n.health.port_filter = true;
+        fresh(&mut n, at(60));
+        assert_eq!(n.health.gp, GpStatus::Unknown);
+        let events = tick_node(&mut n, at(60), &s());
+        assert!(
+            matches!(events.as_slice(), [LifecycleEvent::Quarantined { .. }]),
+            "{events:?}"
+        );
+        beat(&mut n, at(120));
+        let r = round(&n, &clean_votes());
+        let events = apply_round(&mut n, &r, &mut Vec::new(), at(120), &s());
+        assert_eq!(events, vec![LifecycleEvent::Recovered]);
+        assert_eq!(n.state, NodeState::Healthy);
+    }
+
+    #[test]
     fn ip_change_resets_state_and_bumps_generation() {
         let mut n = healthy(T0);
         n.undecided_rounds = 2;
@@ -1716,6 +1931,7 @@ mod tests {
         // A round started for the old IP is stale now.
         let stale = RoundResult {
             generation: old_generation,
+            started_at: n.state_since,
             votes: blocked_votes().to_vec(),
         };
         assert!(apply_round(&mut n, &stale, &mut Vec::new(), at(11), &s()).is_empty());
@@ -1943,5 +2159,470 @@ mod tests {
             decide_enroll(&second, &[&failed], &blocks, &[], at(110)),
             EnrollDecision::Reverify
         );
+    }
+
+    #[test]
+    fn one_clean_round_returns_a_suspected_node_with_red_globalping() {
+        let mut n = quarantined_gp_failed(T0);
+        assert!(n.suspected);
+        let votes = [(Gp, Vote::Blocked), (Rf, Vote::Clear), (Ch, ABSTAIN)];
+        let r = round(&n, &votes);
+        assert_eq!(
+            apply_round(&mut n, &r, &mut Vec::new(), at(5), &s()),
+            vec![LifecycleEvent::Recovered]
+        );
+        assert_eq!(n.state, NodeState::Healthy);
+        assert!(!n.suspected);
+        assert_eq!(n.health.ru_confirmed_at, Some(at(5)));
+        assert!(matches!(n.health.gp, GpStatus::Failed { .. }));
+        assert!(failed_conditions(&n.health, at(5), &s()).is_empty());
+    }
+
+    #[test]
+    fn a_green_measurement_does_not_end_a_suspicion() {
+        let mut n = quarantined_gp_failed(T0);
+        n.health = good_health(at(10));
+        assert!(tick_node(&mut n, at(10), &s()).is_empty());
+        assert_eq!(n.state, NodeState::Quarantine);
+        assert!(n.suspected);
+        assert!(needs_sensors(&n, at(10), &s()));
+    }
+
+    #[test]
+    fn a_clean_round_with_another_failed_condition_does_not_return() {
+        let mut n = quarantined_gp_failed(T0);
+        n.health.metrics = Latch::new();
+        let mut blocks = Vec::new();
+        let r = round(&n, &clean_votes());
+        assert!(apply_round(&mut n, &r, &mut blocks, at(5), &s()).is_empty());
+        assert_eq!(n.state, NodeState::Quarantine);
+        assert_eq!(n.undecided_rounds, 1);
+        assert_eq!(n.clean_rounds, 0);
+        assert_eq!(n.health.ru_confirmed_at, Some(at(5)));
+
+        // The metrics are back: a suspected node still waits for its clean round.
+        n.health.metrics = up();
+        assert!(tick_node(&mut n, at(10), &s()).is_empty());
+        assert_eq!(n.state, NodeState::Quarantine);
+        assert!(needs_sensors(&n, at(10), &s()));
+        let r = round(&n, &clean_votes());
+        assert_eq!(
+            apply_round(&mut n, &r, &mut blocks, at(20), &s()),
+            vec![LifecycleEvent::Recovered]
+        );
+    }
+
+    #[test]
+    fn a_healthy_disputed_node_is_checked_every_15_minutes() {
+        let mut n = disputed(T0);
+        assert!(needs_sensors(&n, T0, &s()));
+        assert_eq!(next_round_at(&n, &s()), Some(at(900)));
+
+        // The round starts: a lost result is retried after the short interval.
+        n.last_round_at = Some(at(900));
+        assert_eq!(next_round_at(&n, &s()), Some(at(1200)));
+
+        // The confirmation came, and the next check is 15 minutes after it.
+        fresh(&mut n, at(1020));
+        let r = round(&n, &clean_votes());
+        assert!(apply_round(&mut n, &r, &mut Vec::new(), at(1020), &s()).is_empty());
+        assert_eq!(n.state, NodeState::Healthy);
+        assert_eq!(n.health.ru_confirmed_at, Some(at(1020)));
+        assert_eq!(n.last_round_at, Some(at(1020)));
+        assert_eq!(next_round_at(&n, &s()), Some(at(1920)));
+    }
+
+    #[test]
+    fn a_node_that_returned_on_a_clean_round_is_checked_15_minutes_later() {
+        let mut n = quarantined_gp_failed(T0);
+        let r = round(&n, &clean_votes());
+        apply_round(&mut n, &r, &mut Vec::new(), at(5), &s());
+        assert_eq!(n.state, NodeState::Healthy);
+        assert_eq!(next_round_at(&n, &s()), Some(at(905)));
+    }
+
+    #[test]
+    fn a_healthy_node_with_green_globalping_runs_no_rounds() {
+        let mut n = healthy(T0);
+        assert!(!needs_sensors(&n, T0, &s()));
+        assert_eq!(next_round_at(&n, &s()), None);
+        // An old confirmation changes nothing.
+        n.health.ru_confirmed_at = Some(T0);
+        assert!(!needs_sensors(&n, T0, &s()));
+        assert_eq!(next_round_at(&n, &s()), None);
+    }
+
+    #[test]
+    fn an_old_healthy_record_without_a_confirmation_has_a_round_time() {
+        let mut n = healthy(T0);
+        n.state_since = at(60);
+        n.health.gp = GpStatus::Failed { at: T0 };
+        assert_eq!(n.health.ru_confirmed_at, None);
+        assert_eq!(next_round_at(&n, &s()), Some(at(960)));
+    }
+
+    #[test]
+    fn a_blocked_vote_sends_a_disputed_node_to_quarantine_at_once() {
+        for votes in [
+            vec![(Rf, Vote::Blocked), (Ch, Vote::Clear)],
+            vec![(Rf, Vote::Clear), (Ch, Vote::Blocked)],
+            vec![(Rf, Vote::Blocked), (Ch, Vote::Blocked)],
+            vec![(Gp, Vote::Blocked), (Rf, Vote::Blocked), (Ch, ABSTAIN)],
+        ] {
+            let mut n = disputed(T0);
+            fresh(&mut n, at(900));
+            let mut blocks = Vec::new();
+            let r = round(&n, &votes);
+            assert_eq!(
+                apply_round(&mut n, &r, &mut blocks, at(900), &s()),
+                vec![LifecycleEvent::Quarantined {
+                    reason: vec![FailedCondition::Globalping]
+                }],
+                "{votes:?}"
+            );
+            assert_eq!(n.state, NodeState::Quarantine, "{votes:?}");
+            assert!(n.suspected);
+            assert_eq!(n.state_since, at(900));
+            assert_eq!(n.quarantine_reasons, vec![FailedCondition::Globalping]);
+            assert_eq!(n.health.ru_confirmed_at, None);
+            assert_eq!(next_round_at(&n, &s()), Some(at(900)));
+            assert!(needs_sensors(&n, at(900), &s()));
+            assert!(blocks.is_empty(), "a round of a healthy node never bans");
+        }
+    }
+
+    #[test]
+    fn blocked_votes_of_other_sensors_neither_confirm_nor_remove_a_disputed_node() {
+        let mut n = disputed(T0);
+        fresh(&mut n, at(900));
+        let mut blocks = Vec::new();
+        let votes = [
+            (Gp, Vote::Blocked),
+            (Chebur, Vote::Blocked),
+            (Rf, Vote::Clear),
+        ];
+        let r = round(&n, &votes);
+        assert!(apply_round(&mut n, &r, &mut blocks, at(900), &s()).is_empty());
+        assert_eq!(n.state, NodeState::Healthy);
+        assert_eq!(n.health.ru_confirmed_at, Some(T0));
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn silent_sensors_retry_after_5_minutes_then_the_confirmation_expires() {
+        let mut n = disputed(T0);
+        fresh(&mut n, at(850));
+        let r = round(&n, &silent_votes());
+        assert!(apply_round(&mut n, &r, &mut Vec::new(), at(850), &s()).is_empty());
+        assert_eq!(n.state, NodeState::Healthy);
+        assert_eq!(
+            n.health.ru_confirmed_at,
+            Some(T0),
+            "silence confirms nothing"
+        );
+        assert_eq!(n.last_round_at, Some(at(850)));
+        assert_eq!(next_round_at(&n, &s()), Some(at(1150)));
+
+        fresh(&mut n, at(1199));
+        assert!(tick_node(&mut n, at(1199), &s()).is_empty());
+        assert_eq!(n.state, NodeState::Healthy);
+
+        fresh(&mut n, at(1200));
+        assert_eq!(
+            tick_node(&mut n, at(1200), &s()),
+            vec![LifecycleEvent::Quarantined {
+                reason: vec![FailedCondition::Globalping]
+            }]
+        );
+        assert!(n.suspected);
+    }
+
+    #[test]
+    fn silent_sensors_extend_the_confirmation_of_a_filtered_node() {
+        let mut n = healthy(T0);
+        n.health.port_filter = true;
+        n.health.ru_confirmed_at = Some(T0);
+        fresh(&mut n, at(900));
+        let r = round(&n, &silent_votes());
+        assert!(apply_round(&mut n, &r, &mut Vec::new(), at(900), &s()).is_empty());
+        assert_eq!(n.state, NodeState::Healthy);
+        assert_eq!(n.health.ru_confirmed_at, Some(at(900)));
+        // Such a node is checked every 15 minutes, answered or not.
+        assert_eq!(next_round_at(&n, &s()), Some(at(1800)));
+        fresh(&mut n, at(1500));
+        assert!(failed_conditions(&n.health, at(1500), &s()).is_empty());
+
+        // Nothing to extend: the node was never confirmed.
+        let mut never = healthy(T0);
+        never.health.port_filter = true;
+        let r = round(&never, &silent_votes());
+        apply_round(&mut never, &r, &mut Vec::new(), at(1), &s());
+        assert_eq!(never.health.ru_confirmed_at, None);
+
+        // Nothing to extend: the confirmation is over, silence does not bring it back.
+        let mut over = healthy(T0);
+        over.health.port_filter = true;
+        over.health.ru_confirmed_at = Some(T0);
+        fresh(&mut over, at(1200));
+        let r = round(&over, &silent_votes());
+        apply_round(&mut over, &r, &mut Vec::new(), at(1200), &s());
+        assert_eq!(over.health.ru_confirmed_at, Some(T0));
+    }
+
+    #[test]
+    fn an_expired_confirmation_goes_before_a_retry_at_the_same_moment() {
+        let mut n = disputed(T0);
+        fresh(&mut n, at(900));
+        let r = round(&n, &silent_votes());
+        apply_round(&mut n, &r, &mut Vec::new(), at(900), &s());
+        assert_eq!(next_round_at(&n, &s()), Some(at(1200)));
+
+        fresh(&mut n, at(1200));
+        assert_eq!(
+            tick_node(&mut n, at(1200), &s()),
+            vec![LifecycleEvent::Quarantined {
+                reason: vec![FailedCondition::Globalping]
+            }]
+        );
+        assert_eq!(n.state, NodeState::Quarantine);
+        assert!(n.suspected);
+        assert!(needs_sensors(&n, at(1200), &s()));
+        assert_eq!(next_round_at(&n, &s()), Some(at(1200)), "a round at once");
+    }
+
+    #[test]
+    fn filter_appearing_without_a_confirmation_means_suspicion_and_a_round() {
+        let mut n = healthy(T0);
+        n.health.port_filter = true;
+        assert_eq!(
+            tick_node(&mut n, at(1), &s()),
+            vec![LifecycleEvent::Quarantined {
+                reason: vec![FailedCondition::Globalping]
+            }]
+        );
+        assert!(n.suspected);
+        assert!(needs_sensors(&n, at(1), &s()));
+        assert_eq!(next_round_at(&n, &s()), Some(at(1)));
+    }
+
+    #[test]
+    fn filter_removed_with_green_globalping_stops_the_checks() {
+        let mut n = healthy(T0);
+        n.health.port_filter = true;
+        n.health.ru_confirmed_at = Some(T0);
+        assert!(needs_sensors(&n, T0, &s()));
+        assert_eq!(next_round_at(&n, &s()), Some(at(900)));
+
+        n.health.port_filter = false;
+        assert!(!needs_sensors(&n, T0, &s()));
+        assert_eq!(next_round_at(&n, &s()), None);
+        assert!(tick_node(&mut n, at(1), &s()).is_empty());
+        assert_eq!(n.state, NodeState::Healthy);
+    }
+
+    #[test]
+    fn a_late_round_does_not_touch_a_node_that_turned_green() {
+        for votes in [
+            vec![(Rf, Vote::Blocked), (Ch, Vote::Blocked)],
+            vec![(Rf, Vote::Blocked), (Ch, Vote::Clear)],
+            clean_votes().to_vec(),
+            silent_votes().to_vec(),
+        ] {
+            let mut n = healthy(T0);
+            n.health.ru_confirmed_at = Some(T0);
+            let before = n.clone();
+            let mut blocks = Vec::new();
+            let r = round(&n, &votes);
+            assert!(apply_round(&mut n, &r, &mut blocks, at(5), &s()).is_empty());
+            assert_eq!(n, before, "{votes:?}");
+            assert!(blocks.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_late_round_of_another_generation_is_dropped() {
+        let mut n = disputed(T0);
+        let before = n.clone();
+        let late = RoundResult {
+            generation: n.generation.next(),
+            started_at: n.state_since,
+            votes: vec![(Rf, Vote::Blocked), (Ch, Vote::Blocked)],
+        };
+        assert!(apply_round(&mut n, &late, &mut Vec::new(), at(5), &s()).is_empty());
+        assert_eq!(n, before);
+    }
+
+    #[test]
+    fn a_late_round_does_not_judge_a_node_the_sensors_may_not_check() {
+        let two_blocked = [(Rf, Vote::Blocked), (Ch, Vote::Blocked)];
+        type Change = fn(&mut NodeRecord);
+        let cases: [Change; 3] = [
+            // The pool's port changed while the round was running.
+            |n| n.health.port_ok = false,
+            // The agent gave up the pool's configuration while the round was running.
+            |n| n.health.pool_user_taken = true,
+            // The round started on a healthy node, which left for another reason: nobody is
+            // waiting for it, the node is not suspected.
+            |n| n.suspected = false,
+        ];
+        for change in cases {
+            let mut n = quarantined_gp_failed(T0);
+            n.health.ru_confirmed_at = Some(T0);
+            change(&mut n);
+            let before = n.clone();
+            let mut blocks = Vec::new();
+            let r = round(&n, &two_blocked);
+            assert!(apply_round(&mut n, &r, &mut blocks, at(5), &s()).is_empty());
+            assert_eq!(n, before);
+            assert!(blocks.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_port_mismatch_runs_no_sensors_even_with_red_globalping() {
+        let mut n = healthy(T0);
+        n.health.gp = GpStatus::Failed { at: T0 };
+        n.health.port_ok = false;
+        assert_eq!(
+            tick_node(&mut n, T0, &s()),
+            vec![LifecycleEvent::Quarantined {
+                reason: vec![FailedCondition::Globalping, FailedCondition::Port]
+            }]
+        );
+        assert_eq!(n.state, NodeState::Quarantine);
+        assert!(!n.suspected);
+        assert!(!needs_sensors(&n, T0, &s()));
+        assert_eq!(next_round_at(&n, &s()), None);
+        tick_node(&mut n, at(5), &s());
+        assert!(!n.suspected, "still the wrong port");
+
+        // A suspected node keeps its suspicion, but gets no rounds either.
+        let mut suspected = quarantined_gp_failed(T0);
+        suspected.health.port_ok = false;
+        assert!(!needs_sensors(&suspected, T0, &s()));
+        assert_eq!(next_round_at(&suspected, &s()), None);
+
+        // The right port: the red Globalping counts now.
+        n.health.port_ok = true;
+        assert!(tick_node(&mut n, at(10), &s()).is_empty());
+        assert!(n.suspected);
+        assert!(needs_sensors(&n, at(10), &s()));
+    }
+
+    #[test]
+    fn reverify_stays_strict() {
+        let now = at(100);
+        for votes in [
+            vec![(Gp, Vote::Blocked), (Rf, Vote::Clear), (Ch, Vote::Clear)],
+            vec![(Gp, ABSTAIN), (Rf, Vote::Clear), (Ch, ABSTAIN)],
+        ] {
+            let (mut n, mut blocks) = blocked_ip_with_reverify_node(now);
+            let r = round(&n, &votes);
+            assert_eq!(
+                apply_round(&mut n, &r, &mut blocks, now, &s()),
+                vec![LifecycleEvent::ReverifyFailed {
+                    retry_after_sec: 900,
+                    votes: votes.clone(),
+                }]
+            );
+            assert_eq!(n.state, NodeState::Banned);
+            assert_eq!(blocks.len(), 1, "the block stays");
+        }
+    }
+
+    #[test]
+    fn the_check_is_asked_ahead_of_a_round_and_during_it() {
+        let wants = |n: &mut NodeRecord, now: Ts| {
+            beat(n, now);
+            wants_check_host(n, now, &s())
+        };
+        // A round is due at 900; the agent syncs every 60 seconds and has 30 to spare.
+        let mut n = disputed(T0);
+        assert!(!wants(&mut n, at(809)));
+        assert!(wants(&mut n, at(810)));
+        assert!(wants(&mut n, at(900)));
+
+        // A round started at 900: the result is awaited, the next one is due at 1200.
+        n.last_round_at = Some(at(900));
+        assert!(wants(&mut n, at(1019)));
+        assert!(!wants(&mut n, at(1020)));
+        assert!(!wants(&mut n, at(1109)));
+        assert!(wants(&mut n, at(1110)));
+
+        // The node is not under the check.
+        let mut green = healthy(T0);
+        assert!(!wants(&mut green, at(5)));
+        // Down: no round would run.
+        let mut down = disputed(T0);
+        down.health.tcp = Latch::new();
+        assert!(!wants(&mut down, at(900)));
+
+        // A suspected node at once.
+        let mut suspected = quarantined_gp_failed(T0);
+        assert!(wants(&mut suspected, T0));
+    }
+
+    #[test]
+    fn a_record_stored_before_the_confirmation_stays_where_it_was() {
+        let mut stored = healthy(T0);
+        stored.health.gp = GpStatus::Failed { at: T0 };
+        let mut value = serde_json::to_value(&stored).unwrap();
+        let health = value["health"].as_object_mut().unwrap();
+        assert!(health.remove("ru_confirmed_at").is_some());
+        assert!(health.remove("port_filter").is_some());
+
+        let mut n: NodeRecord = serde_json::from_value(value).unwrap();
+        assert_eq!(n, stored);
+        assert_eq!(n.state, NodeState::Healthy);
+        assert_eq!(
+            tick_node(&mut n, at(1), &s()),
+            vec![LifecycleEvent::Quarantined {
+                reason: vec![FailedCondition::Globalping]
+            }]
+        );
+        assert_eq!(n.state, NodeState::Quarantine);
+        assert!(n.suspected);
+    }
+
+    #[test]
+    fn a_round_started_before_this_quarantine_is_not_judged() {
+        for votes in [
+            vec![(Rf, Vote::Blocked), (Ch, Vote::Blocked)],
+            clean_votes().to_vec(),
+            undecided_votes().to_vec(),
+        ] {
+            let mut n = quarantined_gp_failed(T0);
+            // The round of this quarantine that the driver dropped.
+            n.last_round_at = Some(T0);
+            let before = n.clone();
+            let mut blocks = Vec::new();
+            let late = RoundResult {
+                generation: n.generation,
+                started_at: Ts(T0.0 - 1),
+                votes: votes.clone(),
+            };
+            assert!(apply_round(&mut n, &late, &mut blocks, at(5), &s()).is_empty());
+            assert!(blocks.is_empty(), "{votes:?}");
+            assert_eq!(n.last_round_at, None, "the next tick runs a real round");
+            assert_eq!(next_round_at(&n, &s()), Some(T0));
+            assert!(needs_sensors(&n, at(5), &s()));
+            // Nothing else moved: no confirmation, no counted round.
+            n.last_round_at = before.last_round_at;
+            assert_eq!(n, before, "{votes:?}");
+        }
+    }
+
+    #[test]
+    fn a_round_started_as_the_quarantine_began_is_judged() {
+        let mut n = quarantined_gp_failed(T0);
+        let mut blocks = Vec::new();
+        let r = RoundResult {
+            generation: n.generation,
+            started_at: n.state_since,
+            votes: vec![(Rf, Vote::Blocked), (Ch, Vote::Blocked)],
+        };
+        assert_eq!(apply_round(&mut n, &r, &mut blocks, at(5), &s()).len(), 1);
+        assert_eq!(n.state, NodeState::Banned);
+        assert_eq!(blocks.len(), 1);
     }
 }

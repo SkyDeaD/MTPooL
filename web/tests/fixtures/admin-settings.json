@@ -16,6 +16,8 @@
   "rounds_before_slow": 3,
   "clean_rounds_to_exit": 2,
   "reverify_pause_sec": 900,
+  "ru_confirmation_sec": 600,
+  "ru_recheck_sec": 120,
   "masters_per_domain": 1,
   "rotation_ttl_sec": 1800,
   "dns_ttl": 60,

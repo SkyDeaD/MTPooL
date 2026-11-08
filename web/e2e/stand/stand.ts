@@ -153,7 +153,7 @@ export async function startStand(): Promise<Stand> {
     MTPOOL_LOG: 'warn',
     MTPOOL_RELEASES_DIR: join(dir, 'releases'),
     MTPOOL_GLOBALPING_URL: `${fakes}/globalping/`,
-    MTPOOL_CHEBURCHECK_URL: `${fakes}/cheburcheck/`,
+    MTPOOL_CHECK_HOST_URL: `${fakes}/check-host/`,
     MTPOOL_REDFLAG_URL: `${fakes}/redflag/`,
     MTPOOL_CLOUDFLARE_URL: `${fakes}/cloudflare/`,
   };
@@ -300,9 +300,10 @@ export async function startStand(): Promise<Stand> {
 
     // While the sensors are made to lie, healthy nodes send no fresh reports (a report is a check).
     quiet = true;
-    // The node that gets banned: both Globalping and cheburcheck see a block.
+    // The node that gets banned: both Globalping and RedFlag see a block. The nodes of this stand
+    // are simulated and run no check-host check, so check-host has no vote here.
     await agent.fakes('globalping', 'blocked');
-    await agent.fakes('cheburcheck', 'blocked');
+    await agent.fakes('redflag', 'blocked');
     await agent.report(nodes.get(roster.banned)!, { clients: 0 });
     await sleep(2500);
     await agent.report(nodes.get(roster.banned)!, { clients: 0 }).catch(() => {}); // may be banned already
@@ -319,7 +320,6 @@ export async function startStand(): Promise<Stand> {
     });
 
     // The node that stays in quarantine: one sensor sees a block, the other two cannot say.
-    await agent.fakes('cheburcheck', 'unavailable');
     await agent.fakes('redflag', 'unauthorized');
     await agent.report(nodes.get(roster.quarantine)!, { clients: 0 });
     await sleep(2500);
@@ -330,7 +330,7 @@ export async function startStand(): Promise<Stand> {
     });
     await sleep(6000); // a round or two, so the node page has votes to show
     await admin('/settings', { method: 'PATCH', body: { round_interval_sec: 3_600 } });
-    for (const sensor of ['globalping', 'cheburcheck', 'redflag'] as FakesMode[]) await agent.fakes(sensor, 'ok');
+    for (const sensor of ['globalping', 'redflag'] as FakesMode[]) await agent.fakes(sensor, 'ok');
     quiet = false;
 
     // The node that waits in the queue: pending, never reported.

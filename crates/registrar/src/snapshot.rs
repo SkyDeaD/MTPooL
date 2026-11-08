@@ -145,6 +145,8 @@ impl<'a> View<'a> {
                     GpStatus::NoData { .. } => GlobalpingCheck::NoData,
                 },
             },
+            globalping_disputed: n.state == mtpool_core::NodeState::Healthy
+                && matches!(n.health.gp, GpStatus::Failed { .. }),
             quarantine_reasons: n
                 .quarantine_reasons
                 .iter()
@@ -397,6 +399,32 @@ mod tests {
         assert!(!doc.checks.metrics);
         assert_eq!(doc.checks.globalping, GlobalpingCheck::NoData);
         assert_eq!(doc.next_round_at, None, "a healthy node runs no rounds");
+    }
+
+    #[test]
+    fn a_healthy_node_with_red_globalping_is_disputed() {
+        let mut n = node("alpha-00001", T0);
+        n.health.gp = GpStatus::Failed { at: Ts(T0) };
+        let state = pool(settings(0), vec![n]);
+        let snapshot = Snapshot::build(&state);
+        assert!(snapshot.node_docs["alpha-00001"].globalping_disputed);
+    }
+
+    #[test]
+    fn a_quarantined_or_green_node_is_not() {
+        let mut green = node("alpha-00001", T0);
+        green.health.gp = GpStatus::Ok { at: Ts(T0) };
+        let mut filtered = node("alpha-00002", T0);
+        filtered.health.port_filter = true;
+        filtered.health.gp = GpStatus::Ok { at: Ts(T0) };
+        let mut quarantined = node("alpha-00003", T0);
+        quarantined.state = NodeState::Quarantine;
+        quarantined.health.gp = GpStatus::Failed { at: Ts(T0) };
+        let state = pool(settings(0), vec![green, filtered, quarantined]);
+        let snapshot = Snapshot::build(&state);
+        for id in ["alpha-00001", "alpha-00002", "alpha-00003"] {
+            assert!(!snapshot.node_docs[id].globalping_disputed, "{id}");
+        }
     }
 
     #[test]

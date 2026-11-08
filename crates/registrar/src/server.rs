@@ -35,7 +35,9 @@ use crate::prober::Prober;
 use crate::release;
 use crate::secrets;
 use crate::sensors::Sensor;
-use crate::sensors::cheburcheck::CheburcheckSensor;
+use crate::sensors::check_host::{
+    CheckHostInbox, CheckHostSensor, CheckHostVerifier, TcpConnector,
+};
 use crate::sensors::globalping::{
     GlobalpingClient, GlobalpingSensor, GlobalpingVerifier, SharedSettings, TokenSource,
 };
@@ -87,6 +89,10 @@ pub struct AppState {
     pub minisign_pub: &'static str,
     /// The rollout of agent releases.
     pub rollouts: crate::rollout::RolloutService,
+    /// The check-host results the agents reported, waiting for the round of their node.
+    pub check_host: Arc<CheckHostInbox>,
+    /// Downloads and checks the answer of a check-host measurement an agent names.
+    pub check_host_verifier: Arc<CheckHostVerifier>,
 }
 
 impl AppState {
@@ -105,8 +111,15 @@ impl AppState {
                 tracing::error!(error = %e, "cannot read the saved rollouts, starting without");
                 crate::rollout::RolloutService::empty(store.clone(), clock.clone())
             });
+        let check_host = Arc::new(CheckHostInbox::with_clock(clock.clone()));
+        let check_host_verifier = Arc::new(
+            CheckHostVerifier::new(CheckHostVerifier::default_base())
+                .expect("the HTTP client of the check-host verifier builds"),
+        );
         AppState {
             rollouts,
+            check_host,
+            check_host_verifier,
             store,
             actor,
             snapshots,
@@ -167,6 +180,18 @@ impl AppState {
     /// The same state serving `key` as the release signing key.
     pub fn with_minisign_pub(mut self, key: &'static str) -> AppState {
         self.minisign_pub = key;
+        self
+    }
+
+    /// The same state with `inbox` as the place the check-host results wait in.
+    pub fn with_check_host(mut self, inbox: Arc<CheckHostInbox>) -> AppState {
+        self.check_host = inbox;
+        self
+    }
+
+    /// The same state with `verifier` downloading the check-host answers.
+    pub fn with_check_host_verifier(mut self, verifier: Arc<CheckHostVerifier>) -> AppState {
+        self.check_host_verifier = verifier;
         self
     }
 
@@ -333,13 +358,20 @@ pub async fn run_with(
     let globalping =
         GlobalpingClient::new(endpoints.globalping, token).map_err(RunError::HttpClient)?;
     let verifier = GlobalpingVerifier::new(globalping.clone(), gp_settings.clone());
+    // The agents hand check-host results over through the inbox; the sensor takes them from it.
+    let check_host = Arc::new(CheckHostInbox::new());
+    let check_host_verifier =
+        Arc::new(CheckHostVerifier::new(endpoints.check_host).map_err(RunError::HttpClient)?);
     // The three sensors of a round. RedFlag's key is asked for on every call too.
     let redflag_store = store.clone();
     let redflag_key: TokenSource =
         Arc::new(move || secrets::secret(&redflag_store, "redflag_api_key"));
     let sensors: Vec<Arc<dyn Sensor>> = vec![
         Arc::new(GlobalpingSensor::new(globalping, gp_settings.clone())),
-        Arc::new(CheburcheckSensor::new(endpoints.cheburcheck).map_err(RunError::HttpClient)?),
+        Arc::new(CheckHostSensor::new(
+            check_host.clone(),
+            Arc::new(TcpConnector),
+        )),
         Arc::new(RedFlagSensor::new(endpoints.redflag, redflag_key).map_err(RunError::HttpClient)?),
     ];
     drivers.push(Arc::new(RoundRunner::new(sensors)));
@@ -385,7 +417,9 @@ pub async fn run_with(
         .with_gp_settings(gp_settings)
         .with_allow_private_ips(allow_private_ips)
         .with_releases_dir(releases_dir)
-        .with_verifier(Arc::new(verifier));
+        .with_verifier(Arc::new(verifier))
+        .with_check_host(check_host)
+        .with_check_host_verifier(check_host_verifier);
     // Before anything is served: an agent must not be offered a build this registrar went back
     // from.
     let rollouts = state.rollouts.clone();

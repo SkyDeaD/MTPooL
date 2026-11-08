@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkRows, formatAvailability, groupNodes, historySlots, panelBans, poolCounts, whyText } from '../src/lib/model';
+import { checkRows, formatAvailability, groupNodes, historySlots, panelBans, poolCounts, sensorName, whyText } from '../src/lib/model';
 import type { BanRecord, PublicNode } from '../src/lib/types';
 import history from './fixtures/node-history.json';
 import nodes from './fixtures/nodes.json';
@@ -32,12 +32,23 @@ describe('model', () => {
   });
 
   it('groups_nodes_and_leaves_out_the_rest', () => {
-    const extra = ['pending', 'dead', 'pruned'].map((state) => ({ ...list[0], id: `x-${state}`, is_master: false, state }));
+    const extra = ['dead', 'pruned'].map((state) => ({ ...list[0], id: `x-${state}`, is_master: false, state }));
     const g = groupNodes([...list, ...(extra as PublicNode[])]);
     expect(g.masters.map((n) => n.id)).toEqual(['alpha-k3m2q', 'beta-r8t4w', 'gamma-x2n9d']);
     expect(g.queue.map((n) => n.id)).toEqual(['epsilon-h4j6s', 'zeta-w9b3y', 'eta-c5f8l']);
     expect(g.quarantine.map((n) => n.id)).toEqual(['theta-m1d7z']);
     expect(g.outside).toEqual([]);
+  });
+
+  it('a_node_passing_registration_has_its_own_group_and_is_not_counted_as_in_the_pool', () => {
+    const pending = { ...list[0], id: 'kappa-t6r1b', is_master: false, state: 'pending' } as PublicNode;
+    const g = groupNodes([...list, pending]);
+    expect(g.pending.map((n) => n.id)).toEqual(['kappa-t6r1b']);
+    expect(g.masters.map((n) => n.id)).not.toContain('kappa-t6r1b');
+    expect(g.queue.map((n) => n.id)).not.toContain('kappa-t6r1b');
+    const c = poolCounts([...list, pending]);
+    expect(c.shown).toBe(7);
+    expect(c.working).toBe(6);
   });
 
   it('a_quarantine_without_a_suspicion_is_only_out_of_the_queue', () => {
@@ -70,6 +81,21 @@ describe('model', () => {
     expect(states({ tcp: true, metrics: true, globalping: 'ok' })).toEqual(['tcp:ok', 'metrics:ok', 'globalping:ok']);
     expect(states({ tcp: false, metrics: false, globalping: 'failed' })).toEqual(['tcp:bad', 'metrics:bad', 'globalping:bad']);
     expect(states({ tcp: true, metrics: true, globalping: 'no_data' })).toEqual(['tcp:ok', 'metrics:ok', 'globalping:none']);
+  });
+
+  it('a_disputed_globalping_has_its_own_title', () => {
+    const row = checkRows({ tcp: true, metrics: true, globalping: 'failed' }, true).find((r) => r.name === 'globalping')!;
+    expect(row.title).toBe('check.disputed.globalping');
+    expect(row.state).toBe('warn');
+    expect(row.state).not.toBe('bad');
+  });
+
+  it('the_sensor_check_host_has_a_name', () => {
+    expect(sensorName('check_host')).toBe('check-host');
+  });
+
+  it('an_old_cheburcheck_vote_keeps_its_name', () => {
+    expect(sensorName('cheburcheck')).toBe('cheburcheck');
   });
 
   it('puts_quarantine_reasons_in_words_and_keeps_a_code_it_does_not_know', () => {

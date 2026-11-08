@@ -22,7 +22,7 @@ const NODES: u8 = 8;
 const IPS: u8 = 6;
 const KINDS: [SensorKind; 3] = [
     SensorKind::Globalping,
-    SensorKind::Cheburcheck,
+    SensorKind::CheckHost,
     SensorKind::RedFlag,
 ];
 
@@ -271,6 +271,7 @@ impl Driver {
                     .collect();
                 vec![Command::RoundDone {
                     generation: self.generation(&id, *stale),
+                    started_at: self.now,
                     node: id,
                     votes,
                 }]
@@ -377,6 +378,7 @@ impl Driver {
             other_traffic: None,
             other_clients: None,
             pool_user_taken: false,
+            port_filter: None,
         })
     }
 }

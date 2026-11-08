@@ -65,6 +65,28 @@ pub enum GpReport {
     },
 }
 
+/// What the agent says about its check-host measurement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CheckHostReport {
+    /// A check was started; the registrar fetches its result under the id.
+    Started {
+        #[schema(example = "abc123")]
+        id: String,
+        /// The port the check connected to.
+        #[schema(example = 443)]
+        port: u16,
+    },
+    /// No check this time. Not a failure.
+    NoData {
+        /// `rate_limited`, `unavailable`, `timeout`; anything else counts as no data.
+        #[schema(example = "rate_limited")]
+        reason: String,
+    },
+    /// The agent does not run check-host (switched off on the node).
+    Disabled,
+}
+
 /// What the engine's metrics said. The first three numbers count the users the pool set up on
 /// the node; the `other_*` ones count everyone else on the engine, that is the owner's own users.
 /// A report without `other_*` comes from an older agent, or from one that does not yet know the
@@ -124,6 +146,15 @@ pub struct ReportRequest {
     #[schema(example = "tls.example.com")]
     pub sni: String,
     pub gp: GpReport,
+    /// The check-host measurement. Absent in a report of an older agent: the registrar then
+    /// counts no data from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_host: Option<CheckHostReport>,
+    /// The name of the set whose addresses another pool's firewall rules drop on the proxy port,
+    /// as the agent reads it; absent when there is no such filter or the agent cannot tell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "blocklist")]
+    pub port_filter: Option<String>,
     pub metrics: MetricsReport,
     pub dc2: Option<Dc2Report>,
     pub host: Option<HostReport>,
@@ -172,6 +203,14 @@ pub struct AgentConfig {
     /// after the last measurement began, nor within an interval after a 429.
     #[serde(default)]
     pub measure_now: bool,
+    /// This registrar takes `check_host` and `port_filter` in a report. Without it the agent
+    /// leaves them out.
+    #[serde(default)]
+    pub report_check_host: bool,
+    /// The registrar asks for a check-host measurement out of turn: a decisive check of a node
+    /// suspected of a block is due.
+    #[serde(default)]
+    pub check_host_now: bool,
 }
 
 /// `POST /agent/update`: the agent says which version it runs and asks whether to update.
@@ -317,6 +356,61 @@ mod tests {
                 reason: "rate_limited".into()
             }
         );
+    }
+
+    #[test]
+    fn check_host_report_is_tagged_by_kind() {
+        let started: CheckHostReport =
+            serde_json::from_value(json!({ "kind": "started", "id": "x", "port": 22 }))
+                .expect("started");
+        assert_eq!(
+            started,
+            CheckHostReport::Started {
+                id: "x".into(),
+                port: 22
+            }
+        );
+        let disabled: CheckHostReport =
+            serde_json::from_value(json!({ "kind": "disabled" })).expect("disabled");
+        assert_eq!(disabled, CheckHostReport::Disabled);
+        let none: CheckHostReport =
+            serde_json::from_value(json!({ "kind": "no_data", "reason": "timeout" }))
+                .expect("no data");
+        assert_eq!(
+            none,
+            CheckHostReport::NoData {
+                reason: "timeout".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_config_without_check_host_is_an_older_registrar() {
+        let config = json!({
+            "users": [], "sni": "tls.example.test", "port": 443, "antiscan": true,
+            "intervals": {
+                "heartbeat_sec": 15, "globalping_sec": 300, "metrics_sec": 60, "sync_sec": 60
+            }
+        });
+        let parsed: AgentConfig = serde_json::from_value(config).expect("config");
+        assert!(!parsed.report_check_host);
+        assert!(!parsed.check_host_now);
+    }
+
+    #[test]
+    fn an_old_report_has_no_check_host_and_no_filter() {
+        let report = json!({
+            "ip": "192.0.2.1", "port": 443, "sni": "tls.example.test",
+            "gp": { "kind": "no_data", "reason": "rate_limited" },
+            "metrics": { "ok": true, "from_client_total": 1, "to_client_total": 2, "clients": 3 },
+            "dc2": null, "host": null, "checked_at": "2026-11-03T12:00:00Z", "error": null
+        });
+        let parsed: ReportRequest = serde_json::from_value(report).expect("report");
+        assert_eq!(parsed.check_host, None);
+        assert_eq!(parsed.port_filter, None);
+        let back = serde_json::to_value(&parsed).unwrap();
+        assert!(back.get("check_host").is_none());
+        assert!(back.get("port_filter").is_none());
     }
 
     #[test]

@@ -7,18 +7,21 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use common::*;
+use mtpool_agent::check_host::{CheckHostLoop, IpSource};
 use mtpool_agent::engine::EngineError;
 use mtpool_agent::engine::EngineHealth;
 use mtpool_agent::engine::http::HttpResponse;
 use mtpool_agent::engine::http::testing::ScriptedHttp;
 use mtpool_agent::gp::GpLoop;
+use mtpool_agent::host::testing::ScriptedRunner;
 use mtpool_agent::ip_detect::{IP_SOURCES, IpWatch};
 use mtpool_agent::lifecycle::{ConfigSink, Health, ReportSource};
+use mtpool_agent::port_filter::PortFilterWatch;
 use mtpool_agent::report::{
     ChecksSetup, ConfigMemory, NodeChecks, Remembering, ReportInputs, build_report,
 };
 use mtpool_agent::state_files::{DiskUsage, Fs, MemFs};
-use mtpool_protocol::agent::{Dc2Report, GpReport, HostReport, MetricsReport};
+use mtpool_protocol::agent::{CheckHostReport, Dc2Report, GpReport, HostReport, MetricsReport};
 use serde_json::json;
 use tokio::time::Instant;
 
@@ -30,6 +33,8 @@ fn inputs() -> ReportInputs {
         gp: GpReport::Measured {
             id: "2BSGWjCSdcIMKXZfj00021RC5".into(),
         },
+        check_host: None,
+        port_filter: None,
         metrics: Ok(MetricsReport {
             ok: true,
             from_client_total: 5,
@@ -216,9 +221,15 @@ struct Node {
     http: Arc<ScriptedHttp>,
     memory: ConfigMemory,
     gp: GpLoop,
+    check_host: CheckHostLoop,
+    save: Arc<ScriptedRunner>,
 }
 
 fn node(port_override: Option<u16>) -> Node {
+    node_with_service(port_override, "http://127.0.0.1:9")
+}
+
+fn node_with_service(port_override: Option<u16>, check_host_url: &str) -> Node {
     let engine = FakeEngine::new();
     let ports = FakePorts::new(true);
     let http = Arc::new(ScriptedHttp::new());
@@ -248,6 +259,8 @@ fn node(port_override: Option<u16>) -> Node {
     });
     let memory = ConfigMemory::new();
     let gp = GpLoop::new("http://127.0.0.1:9", ports.clone()).unwrap();
+    let check_host = CheckHostLoop::new(check_host_url, 22, IpSource::default()).unwrap();
+    let save = Arc::new(ScriptedRunner::new());
     let setup = ChecksSetup {
         engine: engine.clone(),
         port: port_override,
@@ -255,6 +268,8 @@ fn node(port_override: Option<u16>) -> Node {
         fs: fs.clone(),
         ip: IpWatch::new(http.clone(), fs.clone(), "/state".into()),
         gp: gp.clone(),
+        check_host: check_host.clone(),
+        port_filter: PortFilterWatch::new(save.clone()),
         memory: memory.clone(),
     };
     Node {
@@ -265,6 +280,8 @@ fn node(port_override: Option<u16>) -> Node {
         http,
         memory,
         gp,
+        check_host,
+        save,
     }
 }
 
@@ -422,4 +439,143 @@ async fn enrolled_resets_the_checks() {
         Health::Good,
         "a node that has just enrolled starts with a clean slate"
     );
+}
+
+const CHECK_HOST_START: &str = include_str!("../../registrar/tests/fixtures/check-host/start.json");
+
+async fn check_host_service() -> wiremock::MockServer {
+    use wiremock::matchers::{method, path};
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(method("GET"))
+        .and(path("/check-tcp"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .set_body_raw(CHECK_HOST_START.as_bytes().to_vec(), "application/json"),
+        )
+        .mount(&server)
+        .await;
+    server
+}
+
+#[tokio::test]
+async fn check_host_is_sent_only_to_a_registrar_that_takes_it() {
+    let server = check_host_service().await;
+    let n = node_with_service(None, &server.uri());
+    n.checks.enrolled();
+
+    // An older registrar: nothing in the report, and the service is not asked.
+    n.memory.remember(&agent_config(30, 60));
+    n.checks.watch(Instant::now()).await;
+    n.check_host.tick(Instant::now()).await;
+    assert_eq!(n.checks.build().await.unwrap().check_host, None);
+    assert!(server.received_requests().await.unwrap().is_empty());
+
+    // One that takes it: the field is there.
+    let mut config = agent_config(30, 60);
+    config.report_check_host = true;
+    n.memory.remember(&config);
+    n.checks.watch(Instant::now()).await;
+    n.check_host.tick(Instant::now()).await;
+    let report = n.checks.build().await.unwrap();
+    assert_eq!(
+        report.check_host,
+        Some(CheckHostReport::Started {
+            id: "56626c28k235".into(),
+            port: 22
+        })
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_finished_check_is_sent_with_the_next_heartbeat() {
+    let server = check_host_service().await;
+    let n = node_with_service(None, &server.uri());
+    let mut config = agent_config(30, 60);
+    config.report_check_host = true;
+    n.memory.remember(&config);
+    n.checks.enrolled();
+    n.checks.watch(Instant::now()).await;
+    assert!(!n.checks.has_measurement(), "nothing has run yet");
+
+    n.check_host.tick(Instant::now()).await;
+    assert!(
+        n.checks.has_measurement(),
+        "the lifecycle hurries the report"
+    );
+    assert!(n.checks.build().await.unwrap().check_host.is_some());
+    assert!(!n.checks.has_measurement(), "the id goes out once");
+}
+
+#[tokio::test]
+async fn the_registrar_asking_runs_the_check_again_after_the_gap() {
+    let server = check_host_service().await;
+    let n = node_with_service(None, &server.uri());
+    let mut config = agent_config(30, 60);
+    config.report_check_host = true;
+    n.memory.remember(&config);
+    n.checks.enrolled();
+    let t0 = Instant::now();
+    n.checks.watch(t0).await;
+    n.check_host.tick(t0).await;
+    n.checks.build().await.unwrap();
+
+    config.check_host_now = true;
+    n.memory.remember(&config);
+    let later = t0 + mtpool_agent::check_host::GAP;
+    n.checks.watch(t0 + Duration::from_secs(1)).await;
+    n.check_host.tick(t0 + Duration::from_secs(1)).await;
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    n.check_host.tick(later).await;
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+}
+
+fn save_with(filter: bool) -> Vec<u8> {
+    let rules = if filter {
+        "-A INPUT -p tcp -m tcp --dport 443 -m set --match-set scan src -j DROP\n"
+    } else {
+        ""
+    };
+    format!("*filter\n:INPUT ACCEPT [0:0]\n{rules}COMMIT\n").into_bytes()
+}
+
+#[tokio::test]
+async fn the_filter_is_sent_only_to_a_registrar_that_takes_it() {
+    let n = node(None);
+    n.save.push_output(0, &save_with(true));
+    n.memory.remember(&agent_config(30, 60));
+    n.checks.watch(Instant::now()).await;
+    assert!(
+        n.save.calls().is_empty(),
+        "no iptables-save for an old registrar"
+    );
+    assert_eq!(n.checks.build().await.unwrap().port_filter, None);
+
+    let mut config = agent_config(30, 60);
+    config.report_check_host = true;
+    n.memory.remember(&config);
+    n.checks.watch(Instant::now()).await;
+    assert_eq!(n.save.calls().len(), 1);
+    assert_eq!(
+        n.checks.build().await.unwrap().port_filter.as_deref(),
+        Some("scan")
+    );
+}
+
+#[tokio::test]
+async fn a_removed_filter_is_no_longer_reported() {
+    let n = node(None);
+    n.save.push_output(0, &save_with(true));
+    n.save.push_output(0, &save_with(false));
+    let mut config = agent_config(30, 60);
+    config.report_check_host = true;
+    n.memory.remember(&config);
+    let t0 = Instant::now();
+    n.checks.watch(t0).await;
+    assert_eq!(
+        n.checks.build().await.unwrap().port_filter.as_deref(),
+        Some("scan")
+    );
+    n.checks.watch(t0 + Duration::from_secs(1800)).await;
+    assert_eq!(n.checks.build().await.unwrap().port_filter, None);
 }

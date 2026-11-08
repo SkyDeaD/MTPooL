@@ -2,7 +2,7 @@
 // has comes from `X-Forwarded-For` (the registrar trusts it from a loopback peer, as it does from
 // its own reverse proxy), so the stand can give nodes documentation addresses (203.0.113.x).
 
-export type FakesMode = 'globalping' | 'cheburcheck' | 'redflag' | 'cloudflare' | 'github';
+export type FakesMode = 'globalping' | 'check_host' | 'redflag' | 'cloudflare' | 'github';
 
 export interface SimNode {
   name: string;
@@ -71,6 +71,8 @@ export class Agent {
       port: node.port,
       sni,
       gp: { kind: 'measured', id },
+      // A simulated node runs no check-host check: the sensor abstains at once and does not wait for one.
+      check_host: { kind: 'disabled' },
       metrics: {
         ok: true,
         from_client_total: 1_000_000 + (opts.clients ?? 0) * 1000,

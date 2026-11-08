@@ -6,52 +6,127 @@ mod common;
 
 use std::time::Instant;
 
-use common::{enroll_healthy, last_round, secs, set_sensors, settings, vote_of, wait_calls};
-use mtpool_e2e::{DOMAIN, Stand, StandOptions, eventually};
+use common::{
+    check_host_fetches, check_host_limited, check_host_starts, enroll_healthy, last_round,
+    last_round_at, secs, set_sensors, settings, vote_in, vote_of, wait_calls, wait_event,
+    wait_flag, wait_round, wait_round_after,
+};
+use mtpool_e2e::{DOMAIN, Node, Stand, StandOptions, eventually};
 use serde_json::json;
 
-/// One `Blocked` vote leaves the node in quarantine; the second one bans it.
+/// A node whose Globalping check fails while RedFlag and check-host see it fine goes through
+/// quarantine and is brought back by one clean round, with a note that Globalping disagrees.
+async fn disputed_node(stand: &Stand) -> (Node<'_>, String) {
+    // The check the agent makes when it enrols is the one a round can use, so check-host is set first.
+    set_sensors(stand, &[("check_host", "ok")]).await;
+    let (node, id) = enroll_healthy(stand, 1, "node-one").await;
+    let before = check_host_starts(stand).await.len();
+    assert!(
+        before >= 1,
+        "the agent made no check-host check at enrolment"
+    );
+
+    set_sensors(stand, &[("globalping", "blocked")]).await;
+    // The flag is already true on a healthy node whose check failed, before a round has moved it
+    // to quarantine. So the order is read from the events: quarantine first, then the way back,
+    // and only then the flag is looked at.
+    let quarantined = wait_event(stand, "node_quarantined", &id, 60).await;
+    assert_eq!(quarantined.len(), 1, "{quarantined:?}");
+    let recovered = wait_event(stand, "node_recovered", &id, 90).await;
+    assert_eq!(recovered.len(), 1, "{recovered:?}");
+    stand
+        .wait_state_in(&id, &["healthy"], secs(30))
+        .await
+        .expect("the node is healthy after the way back");
+    wait_flag(stand, &id, "globalping_disputed", true, 30).await;
+    (node, id)
+}
+
+/// Globalping alone says blocked, RedFlag and check-host see the node: it stays in the pool, marked
+/// as disputed, and nothing bans it.
 #[tokio::test]
 #[ignore = "needs Docker; run with --ignored"]
-async fn one_vote_no_ban_two_votes_ban() {
+async fn false_globalping_returns_after_one_clean_round() {
     let stand = Stand::up().await.expect("the stand comes up");
-    let (_node, id) = enroll_healthy(&stand, 1, "node-one").await;
+    let (node, id) = disputed_node(&stand).await;
 
-    // Globalping alone says blocked: cheburcheck and RedFlag answer clear.
-    set_sensors(&stand, &[("globalping", "blocked")]).await;
-    stand
-        .wait_state_in(&id, &["quarantine"], secs(60))
-        .await
-        .expect("a failed Globalping check puts the node in quarantine");
-    let round = eventually("a round with one Blocked vote", secs(60), || async {
-        match last_round(&stand, &id).await {
-            Some(round) => Ok(round),
-            None => Err("no round yet".to_owned()),
-        }
+    // `disputed_node` has seen quarantine, then recovery, then the flag. What decided it is the
+    // round of the way back.
+    let round = wait_round(&stand, &id, "the round that decided", 30, |r| {
+        vote_in(r, "globalping").is_some_and(|v| v.0 == "blocked")
     })
-    .await
-    .expect("a round runs");
-    let (verdict, votes) = round;
+    .await;
     assert_eq!(
-        vote_of(&votes, "globalping").as_deref(),
-        Some("blocked"),
-        "{votes:?}"
+        vote_in(&round, "red_flag").map(|v| v.0).as_deref(),
+        Some("clear"),
+        "{round}"
     );
-    assert_eq!(verdict, "undecided", "{votes:?}");
-    // A few more rounds change nothing.
-    tokio::time::sleep(secs(8)).await;
     assert_eq!(
-        stand.node_state(&id).await.unwrap().as_deref(),
-        Some("quarantine")
+        vote_in(&round, "check_host").map(|v| v.0).as_deref(),
+        Some("clear"),
+        "{round}"
     );
+    assert!(stand.bans().await.unwrap().is_empty());
+
+    // The stand-in was really asked, about this node and the port of its engine.
+    let ip = node.ip().await.unwrap();
+    let starts = check_host_starts(&stand).await;
+    assert!(
+        starts
+            .iter()
+            .any(|s| s["host"] == json!(ip) && s["port"] == json!(443)),
+        "check-host was not asked about {ip}:443: {starts:?}"
+    );
+    let info = stand.node_info(&id).await.unwrap();
+    assert_eq!(info["globalping_disputed"], json!(true), "{info}");
+}
+
+/// The Russian check repeats on a disputed node; a `Blocked` in it sends the node back to
+/// quarantine. A round of a healthy node bans nobody, even with two `Blocked` votes in it.
+#[tokio::test]
+#[ignore = "needs Docker; run with --ignored"]
+async fn a_disputed_node_returns_to_quarantine_on_blocked() {
+    let stand = Stand::up().await.expect("the stand comes up");
+    let (_node, id) = disputed_node(&stand).await;
+
+    // The repeated check comes with the next check of the agent, at most 20 s on a stand.
+    settings(&stand, json!({"ru_recheck_sec": 20})).await;
+    set_sensors(&stand, &[("check_host", "blocked")]).await;
+    stand
+        .wait_state_in(&id, &["quarantine"], secs(120))
+        .await
+        .expect("a Blocked from check-host in the repeated check quarantines the node");
     assert!(
         stand.bans().await.unwrap().is_empty(),
-        "one vote banned the node"
+        "a round of a healthy node banned the node"
     );
+    let round = wait_round(&stand, &id, "the round with the Blocked", 30, |r| {
+        vote_in(r, "check_host").is_some_and(|v| v.0 == "blocked")
+    })
+    .await;
+    assert_eq!(
+        vote_in(&round, "red_flag").map(|v| v.0).as_deref(),
+        Some("clear"),
+        "{round}"
+    );
+    assert_eq!(
+        stand.node_info(&id).await.unwrap()["suspected"],
+        json!(true)
+    );
+}
 
-    // The second independent sensor agrees.
-    set_sensors(&stand, &[("cheburcheck", "blocked")]).await;
-    wait_banned(&stand, &id, secs(60)).await;
+/// Globalping and check-host both say blocked: that is two votes, and the node is banned.
+#[tokio::test]
+#[ignore = "needs Docker; run with --ignored"]
+async fn globalping_and_check_host_ban() {
+    let stand = Stand::up().await.expect("the stand comes up");
+    // The check at enrolment sees a block; Globalping, still green, keeps the node healthy.
+    set_sensors(&stand, &[("check_host", "blocked")]).await;
+    let (_node, id) = enroll_healthy(&stand, 1, "node-one").await;
+    assert!(stand.bans().await.unwrap().is_empty());
+
+    set_sensors(&stand, &[("globalping", "blocked")]).await;
+    wait_banned(&stand, &id, secs(120)).await;
     assert_eq!(
         stand.node_state(&id).await.unwrap(),
         None,
@@ -60,11 +135,140 @@ async fn one_vote_no_ban_two_votes_ban() {
     let bans = stand.bans().await.unwrap();
     assert_eq!(bans.len(), 1, "{bans:?}");
     assert_eq!(bans[0]["node_id"], json!(id), "{bans:?}");
-    let blocked = bans[0]["votes"].to_string().matches("blocked").count();
+    let votes = bans[0]["votes"].as_array().expect("the votes of the ban");
+    let blocked: Vec<_> = votes
+        .iter()
+        .filter(|v| v["vote"] == "blocked")
+        .map(|v| v["sensor"].as_str().unwrap_or_default().to_owned())
+        .collect();
     assert!(
-        blocked >= 2,
-        "the ban records its votes: {}",
-        bans[0]["votes"]
+        blocked.contains(&"globalping".to_owned()) && blocked.contains(&"check_host".to_owned()),
+        "the ban records both votes: {votes:?}"
+    );
+}
+
+/// Another pool's filter on the port hides the node from Globalping's probes. The vote of Globalping
+/// is then `Abstain(port_filter)`, and a ban needs both RedFlag and check-host.
+#[tokio::test]
+#[ignore = "needs Docker; run with --ignored"]
+async fn a_filtered_node_needs_both_russian_checks_to_ban() {
+    let stand = Stand::up().await.expect("the stand comes up");
+    // A foreign rule on the engine's port with a set that holds only an address nobody uses:
+    // it changes what the agent sees and blocks no check.
+    stand
+        .node(1)
+        .exec(
+            "ipset create e2e_foreign hash:ip && ipset add e2e_foreign 192.0.2.1 \
+             && iptables -I INPUT -p tcp --dport 443 -m set --match-set e2e_foreign src -j DROP",
+        )
+        .await
+        .expect("the foreign rule is put in place");
+    set_sensors(&stand, &[("check_host", "ok")]).await;
+    let (_node, id) = enroll_healthy(&stand, 1, "node-one").await;
+    settings(&stand, json!({"ru_recheck_sec": 20})).await;
+
+    // A healthy node is never banned by a round. RedFlag says blocked, check-host sees the node:
+    // the node goes to quarantine, suspected. Globalping says blocked too and must not count.
+    set_sensors(&stand, &[("globalping", "blocked"), ("redflag", "blocked")]).await;
+    wait_event(&stand, "node_quarantined", &id, 60).await;
+    assert!(stand.bans().await.unwrap().is_empty());
+    let mut at = last_round_at(&stand, &id).await;
+
+    // In quarantine: RedFlag `blocked` alone, check-host `clear`.
+    let round = wait_round_after(&stand, &id, &at, "a round with RedFlag alone", 90, |r| {
+        vote_in(r, "red_flag").is_some_and(|v| v.0 == "blocked")
+            && vote_in(r, "check_host").is_some_and(|v| v.0 == "clear")
+    })
+    .await;
+    assert_eq!(
+        vote_in(&round, "globalping"),
+        Some(("abstain".to_owned(), Some("port_filter".to_owned()))),
+        "{round}"
+    );
+    assert_eq!(round["verdict"], json!("undecided"), "{round}");
+    no_ban_and_still_in_quarantine(&stand, &id, "RedFlag alone").await;
+    at = round["at"].as_str().unwrap().to_owned();
+
+    // The two Russian checks must not say blocked in one round, so the way to the next case goes
+    // through rounds in which neither does: check-host first, then RedFlag falls silent. A round
+    // that sees check-host clear next to a silent RedFlag would let the node out of quarantine.
+    set_sensors(&stand, &[("check_host", "refused")]).await;
+    let round = wait_round_after(&stand, &id, &at, "check-host stops saying clear", 90, |r| {
+        vote_in(r, "check_host").is_some_and(|v| v.0 == "abstain")
+    })
+    .await;
+    set_sensors(&stand, &[("redflag", "unauthorized")]).await;
+    let round = wait_round_after(
+        &stand,
+        &id,
+        round["at"].as_str().unwrap(),
+        "a round in which both abstain",
+        90,
+        |r| {
+            vote_in(r, "red_flag").is_some_and(|v| v.0 == "abstain")
+                && vote_in(r, "check_host").is_some_and(|v| v.0 == "abstain")
+        },
+    )
+    .await;
+    set_sensors(&stand, &[("check_host", "blocked")]).await;
+    let round = wait_round_after(
+        &stand,
+        &id,
+        round["at"].as_str().unwrap(),
+        "check-host alone says blocked",
+        90,
+        |r| vote_in(r, "check_host").is_some_and(|v| v.0 == "blocked"),
+    )
+    .await;
+    assert_eq!(
+        vote_in(&round, "red_flag").map(|v| v.0).as_deref(),
+        Some("abstain"),
+        "{round}"
+    );
+    no_ban_and_still_in_quarantine(&stand, &id, "check-host alone").await;
+
+    // Check-host `blocked` alone, RedFlag `clear`.
+    set_sensors(&stand, &[("redflag", "ok")]).await;
+    let round = wait_round_after(
+        &stand,
+        &id,
+        round["at"].as_str().unwrap(),
+        "check-host blocked next to a clear RedFlag",
+        90,
+        |r| {
+            vote_in(r, "check_host").is_some_and(|v| v.0 == "blocked")
+                && vote_in(r, "red_flag").is_some_and(|v| v.0 == "clear")
+        },
+    )
+    .await;
+    assert_eq!(round["verdict"], json!("undecided"), "{round}");
+    no_ban_and_still_in_quarantine(&stand, &id, "check-host with a clear RedFlag").await;
+
+    // Both: RedFlag says blocked now, check-host still does.
+    set_sensors(&stand, &[("redflag", "blocked")]).await;
+    wait_banned(&stand, &id, secs(120)).await;
+    let bans = stand.bans().await.unwrap();
+    assert_eq!(bans.len(), 1, "{bans:?}");
+    let votes = bans[0]["votes"].as_array().expect("the votes of the ban");
+    let blocked: Vec<_> = votes
+        .iter()
+        .filter(|v| v["vote"] == "blocked")
+        .map(|v| v["sensor"].as_str().unwrap_or_default())
+        .collect();
+    assert!(
+        blocked.contains(&"red_flag")
+            && blocked.contains(&"check_host")
+            && !blocked.contains(&"globalping"),
+        "the ban rests on RedFlag and check-host: {votes:?}"
+    );
+}
+
+async fn no_ban_and_still_in_quarantine(stand: &Stand, id: &str, what: &str) {
+    assert!(stand.bans().await.unwrap().is_empty(), "{what} banned");
+    assert_eq!(
+        stand.node_state(id).await.unwrap().as_deref(),
+        Some("quarantine"),
+        "{what} moved the node out of quarantine"
     );
 }
 
@@ -73,13 +277,15 @@ async fn one_vote_no_ban_two_votes_ban() {
 #[ignore = "needs Docker; run with --ignored"]
 async fn all_sensors_down_no_ban_then_pruned() {
     let stand = Stand::up().await.expect("the stand comes up");
+    // The agent gets `limit_exceeded` from check-host and has nothing to report: no result, no vote.
+    set_sensors(&stand, &[("check_host", "limited")]).await;
     let (_node, id) = enroll_healthy(&stand, 1, "node-one").await;
     settings(
         &stand,
         // The agent's report must not vote for Globalping in the rounds: they are about sensors
-        // that are down.
+        // that are down. The hour of the spec is shortened to what a test can wait for.
         json!({
-            "quarantine_max_sec": 120,
+            "quarantine_max_sec": 300,
             "globalping": {"vote_report_max_age_sec": 1},
         }),
     )
@@ -88,11 +294,7 @@ async fn all_sensors_down_no_ban_then_pruned() {
     // A failed check makes the node suspected; a stale report alone would not run sensors.
     set_sensors(
         &stand,
-        &[
-            ("globalping", "blocked"),
-            ("cheburcheck", "unavailable"),
-            ("redflag", "unauthorized"),
-        ],
+        &[("globalping", "blocked"), ("redflag", "unauthorized")],
     )
     .await;
     stand
@@ -104,11 +306,11 @@ async fn all_sensors_down_no_ban_then_pruned() {
     // may still have the Globalping vote of the failed check: one vote, no ban.
     let (verdict, votes) = eventually(
         "a round in which every sensor abstains",
-        secs(90),
+        secs(240),
         || async {
             match last_round(&stand, &id).await {
                 Some((verdict, votes))
-                    if ["globalping", "cheburcheck", "red_flag"]
+                    if ["globalping", "check_host", "red_flag"]
                         .iter()
                         .all(|s| vote_of(&votes, s).as_deref() == Some("abstain")) =>
                 {
@@ -121,64 +323,247 @@ async fn all_sensors_down_no_ban_then_pruned() {
     .await
     .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(verdict, "undecided", "{votes:?}");
-    for sensor in ["globalping", "cheburcheck", "red_flag"] {
-        assert_eq!(
-            vote_of(&votes, sensor).as_deref(),
-            Some("abstain"),
-            "{sensor} voted although it was down: {votes:?}"
-        );
-    }
     assert!(
         stand.bans().await.unwrap().is_empty(),
         "a ban without any vote"
     );
     stand
-        .wait_state_in(&id, &["pruned"], secs(150))
+        .wait_state_in(&id, &["pruned"], secs(400))
         .await
         .expect("the node leaves quarantine and is pruned, not banned");
     assert!(stand.bans().await.unwrap().is_empty());
+    assert!(
+        stand.sensor_calls("check_host").await.unwrap() >= 1,
+        "check-host was never asked"
+    );
 }
 
-/// The quick `blocked: true` flag of cheburcheck is not a vote when its probes come back clean.
+/// The port check-host is asked about is closed on the node: the registrar finds out itself and
+/// the vote is an abstention, whatever check-host says.
 #[tokio::test]
 #[ignore = "needs Docker; run with --ignored"]
-async fn cheburcheck_fast_flag_alone_no_vote() {
+async fn a_closed_check_port_abstains() {
     let stand = Stand::up().await.expect("the stand comes up");
-    let (_node, id) = enroll_healthy(&stand, 1, "node-one").await;
-
-    // Sensors are asked only about a node in quarantine, so Globalping is made to fail. The
-    // stand-in cheburcheck answers its default: the fast flag says blocked, the probes say clear.
-    let before = stand.sensor_calls("cheburcheck").await.unwrap();
-    set_sensors(&stand, &[("globalping", "blocked")]).await;
-    stand
-        .wait_state_in(&id, &["quarantine"], secs(60))
+    set_sensors(&stand, &[("check_host", "blocked")]).await;
+    let node = stand.node(1);
+    let id = node
+        .enroll_checking_port("node-one", 2222)
         .await
-        .expect("the node goes to quarantine");
-    wait_calls(&stand, "cheburcheck", before, 3, 60).await;
+        .expect("the node enrolls");
+    stand
+        .wait_state(&id, "healthy", secs(120))
+        .await
+        .expect("the node becomes healthy");
+    set_sensors(
+        &stand,
+        &[("globalping", "blocked"), ("redflag", "unauthorized")],
+    )
+    .await;
 
-    let (verdict, votes) = eventually("a round with a cheburcheck vote", secs(30), || async {
-        match last_round(&stand, &id).await {
-            Some((v, votes)) if vote_of(&votes, "cheburcheck").is_some() => Ok((v, votes)),
-            other => Err(format!("{other:?}")),
+    let round = wait_round(&stand, &id, "a round with a check-host vote", 240, |r| {
+        vote_in(r, "check_host").is_some()
+    })
+    .await;
+    assert_eq!(
+        vote_in(&round, "check_host"),
+        Some(("abstain".to_owned(), Some("port_closed".to_owned()))),
+        "{round}"
+    );
+    assert_eq!(
+        vote_in(&round, "globalping").map(|v| v.0).as_deref(),
+        Some("blocked"),
+        "{round}"
+    );
+    assert!(stand.bans().await.unwrap().is_empty());
+    let ip = node.ip().await.unwrap();
+    let starts = check_host_starts(&stand).await;
+    assert!(
+        starts
+            .iter()
+            .any(|s| s["host"] == json!(ip) && s["port"] == json!(2222)),
+        "check-host was not asked about the configured port: {starts:?}"
+    );
+}
+
+/// What one node of `answers_without_a_vote` was enrolled under.
+struct Probe {
+    mode: &'static str,
+    id: String,
+    /// The id the stand-in gave to the check of this node (none when it refused to start one).
+    check_id: Option<String>,
+    ip: String,
+}
+
+/// Answers of check-host that are not a clear sign of a block or of a free address give no vote,
+/// and a `Blocked` from Globalping next to them bans nobody. The nodes of one stand are each
+/// enrolled under another mode of the stand-in, since the first check of a node is the one its
+/// first round uses. The stand-in reads the mode when the registrar fetches an answer, so each
+/// node is given time to have its answer read (or given up on) before the mode changes, and the
+/// reads are counted to prove which mode was answered.
+async fn answers_without_a_vote(modes: &[&'static str]) {
+    let stand = Stand::up().await.expect("the stand comes up");
+    let mut probes: Vec<Probe> = Vec::new();
+    for (i, mode) in modes.iter().enumerate() {
+        set_sensors(&stand, &[("check_host", mode)]).await;
+        let n = u32::try_from(i).unwrap() + 1;
+        let (node, id) = enroll_healthy(&stand, n, &format!("node-{n}")).await;
+        let ip = node.ip().await.unwrap();
+        let mut probe = Probe {
+            mode,
+            id,
+            check_id: None,
+            ip: ip.clone(),
+        };
+        if *mode == "limited" {
+            eventually("the start is turned away", secs(30), || async {
+                let limited = check_host_limited(&stand).await;
+                if limited.iter().any(|l| l["host"] == json!(ip)) {
+                    Ok(())
+                } else {
+                    Err(format!("{limited:?}"))
+                }
+            })
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        } else {
+            let check_id = eventually("the check of this node is started", secs(30), || async {
+                let starts = check_host_starts(&stand).await;
+                starts
+                    .iter()
+                    .find(|s| s["host"] == json!(ip) && s["mode"] == json!(mode))
+                    .and_then(|s| s["id"].as_str().map(str::to_owned))
+                    .ok_or_else(|| format!("{starts:?}"))
+            })
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+            let second_of_a_shared_id = *mode == "same_id" && i > 0;
+            if second_of_a_shared_id {
+                // The id is taken: the registrar does not read an answer for this start. Time to
+                // see that it does not.
+                tokio::time::sleep(secs(5)).await;
+            } else {
+                eventually("the answer is read", secs(30), || async {
+                    let n = check_host_fetches(&stand, &check_id).await.len();
+                    if n >= 1 {
+                        Ok(())
+                    } else {
+                        Err("no read yet".to_owned())
+                    }
+                })
+                .await
+                .unwrap_or_else(|e| panic!("{e}"));
+            }
+            if *mode == "garbage" {
+                // An unparsable answer is read again for 30 s before the registrar gives up. The
+                // mode must stay until it has.
+                tokio::time::sleep(secs(34)).await;
+            }
+            probe.check_id = Some(check_id);
+        }
+        probes.push(probe);
+    }
+    set_sensors(
+        &stand,
+        &[("globalping", "blocked"), ("redflag", "unauthorized")],
+    )
+    .await;
+
+    // The first round of each node is the one that uses the check made at its enrolment; the later
+    // ones ask for new checks, in the mode the stand-in has by then. All nodes are watched at
+    // once so that no first round is missed.
+    let seen = std::sync::Mutex::new(vec![None::<serde_json::Value>; probes.len()]);
+    eventually("a first round of every node", secs(200), || async {
+        let mut all = true;
+        for (index, probe) in probes.iter().enumerate() {
+            if seen.lock().unwrap()[index].is_some() {
+                continue;
+            }
+            let info = stand
+                .node_info(&probe.id)
+                .await
+                .map_err(|e| e.to_string())?;
+            let round = &info["last_round"];
+            if !round.is_null()
+                && vote_in(round, "globalping").is_some_and(|v| v.0 == "blocked")
+                && vote_in(round, "check_host").is_some()
+            {
+                seen.lock().unwrap()[index] = Some(round.clone());
+            } else {
+                all = false;
+            }
+        }
+        if all {
+            Ok(())
+        } else {
+            Err("not every node had a round".to_owned())
         }
     })
     .await
-    .expect("a round");
-    assert_eq!(
-        vote_of(&votes, "cheburcheck").as_deref(),
-        Some("clear"),
-        "the fast flag alone gave a vote: {votes:?}"
+    .unwrap_or_else(|e| panic!("{e}"));
+    let rounds = seen.into_inner().unwrap();
+
+    for (index, probe) in probes.iter().enumerate() {
+        let round = rounds[index].as_ref().expect("a round");
+        let (expected, reason) = match probe.mode {
+            "refused" | "mixed" => ("abstain", Some("unknown_answer")),
+            "limited" => ("abstain", Some("rate_limited")),
+            "garbage" | "foreign" => ("abstain", Some("no_data")),
+            // The first node under `same_id` owns the shared id: its result counts, the second
+            // one is refused.
+            "same_id" if index == 0 => ("clear", None),
+            "same_id" => ("abstain", Some("no_data")),
+            other => panic!("no expectation for {other}"),
+        };
+        assert_eq!(
+            vote_in(round, "check_host"),
+            Some((expected.to_owned(), reason.map(str::to_owned))),
+            "{}: {round}",
+            probe.mode
+        );
+        let reads = match &probe.check_id {
+            Some(check_id) => check_host_fetches(&stand, check_id).await,
+            None => Vec::new(),
+        };
+        let all_in_mode = reads.iter().all(|r| r["mode"] == json!(probe.mode));
+        match (probe.mode, index) {
+            ("limited", _) => {
+                let limited = check_host_limited(&stand).await;
+                assert!(
+                    limited.iter().any(|l| l["host"] == json!(probe.ip)),
+                    "the start of {} was not turned away: {limited:?}",
+                    probe.ip
+                );
+            }
+            // Read again and again for the 30 s the registrar waits for an answer it can parse.
+            ("garbage", _) => assert!(reads.len() >= 5 && all_in_mode, "{reads:?}"),
+            // A foreign host is rejected at the first read.
+            ("foreign", _) => assert!(reads.len() == 1 && all_in_mode, "{reads:?}"),
+            // The id belongs to the first node: one read, and none for the start that lost it.
+            ("same_id", 0) => assert!(reads.len() == 1 && all_in_mode, "{reads:?}"),
+            ("same_id", _) => assert!(
+                reads.len() == 1,
+                "the second start under the shared id was read: {reads:?}"
+            ),
+            _ => assert!(
+                !reads.is_empty() && all_in_mode,
+                "{}: {reads:?}",
+                probe.mode
+            ),
+        }
+    }
+    assert!(
+        stand.bans().await.unwrap().is_empty(),
+        "an answer without a vote banned a node"
     );
-    assert_eq!(
-        vote_of(&votes, "globalping").as_deref(),
-        Some("blocked"),
-        "{votes:?}"
-    );
-    assert_eq!(verdict, "undecided", "{votes:?}");
-    assert!(stand.bans().await.unwrap().is_empty());
-    assert_eq!(
-        stand.node_state(&id).await.unwrap().as_deref(),
-        Some("quarantine")
+}
+
+#[tokio::test]
+#[ignore = "needs Docker; run with --ignored"]
+async fn check_host_answers_that_give_no_vote() {
+    tokio::join!(
+        answers_without_a_vote(&["refused", "mixed", "limited"]),
+        answers_without_a_vote(&["garbage", "foreign"]),
+        answers_without_a_vote(&["same_id", "same_id"]),
     );
 }
 
@@ -187,6 +572,8 @@ async fn cheburcheck_fast_flag_alone_no_vote() {
 #[ignore = "needs Docker; run with --ignored"]
 async fn gp_403_with_tls_healthy() {
     let stand = Stand::up().await.expect("the stand comes up");
+    // No result from check-host: only RedFlag could confirm the node from Russia, and it will not.
+    set_sensors(&stand, &[("check_host", "limited")]).await;
     let (_node, id) = enroll_healthy(&stand, 1, "node-one").await;
 
     // The stand-in's `ok` answer is the recorded 403 with TLS: the agent keeps measuring and the
@@ -199,23 +586,27 @@ async fn gp_403_with_tls_healthy() {
     );
 
     // And it is what lets a node out of quarantine: a failed check, then the 403 again.
-    set_sensors(&stand, &[("globalping", "blocked")]).await;
+    set_sensors(
+        &stand,
+        &[("globalping", "blocked"), ("redflag", "unauthorized")],
+    )
+    .await;
     stand
         .wait_state_in(&id, &["quarantine"], secs(60))
         .await
         .expect("a failed check quarantines the node");
-    set_sensors(&stand, &[("globalping", "ok")]).await;
+    set_sensors(&stand, &[("globalping", "ok"), ("redflag", "ok")]).await;
     stand
-        .wait_state_in(&id, &["healthy"], secs(90))
+        .wait_state_in(&id, &["healthy"], secs(120))
         .await
         .expect("the 403 with TLS brings the node back");
-    let (_, votes) = last_round(&stand, &id)
-        .await
-        .expect("the recovery was decided by rounds");
+    // The round that brought the node back may still hold the vote of the failed check. What
+    // shows that the 403 with TLS counts as a success is the agent's next report: the node is
+    // no longer marked as disputed.
+    wait_flag(&stand, &id, "globalping_disputed", false, 60).await;
     assert_eq!(
-        vote_of(&votes, "globalping").as_deref(),
-        Some("clear"),
-        "{votes:?}"
+        stand.node_state(&id).await.unwrap().as_deref(),
+        Some("healthy")
     );
     assert!(stand.bans().await.unwrap().is_empty());
 }
@@ -394,52 +785,24 @@ async fn db_write_error_visible_in_readyz() {
     assert!(seen.is_ok(), "{:?}", seen.err());
 }
 
-/// A banned address whose node asks again is checked once more: a clean answer lifts the ban, a
-/// dirty one keeps it.
+/// A banned address whose node asks again is checked once more: a dirty answer keeps the ban, a
+/// clean one lifts it, and a node that comes back can be banned again.
 #[tokio::test]
 #[ignore = "needs Docker; run with --ignored"]
 async fn reverify_clean_lifts_dirty_keeps() {
     let stand = Stand::up().await.expect("the stand comes up");
+    // The check the agent makes at enrolment sees a block.
+    set_sensors(&stand, &[("check_host", "blocked")]).await;
     let (_node, id) = enroll_healthy(&stand, 1, "node-one").await;
     settings(&stand, json!({"reverify_pause_sec": 10})).await;
 
     // Two sensors say blocked: the node is banned.
-    set_sensors(
-        &stand,
-        &[("globalping", "blocked"), ("cheburcheck", "blocked")],
-    )
-    .await;
-    wait_banned(&stand, &id, secs(90)).await;
+    set_sensors(&stand, &[("globalping", "blocked")]).await;
+    wait_banned(&stand, &id, secs(120)).await;
 
-    // The address is clean again. The agent lost its token with the record and, the pause over,
-    // asks the pool for a place by itself.
-    set_sensors(&stand, &[("globalping", "ok"), ("cheburcheck", "ok")]).await;
-    eventually("the ban is lifted", secs(90), || async {
-        match stand.events(Some("ban_lifted"), None).await {
-            Ok(events) if !events.is_empty() => Ok(()),
-            Ok(_) => Err("no ban_lifted event yet".to_owned()),
-            Err(e) => Err(e.to_string()),
-        }
-    })
-    .await
-    .unwrap_or_else(|e| panic!("{e}"));
-    let bans = stand.bans().await.unwrap();
-    assert_eq!(bans.len(), 1, "{bans:?}");
-    assert!(
-        !bans[0]["lifted_at"].is_null(),
-        "the ban is marked lifted: {bans:?}"
-    );
-    let new_id = healthy_node_other_than(&stand, &id).await;
-
-    // The same again, but one sensor still says blocked: the ban stays.
-    set_sensors(
-        &stand,
-        &[("globalping", "blocked"), ("cheburcheck", "blocked")],
-    )
-    .await;
-    wait_banned(&stand, &new_id, secs(90)).await;
-    set_sensors(&stand, &[("cheburcheck", "ok")]).await;
-    eventually("the reverify fails", secs(90), || async {
+    // The agent lost its token with the record and, the pause over, asks the pool for a place by
+    // itself. The address is still blocked: the re-check keeps the ban.
+    eventually("the reverify fails", secs(120), || async {
         match stand.events(Some("node_reverify_failed"), None).await {
             Ok(events) if !events.is_empty() => Ok(()),
             Ok(_) => Err("no node_reverify_failed event yet".to_owned()),
@@ -450,31 +813,85 @@ async fn reverify_clean_lifts_dirty_keeps() {
     .unwrap_or_else(|e| panic!("{e}"));
     let bans = stand.bans().await.unwrap();
     // The failed re-check is written to the ban log as a row of its own (`reverify: true`) that
-    // keeps the dirty verdict; the first ban stays the only lifted one. The agent keeps asking
-    // after each pause, so there may be more re-checks by now.
-    assert!(bans.len() >= 3, "{bans:?}");
-    let open: Vec<_> = bans.iter().filter(|b| b["lifted_at"].is_null()).collect();
-    assert_eq!(
-        open.len(),
-        bans.len() - 1,
-        "the second ban and the failed re-checks stay: {bans:?}"
+    // keeps the dirty verdict. The agent keeps asking after each pause, so there may be more.
+    assert!(
+        bans.iter().all(|b| b["lifted_at"].is_null()),
+        "a dirty re-check lifts nothing: {bans:?}"
     );
-    let recheck = open
+    let recheck = bans
         .iter()
         .find(|b| b["reverify"] == true)
         .unwrap_or_else(|| panic!("a re-check row is open: {bans:?}"));
-    assert!(
-        recheck["votes"].as_array().is_some_and(|v| v
+    let kept_votes = recheck["votes"]
+        .as_array()
+        .expect("the votes of the re-check");
+    let blocked_by = |sensor: &str| {
+        kept_votes
             .iter()
-            .any(|x| x["sensor"] == "globalping" && x["vote"] == "blocked")),
-        "the re-check keeps the blocked vote: {recheck:?}"
+            .any(|x| x["sensor"] == sensor && x["vote"] == "blocked")
+    };
+    assert!(
+        blocked_by("globalping") && blocked_by("check_host"),
+        "the re-check keeps both blocked votes: {recheck:?}"
     );
+    assert!(
+        stand
+            .events(Some("ban_lifted"), None)
+            .await
+            .unwrap()
+            .is_empty(),
+        "no ban was lifted yet"
+    );
+
+    // The address is clean again: the next re-check lifts the ban.
+    set_sensors(
+        &stand,
+        &[
+            ("globalping", "ok"),
+            ("redflag", "ok"),
+            ("check_host", "ok"),
+        ],
+    )
+    .await;
+    eventually("the ban is lifted", secs(120), || async {
+        match stand.events(Some("ban_lifted"), None).await {
+            Ok(events) if !events.is_empty() => Ok(()),
+            Ok(_) => Err("no ban_lifted event yet".to_owned()),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+    .unwrap_or_else(|e| panic!("{e}"));
     let lifted = stand.events(Some("ban_lifted"), None).await.unwrap();
-    assert_eq!(
-        lifted.len(),
-        1,
-        "only the clean reverify lifted a ban: {lifted:?}"
+    assert_eq!(lifted.len(), 1, "{lifted:?}");
+    let bans = stand.bans().await.unwrap();
+    assert!(
+        bans.iter().any(|b| !b["lifted_at"].is_null()),
+        "the lift is in the ban log: {bans:?}"
     );
+
+    // The node that came back is in the pool again. The re-check that let it back used the clean
+    // answers of Globalping and check-host.
+    let back = healthy_node_other_than(&stand, &id).await;
+    let round = wait_round(&stand, &back, "the re-check round", 30, |r| {
+        vote_in(r, "check_host").is_some()
+    })
+    .await;
+    assert_eq!(
+        vote_in(&round, "check_host").map(|v| v.0).as_deref(),
+        Some("clear"),
+        "{round}"
+    );
+    assert_eq!(
+        vote_in(&round, "globalping").map(|v| v.0).as_deref(),
+        Some("clear"),
+        "{round}"
+    );
+
+    // And a block that returns bans it once more: Globalping and check-host agree again.
+    set_sensors(&stand, &[("check_host", "blocked")]).await;
+    set_sensors(&stand, &[("globalping", "blocked")]).await;
+    wait_banned(&stand, &back, secs(180)).await;
 }
 
 /// Waits for the ban of the node. It has no state to wait for: the record goes with the ban.

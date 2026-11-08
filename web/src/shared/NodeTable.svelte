@@ -6,7 +6,7 @@
   import RoleCell from './RoleCell.svelte';
   import StateCell from './StateCell.svelte';
 
-  // The nodes of the pool in four groups. The table knows nothing of routes: `href` says where a
+  // The nodes of the pool in five groups. The table knows nothing of routes: `href` says where a
   // node's page is. Below 720px the stylesheet turns it into a list (`tb list`), and `data-l`
   // is the label each cell gets there.
   let {
@@ -20,12 +20,13 @@
     { key: 'queue', title: t('stats.group.queue'), nodes: groups.queue },
     { key: 'quarantine', title: t('stats.group.quarantine'), nodes: groups.quarantine },
     { key: 'outside', title: t('stats.group.outside'), nodes: groups.outside },
+    { key: 'pending', title: t('stats.group.pending'), nodes: groups.pending },
   ].filter((s) => s.nodes.length > 0));
 
   const maxClients = $derived(
     Math.max(
       1,
-      ...[...groups.masters, ...groups.queue, ...groups.quarantine, ...groups.outside].map((n) => n.clients ?? 0),
+      ...[...groups.masters, ...groups.queue, ...groups.quarantine, ...groups.outside, ...groups.pending].map((n) => n.clients ?? 0),
     ),
   );
 
@@ -61,7 +62,7 @@
             >
             <td data-l={t('stats.col.state')}><StateCell state={node.state} suspected={node.suspected} reasons={node.quarantine_reasons} /></td>
             <td data-l={t('stats.col.role')}><RoleCell {node} {now} /></td>
-            <td data-l={t('stats.col.checks')}><ChecksCell checks={node.checks} /></td>
+            <td data-l={t('stats.col.checks')}><ChecksCell checks={node.checks} disputed={node.globalping_disputed} /></td>
             <td class="n" data-l={t('stats.col.availability')}>{formatAvailability(node.availability_bp)}</td>
             <td class="n" data-l={t('stats.col.clients')}><ClientsCell clients={node.clients} max={maxClients} other={node.other_clients} /></td>
           </tr>

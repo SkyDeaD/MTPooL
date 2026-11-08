@@ -66,7 +66,7 @@ services:
       MTPOOL_LOG: info
       MTPOOL_ALLOW_PRIVATE_IPS: "true"
       MTPOOL_GLOBALPING_URL: http://fakes:9000/globalping/
-      MTPOOL_CHEBURCHECK_URL: http://fakes:9000/cheburcheck/
+      MTPOOL_CHECK_HOST_URL: http://fakes:9000/check-host/
       MTPOOL_REDFLAG_URL: http://fakes:9000/redflag/
       MTPOOL_CLOUDFLARE_URL: http://fakes:9000/cloudflare/
     # The database is on a volume, so that a restore can run in a second container while the

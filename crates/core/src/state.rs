@@ -66,6 +66,9 @@ pub struct NodeStats {
     /// Clients of the other users, as the last report said.
     #[serde(default)]
     pub other_clients: Option<u64>,
+    /// The name of the filter the agent sees on the proxy port, as the last report said.
+    #[serde(default)]
+    pub port_filter: Option<String>,
     /// Uptime of the last 30 days in hundredths of a percent (9997 is 99.97 %). Kept in
     /// memory only: the registrar recomputes it from the stored samples.
     #[serde(skip)]
@@ -93,6 +96,8 @@ pub enum Command {
     RoundDone {
         node: NodeId,
         generation: Generation,
+        /// When the round started: the `started_at` of its `Effect::RunRound`.
+        started_at: Ts,
         votes: Vec<(SensorKind, SensorVote)>,
     },
     /// The outcome of `Effect::PushDns`: `Err` carries the provider's message.
@@ -158,6 +163,9 @@ pub struct ReportRequest {
     pub other_clients: Option<u64>,
     /// The agent refused the pool's configuration because a name is taken on the node.
     pub pool_user_taken: bool,
+    /// The name of the filter the agent sees on the proxy port. `None` from an agent that sees
+    /// none, or that does not look for one.
+    pub port_filter: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,10 +193,13 @@ pub enum SrmdManualAction {
 pub enum Effect {
     Persist(PersistOp),
     /// Start a sensor round. `fresh_gp` is the Globalping vote of a recent verified agent
-    /// report: when it is there the worker does not spend a measurement of its own.
+    /// report, or the abstention of a filtered node: when it is there the worker does not spend a
+    /// measurement of its own.
     RunRound {
         node: NodeId,
         generation: Generation,
+        /// The driver gives it back in `Command::RoundDone`, unchanged.
+        started_at: Ts,
         ip: Ipv4Addr,
         port: u16,
         fresh_gp: Option<SensorVote>,

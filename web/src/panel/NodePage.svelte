@@ -45,7 +45,12 @@
   const days = $derived(node.data ? Math.max(0, Math.floor((clock1.ms - Date.parse(node.data.registered_at)) / 86_400_000)) : 0);
   const round = $derived(node.data ? secondsUntil(node.data.next_round_at, clock1.ms) : null);
   const mine = $derived((events.data ?? []).filter((e) => e.node === id).slice(0, 8));
-  const SENSORS = ['globalping', 'cheburcheck', 'red_flag'] as const;
+  const SENSORS = $derived<string[]>([
+    'globalping',
+    'check_host',
+    ...((node.data?.rounds ?? []).some((r) => r.votes.some((v) => v.sensor === 'cheburcheck')) ? ['cheburcheck'] : []),
+    'red_flag',
+  ]);
 
   const recheck = () =>
     act(panel, () => panel.client.post('/api/v1/admin/nodes/{id}/recheck', { params: { id } }), t('panel.nodes.rechecked', { id }));
@@ -61,6 +66,7 @@
     </div>
   {:else}
     {#if node.stale}<p class="note" role="status">{t('common.stale')}</p>{/if}
+    {#if node.data?.port_filter}<p class="note" role="status">{t('why.port_filter')}</p>{/if}
     <div class="ph" style="margin:0">
       <h1>{id}</h1>
       {#if node.data}
@@ -113,6 +119,8 @@
 
       {#if n.state === 'quarantine'}<QuarantineNote reasons={n.quarantine_reasons?.length ? n.quarantine_reasons : n.failed} suspected={n.suspected} />{/if}
 
+      {#if n.state === 'healthy' && n.globalping_disputed}<p class="note" role="status">{t('check.disputed.globalping')}</p>{/if}
+
       {#if n.last_round}
         <section class="t">
           <div class="th">
@@ -152,7 +160,7 @@
                 <tr>
                   <th>{t('panel.rounds.when')}</th>
                   <th>{t('panel.rounds.verdict')}</th>
-                  {#each SENSORS as s (s)}<th>{t(`sensor.${s === 'red_flag' ? 'redflag' : s}`)}</th>{/each}
+                  {#each SENSORS as s (s)}<th>{t(`sensor.${s === 'red_flag' ? 'redflag' : s}` as 'sensor.globalping')}</th>{/each}
                 </tr>
               </thead>
               <tbody>

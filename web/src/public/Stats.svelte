@@ -36,7 +36,7 @@
   const counts = $derived(nodes.data ? poolCounts(current.nodes) : null);
   const scheme = $derived(nodes.data && domains.data ? buildScheme(current.domains, current.nodes) : null);
   const series = $derived(clients.data && clients.data.range === range ? mergeLive(clients.data, live.ticks) : null);
-  const empty = $derived(counts !== null && counts.shown === 0);
+  const empty = $derived(counts !== null && groups !== null && counts.shown === 0 && groups.pending.length === 0);
   const stale = $derived(nodes.stale || domains.stale || summary.stale || clients.stale);
   const updatedAt = $derived(Math.max(nodes.updatedAt ?? 0, live.at ?? 0) || null);
 

@@ -430,6 +430,7 @@ async fn nodes_mask_ip_and_hide_measurement_id() {
             "is_master",
             "domains",
             "checks",
+            "globalping_disputed",
             "master_since",
             "rotates_at"
         ]),

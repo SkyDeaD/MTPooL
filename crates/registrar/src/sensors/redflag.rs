@@ -27,8 +27,8 @@ use reqwest::{Url, redirect};
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
 
-use super::cheburcheck::Limiter;
 use super::globalping::TokenSource;
+use super::limiter::Limiter;
 use super::{Sensor, Target};
 
 #[cfg(test)]

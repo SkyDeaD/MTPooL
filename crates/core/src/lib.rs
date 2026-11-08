@@ -27,7 +27,7 @@ pub use health::{FailedCondition, GpStatus, Latch, NodeHealth, failed_conditions
 pub use lifecycle::{
     EnrollDecision, EnrollInput, IpBlock, LifecycleEvent, NodeRecord, RejectReason, RoundResult,
     Tombstone, apply_round, decide_enroll, is_alive, needs_sensors, next_round_at, record_prune,
-    reset_tombstones, tick_node, unban,
+    reset_tombstones, tick_node, unban, wants_check_host,
 };
 pub use links::{build_proxy_link, link_secret};
 pub use selection::{
@@ -49,4 +49,6 @@ pub use traffic::{TrafficCounters, traffic_delta};
 pub use types::{
     EngineKind, Generation, IdError, NodeId, NodeState, OwnerId, Ts, is_public_ipv4, mask_ip,
 };
-pub use votes::{AbstainReason, RoundVerdict, SensorKind, SensorVote, Vote, judge_round};
+pub use votes::{
+    AbstainReason, RoundVerdict, SensorKind, SensorVote, Vote, judge_reverify, judge_round,
+};

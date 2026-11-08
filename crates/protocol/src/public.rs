@@ -77,6 +77,11 @@ pub struct PublicNode {
     pub other_traffic_bytes: Option<u64>,
     /// The conditions the pool watches on the node.
     pub checks: NodeChecks,
+    /// A healthy node whose Globalping check is red: the pool keeps checking it with check-host
+    /// and does not quarantine it on Globalping alone. Says nothing about a port filter; the
+    /// panel shows that.
+    #[serde(default)]
+    pub globalping_disputed: bool,
     /// Why the node entered quarantine: `tcp`, `metrics`, `globalping`, `port`, `heartbeat_stale`,
     /// `report_stale` (no confirmed measurement for too long), `pool_user_taken` (the owner holds a
     /// user under a name of the pool, with another secret). Absent in other states.
@@ -99,7 +104,8 @@ pub struct PublicNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotates_at: Option<String>,
     /// When the next sensor round of the node is due (RFC 3339, UTC). Only for a node the
-    /// sensors check: suspected of a block in quarantine, or a node on reverify.
+    /// sensors check: suspected of a block in quarantine, a node on reverify, or a healthy node
+    /// whose Globalping check is red.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_round_at: Option<String>,
     /// Uptime over the last 30 days in hundredths of a percent (9997 is 99.97 %). Absent while
@@ -146,8 +152,9 @@ pub struct LastVote {
     pub sensor: String,
     pub vote: Vote,
     /// Why the sensor abstained: `not_configured`, `key_rejected`, `unavailable`, `rate_limited`,
-    /// `timeout`, `unknown_answer`, `no_data` or `port_refused` (most probes were refused the
-    /// connection: the port is closed). Only for `abstain`.
+    /// `timeout`, `unknown_answer`, `no_data`, `port_refused` (most probes were refused the
+    /// connection: the port is closed), `port_filter` (the node's own firewall filters the port)
+    /// or `port_closed` (check-host found the port closed). Only for `abstain`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }

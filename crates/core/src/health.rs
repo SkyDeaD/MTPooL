@@ -106,6 +106,28 @@ pub struct NodeHealth {
     /// pool, with another secret. Health stored before this existed reads as not taken.
     #[serde(default)]
     pub pool_user_taken: bool,
+    /// When the check from Russia last confirmed the node's port open. A red Globalping does
+    /// not fail a node for as long as this is fresh. Health stored before this existed reads
+    /// as never confirmed.
+    #[serde(default)]
+    pub ru_confirmed_at: Option<Ts>,
+    /// The agent reports another pool's filter on the proxy port: the node answers, the way in
+    /// does not. Such a node needs a confirmation from Russia even with a green Globalping, and
+    /// the age of its last report fails it no more: its Globalping abstains.
+    #[serde(default)]
+    pub port_filter: bool,
+}
+
+/// Globalping does not settle the node: it is red or unknown, or a filter was seen on the port.
+/// A disputed node is checked from Russia until it is confirmed.
+pub fn gp_disputed(h: &NodeHealth) -> bool {
+    h.port_filter || matches!(h.gp, GpStatus::Unknown | GpStatus::Failed { .. })
+}
+
+/// The check from Russia confirmed the node less than `ru_confirmation_sec` ago.
+pub fn ru_confirmed(h: &NodeHealth, now: Ts, s: &Settings) -> bool {
+    h.ru_confirmed_at
+        .is_some_and(|at| younger_than(at, now, s.ru_confirmation_sec))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,7 +156,7 @@ pub fn failed_conditions(h: &NodeHealth, now: Ts, s: &Settings) -> Vec<FailedCon
     if !h.metrics.up {
         failed.push(FailedCondition::Metrics);
     }
-    if matches!(h.gp, GpStatus::Unknown | GpStatus::Failed { .. }) {
+    if gp_disputed(h) && !ru_confirmed(h, now, s) {
         failed.push(FailedCondition::Globalping);
     }
     if !h.port_ok {
@@ -143,7 +165,9 @@ pub fn failed_conditions(h: &NodeHealth, now: Ts, s: &Settings) -> Vec<FailedCon
     if !younger_than(h.last_heartbeat, now, s.heartbeat_ttl_sec) {
         failed.push(FailedCondition::HeartbeatStale);
     }
-    if !younger_than(h.last_report, now, s.report_fresh_sec()) {
+    // Nothing but the check from Russia reports on a filtered node: its Globalping abstains, so
+    // no verified report comes, and the confirmation above is what keeps the node in the pool.
+    if !h.port_filter && !younger_than(h.last_report, now, s.report_fresh_sec()) {
         failed.push(FailedCondition::ReportStale);
     }
     failed
@@ -182,7 +206,98 @@ mod tests {
             last_report: ago(60),
             port_ok: true,
             pool_user_taken: false,
+            ru_confirmed_at: None,
+            port_filter: false,
         }
+    }
+
+    #[test]
+    fn red_globalping_with_a_confirmation_is_no_failure() {
+        let h = NodeHealth {
+            gp: GpStatus::Failed { at: ago(30) },
+            ru_confirmed_at: Some(ago(1199)),
+            ..healthy()
+        };
+        assert!(failed_conditions(&h, NOW, &Settings::default()).is_empty());
+    }
+
+    #[test]
+    fn the_confirmation_expires_after_20_minutes() {
+        let h = NodeHealth {
+            gp: GpStatus::Failed { at: ago(30) },
+            ru_confirmed_at: Some(ago(1200)),
+            ..healthy()
+        };
+        assert_eq!(
+            failed_conditions(&h, NOW, &Settings::default()),
+            vec![FailedCondition::Globalping]
+        );
+    }
+
+    #[test]
+    fn a_filter_needs_a_confirmation_even_with_green_globalping() {
+        let h = NodeHealth {
+            port_filter: true,
+            ..healthy()
+        };
+        assert_eq!(
+            failed_conditions(&h, NOW, &Settings::default()),
+            vec![FailedCondition::Globalping]
+        );
+        let confirmed = NodeHealth {
+            ru_confirmed_at: Some(ago(10)),
+            ..h
+        };
+        assert!(failed_conditions(&confirmed, NOW, &Settings::default()).is_empty());
+    }
+
+    #[test]
+    fn a_filtered_node_is_not_failed_by_a_report_that_aged_out() {
+        let stale = |port_filter| NodeHealth {
+            port_filter,
+            ru_confirmed_at: Some(ago(10)),
+            last_report: ago(100_000),
+            ..healthy()
+        };
+        assert!(failed_conditions(&stale(true), NOW, &Settings::default()).is_empty());
+        assert_eq!(
+            failed_conditions(&stale(false), NOW, &Settings::default()),
+            vec![FailedCondition::ReportStale]
+        );
+    }
+
+    #[test]
+    fn green_globalping_needs_no_confirmation() {
+        let h = healthy();
+        assert_eq!(h.ru_confirmed_at, None);
+        assert!(
+            !failed_conditions(&h, NOW, &Settings::default())
+                .contains(&FailedCondition::Globalping)
+        );
+    }
+
+    #[test]
+    fn disputed_means_red_unknown_or_filtered() {
+        let with = |gp| NodeHealth { gp, ..healthy() };
+        assert!(gp_disputed(&with(GpStatus::Failed { at: ago(1) })));
+        assert!(gp_disputed(&with(GpStatus::Unknown)));
+        assert!(gp_disputed(&NodeHealth {
+            port_filter: true,
+            ..healthy()
+        }));
+        assert!(!gp_disputed(&with(GpStatus::Ok { at: ago(1) })));
+        assert!(!gp_disputed(&with(GpStatus::NoData { at: ago(1) })));
+    }
+
+    #[test]
+    fn health_stored_before_the_confirmation_reads_as_none() {
+        let mut v = serde_json::to_value(healthy()).unwrap();
+        let o = v.as_object_mut().unwrap();
+        o.remove("ru_confirmed_at");
+        o.remove("port_filter");
+        let h: NodeHealth = serde_json::from_value(v).unwrap();
+        assert_eq!(h.ru_confirmed_at, None);
+        assert!(!h.port_filter);
     }
 
     #[test]
@@ -395,6 +510,8 @@ mod tests {
             last_report: ago(2000),
             port_ok: false,
             pool_user_taken: true,
+            ru_confirmed_at: None,
+            port_filter: false,
         };
         assert_eq!(
             failed_conditions(&h, NOW, &Settings::default()),

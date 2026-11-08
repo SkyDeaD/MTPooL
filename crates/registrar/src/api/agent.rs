@@ -26,12 +26,12 @@ use axum::response::{IntoResponse, Response};
 use mtpool_core::{
     AbstainReason, Command, EngineKind, Event, EventKind, Generation, NodeAction, NodeId,
     NodeState, Reply, ReplyId, TrafficCounters, Ts, Vote,
-    lifecycle::{RejectReason, wants_measurement},
+    lifecycle::{RejectReason, wants_check_host, wants_measurement},
 };
 use mtpool_protocol::agent::{
-    AgentConfig, AgentUser, ERROR_POOL_USER_TAKEN, Empty, EmptyRequest, EnrollRequest,
-    EnrollResponse, GpReport, Intervals, MetricsReport, ReportRequest, Terminate, TerminateReason,
-    UpdateOffer, UpdateOutcome, UpdatePoll, UpdateStatus,
+    AgentConfig, AgentUser, CheckHostReport, ERROR_POOL_USER_TAKEN, Empty, EmptyRequest,
+    EnrollRequest, EnrollResponse, GpReport, Intervals, MetricsReport, ReportRequest, Terminate,
+    TerminateReason, UpdateOffer, UpdateOutcome, UpdatePoll, UpdateStatus,
 };
 use mtpool_protocol::problem::Problem;
 use mtpool_protocol::public::Engine;
@@ -46,6 +46,7 @@ use utoipa_axum::routes;
 use super::ApiError;
 use crate::auth::middleware::{ClientIp, EnrollAuth, NodeAuth};
 use crate::auth::tokens::{self, NewToken, TokenKind};
+use crate::sensors::check_host::{CheckExpect, Entry, Flight};
 use crate::server::AppState;
 use crate::store::{ReportOp, measurement_seen};
 use crate::verifier::{GpExpect, GpRejected};
@@ -732,6 +733,7 @@ struct Settled {
     other_traffic: Option<TrafficCounters>,
     other_clients: Option<u64>,
     pool_user_taken: bool,
+    port_filter: Option<String>,
 }
 
 impl Settled {
@@ -747,6 +749,7 @@ impl Settled {
             other_traffic: self.other_traffic,
             other_clients: self.other_clients,
             pool_user_taken: self.pool_user_taken,
+            port_filter: self.port_filter.clone(),
         })
     }
 }
@@ -914,7 +917,11 @@ pub async fn report(
         other_traffic: other_traffic(&request.metrics),
         other_clients: request.metrics.other_clients,
         pool_user_taken: request.error.as_deref() == Some(ERROR_POOL_USER_TAKEN),
+        port_filter: request.port_filter.clone(),
     };
+    // check-host goes its own way: the agent's answer does not wait for it, and a refused
+    // check never changes the answer.
+    handle_check_host(&app, node.ip, request.check_host, checked_at, now);
     match request.gp {
         GpReport::NoData { reason } => {
             let abstain = gp_abstain(&reason);
@@ -966,6 +973,57 @@ pub async fn report(
     }
 }
 
+/// Files what the agent says about its check-host measurement under the node's address from the
+/// registry, never the one in the report.
+fn handle_check_host(
+    app: &AppState,
+    ip: Ipv4Addr,
+    report: Option<CheckHostReport>,
+    checked_at: i64,
+    now: Ts,
+) {
+    match report {
+        None => {}
+        Some(CheckHostReport::Disabled) => app.check_host.put(ip, Entry::Disabled),
+        Some(CheckHostReport::NoData { reason }) => app.check_host.put(ip, Entry::NoData(reason)),
+        Some(CheckHostReport::Started { id, port }) => {
+            // One fetch per address at a time. A `Started` that is ignored claims nothing, so
+            // its id is not lost.
+            let Some(flight) = app.check_host.begin(ip) else {
+                return;
+            };
+            // The id is used once, whatever the answer turns out to be.
+            if app.check_host.claim(&id, now) {
+                let expect = CheckExpect {
+                    ip,
+                    port,
+                    reported_at: Ts(checked_at),
+                };
+                tokio::spawn(settle_check_host(app.clone(), id, expect, flight));
+            }
+        }
+    }
+}
+
+/// Fetches the check's answer, which may take seconds, and leaves it for the round. An answer
+/// that is refused leaves a note without data: it can never be a `Blocked` vote.
+async fn settle_check_host(app: AppState, id: String, expect: CheckExpect, _flight: Flight) {
+    let verified =
+        tokio::time::timeout(VERIFY_TIMEOUT, app.check_host_verifier.verify(&id, &expect)).await;
+    let entry = match verified {
+        Ok(Ok(result)) => Entry::Result(result),
+        Ok(Err(rejected)) => {
+            tracing::info!(?rejected, "check-host answer not used");
+            Entry::NoData("rejected".to_owned())
+        }
+        Err(_) => {
+            tracing::warn!("check-host answer timed out");
+            Entry::NoData("timeout".to_owned())
+        }
+    };
+    app.check_host.put(expect.ip, entry);
+}
+
 // ----- config ----------------------------------------------------------------------------------
 
 /// What the node's proxy has to be set up with.
@@ -1012,6 +1070,8 @@ pub async fn config(State(app): State<AppState>, auth: NodeAuth) -> Result<Respo
                 antiscan: true,
                 report_other_users: true,
                 measure_now: wants_measurement(node, now, s),
+                report_check_host: true,
+                check_host_now: wants_check_host(node, now, s),
             }))
         })
         .await

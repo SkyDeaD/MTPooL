@@ -10,6 +10,8 @@
 //!   sensor is not asked: the fresh vote stands in its place.
 //! * One round per node at a time. A second one for the same node is dropped; the state owner
 //!   asks again on its next pass.
+//! * The start of the round goes through unchanged: the state owner judges by it whether the
+//!   result belongs to the node's present state.
 
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
@@ -17,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use mtpool_core::{
-    AbstainReason, Command, Effect, Generation, NodeId, SensorKind, SensorVote, Settings, Vote,
+    AbstainReason, Command, Effect, Generation, NodeId, SensorKind, SensorVote, Settings, Ts, Vote,
     link_secret,
 };
 use serde_json::json;
@@ -109,6 +111,7 @@ impl RoundRunner {
         &self,
         node: NodeId,
         generation: Generation,
+        started_at: Ts,
         target: Target,
         fresh_gp: Option<SensorVote>,
     ) -> Command {
@@ -156,6 +159,7 @@ impl RoundRunner {
         Command::RoundDone {
             node,
             generation,
+            started_at,
             votes,
         }
     }
@@ -175,6 +179,7 @@ impl EffectDriver for RoundRunner {
         let Effect::RunRound {
             node,
             generation,
+            started_at,
             ip,
             port,
             fresh_gp,
@@ -196,7 +201,9 @@ impl EffectDriver for RoundRunner {
             else {
                 return;
             };
-            let command = this.round(node, generation, target, fresh_gp).await;
+            let command = this
+                .round(node, generation, started_at, target, fresh_gp)
+                .await;
             if results.send(command).await.is_err() {
                 tracing::debug!("the state owner is gone, the round result is dropped");
             }

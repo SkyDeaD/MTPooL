@@ -13,6 +13,8 @@
 {#if node.is_master}
   <MasterTag domain={node.domains[0] ? shortDomain(node.domains[0]) : undefined} />
   {#if rotate !== null}<div class="nm-s">{t('node.role.rotates', { time: clock(rotate) })}</div>{/if}
+{:else if node.state === 'pending'}
+  <div>{t('node.role.notYet')}</div>
 {:else if node.state === 'quarantine' && !node.suspected}
   <div>{t('node.role.none')}</div>
 {:else if node.state === 'quarantine'}

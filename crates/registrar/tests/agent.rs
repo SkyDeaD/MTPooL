@@ -19,14 +19,21 @@ use mtpool_core::{
 };
 use mtpool_protocol::problem::Problem;
 use mtpool_protocol::rfc3339;
-use mtpool_registrar::actor::{Actor, ActorHandle, ActorOptions, Clock};
+use mtpool_registrar::actor::{Actor, ActorHandle, ActorOptions, Clock, EffectDriver};
 use mtpool_registrar::auth::tokens::{self, NewToken, TokenHash, TokenKind};
+use mtpool_registrar::sensors::check_host::{
+    CheckHostInbox, CheckHostSensor, CheckHostVerifier, Entry, PortConnector,
+};
+use mtpool_registrar::sensors::round::RoundRunner;
+use mtpool_registrar::sensors::{Sensor, Target};
 use mtpool_registrar::server::{AppState, router};
 use mtpool_registrar::store::Store;
 use mtpool_registrar::verifier::{GpExpect, GpRejected, MeasurementVerifier, VerifyFuture};
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 use tower::ServiceExt;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const NOW: i64 = 1_800_000_000_000;
 const SECRET: &str = "00112233445566778899aabbccddeeff";
@@ -88,6 +95,7 @@ struct Env {
     actor: ActorHandle,
     verifier: Arc<FakeVerifier>,
     clock: Arc<AtomicI64>,
+    check_host: Arc<CheckHostInbox>,
     _dir: tempfile::TempDir,
 }
 
@@ -161,6 +169,20 @@ fn env_allowing_private_ips(state: PoolState) -> Env {
 }
 
 fn env_with(state: PoolState, allow_private_ips: bool) -> Env {
+    build_env(state, allow_private_ips, None, vec![])
+}
+
+/// An environment whose check-host verifier reads its answers from `service`.
+fn env_with_check_host(state: PoolState, service: &MockServer) -> Env {
+    build_env(state, false, Some(service), vec![])
+}
+
+fn build_env(
+    state: PoolState,
+    allow_private_ips: bool,
+    check_host_service: Option<&MockServer>,
+    drivers: Vec<Arc<dyn EffectDriver>>,
+) -> Env {
     let (dir, store) = open_store();
     let clock = Arc::new(AtomicI64::new(NOW));
     let shared = Arc::clone(&clock);
@@ -168,24 +190,32 @@ fn env_with(state: PoolState, allow_private_ips: bool) -> Env {
     let actor = Actor::spawn_with(
         state,
         store.clone(),
-        vec![],
+        drivers,
         ActorOptions {
             clock: Arc::clone(&clock_fn),
             ..ActorOptions::default()
         },
     );
     let verifier = FakeVerifier::new();
-    let app = router(
+    let mut app_state =
         AppState::with_clock(store.clone(), actor.clone(), actor.snapshots(), clock_fn)
             .with_verifier(verifier.clone())
-            .with_allow_private_ips(allow_private_ips),
-    );
+            .with_allow_private_ips(allow_private_ips);
+    if let Some(service) = check_host_service {
+        let base = service.uri().parse().expect("the mock's address is a URL");
+        app_state = app_state.with_check_host_verifier(Arc::new(
+            CheckHostVerifier::new(base).expect("the verifier builds"),
+        ));
+    }
+    let check_host = Arc::clone(&app_state.check_host);
+    let app = router(app_state);
     Env {
         app,
         store,
         actor,
         verifier,
         clock,
+        check_host,
         _dir: dir,
     }
 }
@@ -416,8 +446,10 @@ async fn enroll_limit_counts_only_live_nodes_of_the_owner() {
 async fn a_ban_takes_the_record_and_the_token_and_the_unban_works_without_them() {
     let mut node = alpha();
     node.state = NodeState::Quarantine;
+    node.suspected = true;
     node.owner = OwnerId(1);
     let generation = node.generation;
+    let started_at = node.state_since;
     let env = env(pool(vec![node]));
     let me = owner(&env, "me", 2);
     assert_eq!(me, OwnerId(1));
@@ -433,6 +465,7 @@ async fn a_ban_takes_the_record_and_the_token_and_the_unban_works_without_them()
         .send(Command::RoundDone {
             node: node_id("alpha-00001"),
             generation,
+            started_at,
             votes: vec![
                 (SensorKind::Globalping, blocked.clone()),
                 (SensorKind::Cheburcheck, blocked),
@@ -1675,7 +1708,9 @@ async fn config_returns_users_sni_port_intervals() {
             },
             "antiscan": true,
             "report_other_users": true,
-            "measure_now": false
+            "measure_now": false,
+            "report_check_host": true,
+            "check_host_now": false
         })
     );
 
@@ -1830,4 +1865,484 @@ async fn the_config_asks_for_a_measurement_when_the_planned_one_is_late() {
         .store(NOW + interval_ms + 60_000, Ordering::SeqCst);
     let config = get(&env, "/api/v1/agent/config", ALPHA_IP, &token).await;
     assert_eq!(config.json()["measure_now"], true);
+}
+
+// ----- check-host -------------------------------------------------------------------------------
+
+const CONNECTED: &str = include_str!("fixtures/check-host/connected.json");
+const TIMED_OUT: &str = include_str!("fixtures/check-host/timed_out.json");
+/// The public address and port of the recorded check, and when the service made it (ms).
+const CHECKED_IP: &str = "1.1.1.1";
+const CONNECTED_AT: i64 = 1_794_143_356_000;
+const CHECK_ID: &str = "abc123";
+
+/// A healthy node at the address of the recorded check.
+fn checked_node() -> NodeRecord {
+    node_at("alpha-00001", [1, 1, 1, 1], NodeState::Healthy)
+}
+
+/// The service answering `body` for `CHECK_ID`.
+async fn check_service(body: &str) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/check-result-extended/{CHECK_ID}")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body.to_owned()))
+        .mount(&server)
+        .await;
+    server
+}
+
+async fn check_requests(server: &MockServer) -> usize {
+    server.received_requests().await.unwrap_or_default().len()
+}
+
+fn started(id: &str, port: u16) -> Value {
+    json!({ "kind": "started", "id": id, "port": port })
+}
+
+/// A report of the node at `CHECKED_IP`, dated at the moment the recorded check was made.
+fn check_report(env: &Env, check_host: Value) -> Value {
+    let at = CONNECTED_AT + 5_000;
+    env.clock.store(at, Ordering::SeqCst);
+    let mut body = report_at(at, no_data());
+    body["ip"] = json!(CHECKED_IP);
+    body["check_host"] = check_host;
+    body
+}
+
+fn checked_ip() -> std::net::Ipv4Addr {
+    CHECKED_IP.parse().unwrap()
+}
+
+/// The port of the check opens from the registrar, so a decisive result counts.
+struct OpenPort;
+
+#[async_trait::async_trait]
+impl PortConnector for OpenPort {
+    async fn open(&self, _: std::net::Ipv4Addr, _: u16, _: Duration) -> bool {
+        true
+    }
+}
+
+fn check_host_sensor(env: &Env) -> CheckHostSensor {
+    CheckHostSensor::new(Arc::clone(&env.check_host), Arc::new(OpenPort))
+}
+
+fn target(ip: &str) -> Target {
+    Target {
+        ip: ip.parse().unwrap(),
+        port: 443,
+        sni: "tls.example.com".into(),
+        secret: String::new(),
+    }
+}
+
+/// Waits until the verifier has been asked `n` times.
+async fn wait_for_requests(server: &MockServer, n: usize) {
+    for _ in 0..200 {
+        if check_requests(server).await >= n {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the check-host service was not asked {n} times");
+}
+
+#[tokio::test]
+async fn the_config_says_it_takes_check_host_and_asks_for_it() {
+    // A node under suspicion whose round has just started: its check is awaited.
+    let mut suspect = node_at("alpha-00001", [45, 33, 1, 5], NodeState::Quarantine);
+    suspect.suspected = true;
+    suspect.health.port_ok = true;
+    suspect.last_round_at = Some(Ts(NOW));
+    let env = env(pool(vec![suspect, beta()]));
+    let alpha_token = node_token(&env, "alpha-00001");
+    let beta_token = node_token(&env, "beta-00002");
+
+    let asked = get(&env, "/api/v1/agent/config", ALPHA_IP, &alpha_token).await;
+    assert_eq!(asked.status, StatusCode::OK, "{}", asked.body);
+    assert_eq!(asked.json()["report_check_host"], true);
+    assert_eq!(asked.json()["check_host_now"], true);
+
+    let quiet = get(&env, "/api/v1/agent/config", ALPHA_IP, &beta_token).await;
+    assert_eq!(quiet.json()["report_check_host"], true);
+    assert_eq!(
+        quiet.json()["check_host_now"],
+        false,
+        "a healthy node is not checked"
+    );
+}
+
+#[tokio::test]
+async fn a_reported_check_reaches_the_round() {
+    let service = check_service(CONNECTED).await;
+    let env = env_with_check_host(pool(vec![checked_node()]), &service);
+    let token = node_token(&env, "alpha-00001");
+
+    let resp = report(&env, &token, check_report(&env, started(CHECK_ID, 443))).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+
+    let vote = check_host_sensor(&env).vote(&target(CHECKED_IP)).await;
+    assert_eq!(vote.vote, Vote::Clear, "{vote:?}");
+    assert_eq!(check_requests(&service).await, 1);
+}
+
+#[tokio::test]
+async fn the_report_answers_before_the_check_is_verified() {
+    // The service takes its time: the agent must not wait for it.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(CONNECTED)
+                .set_delay(Duration::from_secs(5)),
+        )
+        .mount(&server)
+        .await;
+    let env = env_with_check_host(pool(vec![checked_node()]), &server);
+    let token = node_token(&env, "alpha-00001");
+
+    let started_at = std::time::Instant::now();
+    let resp = report(&env, &token, check_report(&env, started(CHECK_ID, 443))).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    assert!(started_at.elapsed() < Duration::from_secs(3));
+    assert!(
+        env.check_host
+            .take(checked_ip(), Duration::ZERO)
+            .await
+            .is_none(),
+        "nothing is there while the answer is on its way"
+    );
+}
+
+#[tokio::test]
+async fn a_check_of_another_address_gets_no_vote() {
+    // The answer is about 1.1.1.1; this node sits elsewhere. The node cannot vouch for it.
+    let service = check_service(CONNECTED).await;
+    let env = env_with_check_host(pool(vec![alpha()]), &service);
+    let token = node_token(&env, "alpha-00001");
+    let mut body = check_report(&env, started(CHECK_ID, 443));
+    body["ip"] = json!(ALPHA_IP);
+
+    let resp = report(&env, &token, body).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+
+    let vote = check_host_sensor(&env).vote(&target(ALPHA_IP)).await;
+    assert!(matches!(vote.vote, Vote::Abstain(_)), "{vote:?}");
+    assert_eq!(check_requests(&service).await, 1);
+    // Nothing waits under the address the answer names either.
+    assert!(
+        env.check_host
+            .take(checked_ip(), Duration::ZERO)
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn a_check_of_another_port_gets_no_vote() {
+    // The agent says it checked port 80; the answer is about 443.
+    let service = check_service(CONNECTED).await;
+    let env = env_with_check_host(pool(vec![checked_node()]), &service);
+    let token = node_token(&env, "alpha-00001");
+
+    let resp = report(&env, &token, check_report(&env, started(CHECK_ID, 80))).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+
+    let vote = check_host_sensor(&env).vote(&target(CHECKED_IP)).await;
+    assert!(matches!(vote.vote, Vote::Abstain(_)), "{vote:?}");
+}
+
+#[tokio::test]
+async fn a_rejected_check_is_never_a_block() {
+    // The answer is about port 81 and both points timed out; the agent says it checked 443.
+    // That answer is not about this check, so it must not become a `Blocked` vote.
+    let service = check_service(TIMED_OUT).await;
+    let env = env_with_check_host(pool(vec![checked_node()]), &service);
+    let token = node_token(&env, "alpha-00001");
+
+    let resp = report(&env, &token, check_report(&env, started(CHECK_ID, 443))).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    // The refusal is in the inbox before anything is read: only then does the test mean it.
+    let entry = env
+        .check_host
+        .take(checked_ip(), Duration::from_secs(10))
+        .await;
+    assert!(
+        matches!(entry, Some(Entry::NoData(_))),
+        "{}",
+        entry.is_some()
+    );
+}
+
+#[tokio::test]
+async fn a_repeated_check_id_is_not_counted_twice() {
+    let service = check_service(CONNECTED).await;
+    let env = env_with_check_host(pool(vec![checked_node()]), &service);
+    let token = node_token(&env, "alpha-00001");
+
+    for _ in 0..2 {
+        let resp = report(&env, &token, check_report(&env, started(CHECK_ID, 443))).await;
+        assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+    }
+    wait_for_requests(&service, 1).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        check_requests(&service).await,
+        1,
+        "the second report did not fetch"
+    );
+}
+
+#[tokio::test]
+async fn a_disabled_check_is_not_configured() {
+    let env = env(pool(vec![checked_node()]));
+    let token = node_token(&env, "alpha-00001");
+
+    let resp = report(
+        &env,
+        &token,
+        check_report(&env, json!({ "kind": "disabled" })),
+    )
+    .await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+
+    let vote = check_host_sensor(&env).vote(&target(CHECKED_IP)).await;
+    assert_eq!(
+        vote.vote,
+        Vote::Abstain(mtpool_core::AbstainReason::NotConfigured)
+    );
+}
+
+#[tokio::test]
+async fn a_check_without_data_says_why() {
+    let env = env(pool(vec![checked_node()]));
+    let token = node_token(&env, "alpha-00001");
+
+    let note = json!({ "kind": "no_data", "reason": "rate_limited" });
+    let resp = report(&env, &token, check_report(&env, note)).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+
+    let vote = check_host_sensor(&env).vote(&target(CHECKED_IP)).await;
+    assert_eq!(
+        vote.vote,
+        Vote::Abstain(mtpool_core::AbstainReason::RateLimited)
+    );
+}
+
+/// A sensor that always gives `vote`.
+struct Fixed(SensorKind, Vote);
+
+#[async_trait::async_trait]
+impl Sensor for Fixed {
+    fn kind(&self) -> SensorKind {
+        self.0
+    }
+
+    async fn vote(&self, _: &Target) -> SensorVote {
+        SensorVote {
+            vote: self.1,
+            evidence: json!({}),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_check_made_at_registration_reaches_reverify() {
+    // The address is blocked, so the new node waits for a round. Globalping has nothing to
+    // say; check-host and RedFlag clear it.
+    let service = check_service(CONNECTED).await;
+    let mut state = pool(vec![]);
+    state.blocks.push(IpBlock {
+        ip: checked_ip(),
+        node_id: node_id("old-00000"),
+        blocked_at: Ts(0),
+        next_reverify_at: None,
+        owner: None,
+    });
+    // The inbox the round reads is the one the report fills: built here and handed to both.
+    let (dir, store) = open_store();
+    let clock = Arc::new(AtomicI64::new(CONNECTED_AT + 5_000));
+    let shared = Arc::clone(&clock);
+    let clock_fn: Clock = Arc::new(move || Ts(shared.load(Ordering::SeqCst)));
+    let inbox = Arc::new(CheckHostInbox::with_clock(Arc::clone(&clock_fn)));
+    let sensors: Vec<Arc<dyn Sensor>> = vec![
+        Arc::new(Fixed(
+            SensorKind::Globalping,
+            Vote::Abstain(mtpool_core::AbstainReason::NoData),
+        )),
+        Arc::new(CheckHostSensor::new(Arc::clone(&inbox), Arc::new(OpenPort))),
+        Arc::new(Fixed(SensorKind::RedFlag, Vote::Clear)),
+    ];
+    let actor = Actor::spawn_with(
+        state,
+        store.clone(),
+        vec![Arc::new(RoundRunner::new(sensors)) as Arc<dyn EffectDriver>],
+        ActorOptions {
+            clock: Arc::clone(&clock_fn),
+            ..ActorOptions::default()
+        },
+    );
+    let base = service.uri().parse().unwrap();
+    let app = router(
+        AppState::with_clock(store.clone(), actor.clone(), actor.snapshots(), clock_fn)
+            .with_check_host(inbox)
+            .with_check_host_verifier(Arc::new(CheckHostVerifier::new(base).unwrap())),
+    );
+    let env = Env {
+        app,
+        store,
+        actor,
+        verifier: FakeVerifier::new(),
+        clock,
+        check_host: Arc::new(CheckHostInbox::new()),
+        _dir: dir,
+    };
+
+    let me = owner(&env, "me", 5);
+    let enroll_token = enroll_token(&env, me);
+    let enrolled = enroll(&env, &enroll_token, CHECKED_IP, "alpha").await;
+    assert_eq!(enrolled.status, StatusCode::OK, "{}", enrolled.body);
+    assert_eq!(enrolled.json()["reverify"], true, "{}", enrolled.body);
+    let id = enrolled.json()["node_id"].as_str().unwrap().to_owned();
+    let node_secret = enrolled.json()["node_token"].as_str().unwrap().to_owned();
+
+    let mut body = check_report(&env, started(CHECK_ID, 443));
+    body["ip"] = json!(CHECKED_IP);
+    let resp = report(&env, &node_secret, body).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+
+    // Without a measurement of the agent the round starts on its own only much later; the
+    // operator's recheck starts it now, and it reads what the report left.
+    let admin = token(&env, TokenKind::Admin, None, None);
+    let recheck = post(
+        &env,
+        &format!("/api/v1/admin/nodes/{id}/recheck"),
+        PEER_ADMIN,
+        &admin,
+        None,
+    )
+    .await;
+    assert_eq!(recheck.status, StatusCode::OK, "{}", recheck.body);
+    // The round clears the address: the block is lifted and the node no longer waits for a
+    // reverify. It stays pending until its own checks pass.
+    let node = wait_for(&env, &id, |n| !n.reverify).await;
+    assert_eq!(node.state, NodeState::Pending);
+    env.store.flush().unwrap();
+    let seen = get(
+        &env,
+        &format!("/api/v1/admin/nodes/{id}"),
+        PEER_ADMIN,
+        &admin,
+    )
+    .await;
+    let round = &seen.json()["rounds"][0];
+    assert_eq!(round["verdict"], "clean", "{}", seen.body);
+    let votes = round["votes"].as_array().unwrap();
+    let check_host = votes.iter().find(|v| v["sensor"] == "check_host").unwrap();
+    assert_eq!(check_host["vote"], "clear", "{}", seen.body);
+    let blocked = env
+        .actor
+        .inspect(|s| s.blocks.iter().any(|b| b.ip.to_string() == CHECKED_IP))
+        .await
+        .unwrap();
+    assert!(!blocked, "the address is free again");
+}
+
+#[tokio::test]
+async fn an_old_vote_of_cheburcheck_stays_readable() {
+    use mtpool_core::{Generation, PersistOp, RoundVerdict};
+    let env = env(pool(vec![alpha()]));
+    let admin = token(&env, TokenKind::Admin, None, None);
+    env.store.send(PersistOp::RecordRound {
+        node: node_id("alpha-00001"),
+        generation: Generation(1),
+        at: Ts(NOW - 60_000),
+        verdict: RoundVerdict::Clean,
+        votes: vec![(
+            SensorKind::Cheburcheck,
+            SensorVote {
+                vote: Vote::Clear,
+                evidence: json!({"checked": "old"}),
+            },
+        )],
+    });
+    env.store.flush().unwrap();
+
+    let node = get(&env, "/api/v1/admin/nodes/alpha-00001", PEER_ADMIN, &admin).await;
+    assert_eq!(node.status, StatusCode::OK, "{}", node.body);
+    let votes = &node.json()["rounds"][0]["votes"];
+    assert_eq!(votes[0]["sensor"], "cheburcheck", "{votes}");
+    assert_eq!(votes[0]["vote"], "clear");
+
+    let status = get(&env, "/api/v1/admin/status", PEER_ADMIN, &admin).await;
+    let names: Vec<String> = status.json()["sensors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        names,
+        ["globalping", "check_host", "red_flag"],
+        "the old votes are history only: the status does not list the sensor"
+    );
+}
+
+#[tokio::test]
+async fn the_report_keeps_the_filter() {
+    let env = env(pool(vec![alpha()]));
+    let admin = token(&env, TokenKind::Admin, None, None);
+    let token = node_token(&env, "alpha-00001");
+
+    let mut body = report_at(NOW, no_data());
+    body["port_filter"] = json!("iptables");
+    let resp = report(&env, &token, body).await;
+    assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
+
+    let node = wait_for(&env, "alpha-00001", |n| n.health.port_filter).await;
+    assert!(node.health.port_filter);
+    let seen = get(&env, "/api/v1/admin/nodes", PEER_ADMIN, &admin).await;
+    assert_eq!(seen.status, StatusCode::OK, "{}", seen.body);
+    assert_eq!(seen.json()[0]["port_filter"], "iptables", "{}", seen.body);
+}
+
+#[tokio::test]
+async fn a_second_check_during_a_slow_verify_is_ignored_and_its_id_stays_free() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(CONNECTED)
+                .set_delay(Duration::from_millis(1500)),
+        )
+        .mount(&server)
+        .await;
+    let env = env_with_check_host(pool(vec![checked_node()]), &server);
+    let token = node_token(&env, "alpha-00001");
+
+    let first = report(&env, &token, check_report(&env, started("first", 443))).await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.body);
+    wait_for_requests(&server, 1).await;
+    let second = report(&env, &token, check_report(&env, started("second", 443))).await;
+    assert_eq!(second.status, StatusCode::OK, "{}", second.body);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        check_requests(&server).await,
+        1,
+        "no second fetch while one is under way"
+    );
+
+    // The first ends, whichever way, and gives the place back.
+    let entry = env
+        .check_host
+        .take(checked_ip(), Duration::from_secs(10))
+        .await;
+    assert!(entry.is_some());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // The id of the ignored report was not claimed, so it can be sent again.
+    let again = report(&env, &token, check_report(&env, started("second", 443))).await;
+    assert_eq!(again.status, StatusCode::OK, "{}", again.body);
+    wait_for_requests(&server, 2).await;
 }

@@ -427,6 +427,7 @@ mod tests {
                 other_traffic: None,
                 other_clients: None,
                 pool_user_taken: false,
+                port_filter: None,
             }),
             Command::Retire(action()),
             Command::AdminUnban(action()),

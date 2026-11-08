@@ -118,6 +118,8 @@ pub fn sample_report() -> ReportRequest {
         gp: GpReport::NoData {
             reason: "rate_limited".into(),
         },
+        check_host: None,
+        port_filter: None,
         metrics: MetricsReport {
             ok: true,
             from_client_total: 10,
@@ -151,6 +153,8 @@ pub fn agent_config(heartbeat_sec: u32, sync_sec: u32) -> AgentConfig {
         antiscan: true,
         report_other_users: true,
         measure_now: false,
+        report_check_host: false,
+        check_host_now: false,
     }
 }
 

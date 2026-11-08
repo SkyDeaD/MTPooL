@@ -1110,7 +1110,18 @@ async fn status_shows_sensors_dns_and_counters() {
     assert_eq!(gp["configured"], true);
     assert_eq!(gp["last_vote"], "blocked");
     assert_eq!(gp["last_answer_at"], mtpool_protocol::rfc3339(NOW - 60_000));
-    assert_eq!(sensor("cheburcheck")["configured"], true);
+    assert_eq!(sensor("check_host")["configured"], true);
+    let names: Vec<_> = status["sensors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        names,
+        ["globalping", "check_host", "red_flag"],
+        "the retired sensor is no silent one: its old votes are history only"
+    );
     let rf = sensor("red_flag");
     assert_eq!(rf["last_vote"], "abstain");
     assert_eq!(rf["last_reason"], "timeout");

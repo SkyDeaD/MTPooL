@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use reqwest::Url;
 
 use crate::dns::cloudflare::DEFAULT_BASE as CLOUDFLARE_BASE;
-use crate::sensors::cheburcheck::DEFAULT_BASE as CHEBURCHECK_BASE;
+use crate::sensors::check_host::DEFAULT_BASE as CHECK_HOST_BASE;
 use crate::sensors::globalping::DEFAULT_BASE as GLOBALPING_BASE;
 use crate::sensors::redflag::DEFAULT_BASE as REDFLAG_BASE;
 
@@ -15,7 +15,7 @@ pub const ENV_LISTEN: &str = "MTPOOL_LISTEN";
 pub const ENV_LOG: &str = "MTPOOL_LOG";
 
 pub const ENV_GLOBALPING_URL: &str = "MTPOOL_GLOBALPING_URL";
-pub const ENV_CHEBURCHECK_URL: &str = "MTPOOL_CHEBURCHECK_URL";
+pub const ENV_CHECK_HOST_URL: &str = "MTPOOL_CHECK_HOST_URL";
 pub const ENV_REDFLAG_URL: &str = "MTPOOL_REDFLAG_URL";
 pub const ENV_CLOUDFLARE_URL: &str = "MTPOOL_CLOUDFLARE_URL";
 /// Lets nodes on private, loopback and shared addresses enroll. Only for a test stand.
@@ -48,7 +48,7 @@ pub enum ConfigError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoints {
     pub globalping: Url,
-    pub cheburcheck: Url,
+    pub check_host: Url,
     pub redflag: Url,
     pub cloudflare: Url,
 }
@@ -63,7 +63,7 @@ impl Endpoints {
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Endpoints, ConfigError> {
         Ok(Endpoints {
             globalping: base(&get, ENV_GLOBALPING_URL, GLOBALPING_BASE)?,
-            cheburcheck: base(&get, ENV_CHEBURCHECK_URL, CHEBURCHECK_BASE)?,
+            check_host: base(&get, ENV_CHECK_HOST_URL, CHECK_HOST_BASE)?,
             redflag: base(&get, ENV_REDFLAG_URL, REDFLAG_BASE)?,
             cloudflare: base(&get, ENV_CLOUDFLARE_URL, CLOUDFLARE_BASE)?,
         })
@@ -163,7 +163,7 @@ mod tests {
     fn endpoints_default_to_the_real_services() {
         let e = Endpoints::from_lookup(lookup(&[])).unwrap();
         assert_eq!(e.globalping.as_str(), "https://api.globalping.io/");
-        assert_eq!(e.cheburcheck.as_str(), "https://cheburcheck.ru/");
+        assert_eq!(e.check_host.as_str(), "https://check-host.net/");
         assert_eq!(e.redflag.as_str(), "https://api.yazaebalsyadelatproxy.cc/");
         assert_eq!(e.cloudflare.as_str(), "https://api.cloudflare.com/");
     }
@@ -186,7 +186,7 @@ mod tests {
             "http://fakes.example.test:9000/globalping/"
         );
         assert_eq!(e.cloudflare.host_str(), Some("fakes.example.test"));
-        assert_eq!(e.cheburcheck.as_str(), "https://cheburcheck.ru/");
+        assert_eq!(e.check_host.as_str(), "https://check-host.net/");
     }
 
     #[test]
@@ -199,7 +199,7 @@ mod tests {
     fn a_bad_endpoint_names_its_variable() {
         for (var, value) in [
             ("MTPOOL_GLOBALPING_URL", "not a url"),
-            ("MTPOOL_CHEBURCHECK_URL", "ftp://example.test/"),
+            ("MTPOOL_CHECK_HOST_URL", "ftp://example.test/"),
             ("MTPOOL_REDFLAG_URL", "/relative"),
             ("MTPOOL_CLOUDFLARE_URL", "http://"),
         ] {

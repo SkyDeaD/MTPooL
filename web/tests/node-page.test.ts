@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import nodes from './fixtures/nodes.json';
 import { t } from '../src/lib/i18n';
 import NodePage from '../src/public/NodePage.svelte';
 import { fakeApi, FIXTURE_NOW, settle, setHidden } from './helpers';
@@ -36,6 +37,20 @@ describe('node page', () => {
     // A bucket with no samples is drawn as "no data", never as a failure.
     expect(target.querySelectorAll('.hs i.n').length).toBe(6);
     expect(target.querySelectorAll('.hs i.x')).toHaveLength(1);
+  });
+
+  it('a_disputed_node_explains_its_blocked_globalping', async () => {
+    const api = fakeApi();
+    const open = async () => {
+      app = mount(NodePage, { target, props: { id: 'alpha-k3m2q', fetchFn: api.fetchFn } });
+      await settle();
+    };
+    await open();
+    expect(target.textContent).not.toContain(t('check.disputed.globalping'));
+    unmount(app!);
+    api.set('nodes', nodes.map((n) => (n.id === 'alpha-k3m2q' ? { ...n, globalping_disputed: true } : n)));
+    await open();
+    expect(target.textContent).toContain(t('check.disputed.globalping'));
   });
 
   it('unknown_node_says_so', async () => {

@@ -165,6 +165,7 @@ fn votes_of(command: Command) -> (NodeId, Generation, Vec<(SensorKind, SensorVot
             node,
             generation,
             votes,
+            ..
         } => (node, generation, votes),
         other => panic!("not a RoundDone: {other:?}"),
     }
@@ -186,6 +187,7 @@ fn run_round(node: &str, generation: Generation, fresh_gp: Option<SensorVote>) -
     Effect::RunRound {
         node: id(node),
         generation,
+        started_at: now(),
         ip: NODE_IP,
         port: 443,
         fresh_gp,
@@ -220,7 +222,7 @@ async fn round_runs_parallel_and_returns_all_votes() {
 
     let started = Instant::now();
     let command = runner
-        .round(id("alpha-00001"), Generation(3), target(), None)
+        .round(id("alpha-00001"), Generation(3), now(), target(), None)
         .await;
     // One after another it would be 90 seconds.
     assert_eq!(started.elapsed(), Duration::from_secs(40));
@@ -258,7 +260,7 @@ async fn one_sensor_timeout_does_not_lose_others() {
 
     let started = Instant::now();
     let command = runner
-        .round(id("alpha-00001"), Generation(0), target(), None)
+        .round(id("alpha-00001"), Generation(0), now(), target(), None)
         .await;
     assert_eq!(
         started.elapsed(),
@@ -282,7 +284,7 @@ async fn the_sensor_timeout_is_120_seconds_unless_changed() {
     let runner = RoundRunner::new(dyn_of(&[&gp])).with_sensor_timeout(Duration::from_secs(7));
     let started = Instant::now();
     runner
-        .round(id("alpha-00001"), Generation(0), target(), None)
+        .round(id("alpha-00001"), Generation(0), now(), target(), None)
         .await;
     assert_eq!(started.elapsed(), Duration::from_secs(7));
 }
@@ -293,7 +295,7 @@ async fn a_panicking_sensor_abstains_and_the_others_stay() {
     let ch = FakeSensor::answering(SensorKind::Cheburcheck, Vote::Clear, Duration::from_secs(1));
     let runner = RoundRunner::new(dyn_of(&[&gp, &ch]));
     let command = runner
-        .round(id("alpha-00001"), Generation(0), target(), None)
+        .round(id("alpha-00001"), Generation(0), now(), target(), None)
         .await;
     let (_, _, votes) = votes_of(command);
     assert_eq!(
@@ -322,6 +324,7 @@ async fn round_uses_fresh_agent_report_without_central_gp() {
         .round(
             id("alpha-00001"),
             Generation(0),
+            now(),
             target(),
             Some(fresh.clone()),
         )
@@ -351,7 +354,7 @@ async fn without_a_fresh_report_the_central_globalping_runs() {
     );
     let runner = RoundRunner::new(dyn_of(&[&gp]));
     let command = runner
-        .round(id("alpha-00001"), Generation(0), target(), None)
+        .round(id("alpha-00001"), Generation(0), now(), target(), None)
         .await;
     assert_eq!(gp.calls(), 1);
     let (_, _, votes) = votes_of(command);
@@ -368,7 +371,13 @@ async fn a_fresh_report_stands_even_when_no_globalping_sensor_is_built() {
     };
     let (_, _, votes) = votes_of(
         runner
-            .round(id("alpha-00001"), Generation(0), target(), Some(fresh))
+            .round(
+                id("alpha-00001"),
+                Generation(0),
+                now(),
+                target(),
+                Some(fresh),
+            )
             .await,
     );
     assert_eq!(votes.len(), 2);
@@ -451,6 +460,49 @@ async fn the_driver_reports_the_votes_to_the_state_owner() {
         seen[0].secret,
         format!("ee{POOL_SECRET}6578616d706c652e636f6d")
     );
+}
+
+#[tokio::test]
+async fn the_round_gives_back_the_start_it_was_given() {
+    let gp = FakeSensor::answering(SensorKind::Globalping, Vote::Clear, Duration::ZERO);
+    let runner = RoundRunner::new(dyn_of(&[&gp]));
+    let command = runner
+        .round(id("alpha-00001"), Generation(0), Ts(1234), target(), None)
+        .await;
+    assert!(matches!(
+        command,
+        Command::RoundDone {
+            started_at: Ts(1234),
+            ..
+        }
+    ));
+}
+
+/// The start goes the whole way through the driver: the state owner sees that the round began
+/// before the quarantine, and two `Blocked` votes of it ban nothing.
+#[tokio::test]
+async fn a_round_that_began_before_the_quarantine_bans_nothing() {
+    let gp = FakeSensor::answering(SensorKind::Globalping, Vote::Blocked, Duration::ZERO);
+    let ch = FakeSensor::answering(SensorKind::Cheburcheck, Vote::Blocked, Duration::ZERO);
+    let node = quarantined("alpha-00001");
+    let generation = node.generation;
+    let before = Ts(node.state_since.0 - 1);
+    let (_dir, handle) = actor_with(vec![node], vec![]);
+    let runner = RoundRunner::new(dyn_of(&[&gp, &ch]));
+
+    let effect = Effect::RunRound {
+        node: id("alpha-00001"),
+        generation,
+        started_at: before,
+        ip: NODE_IP,
+        port: 443,
+        fresh_gp: None,
+    };
+    runner.run(effect, handle.clone()).await;
+
+    assert_eq!(node_state(&handle, "alpha-00001").await, "quarantine");
+    let blocks = handle.inspect(|s| s.blocks.clone()).await.unwrap();
+    assert!(blocks.is_empty());
 }
 
 #[tokio::test]
@@ -562,7 +614,7 @@ async fn the_votes_of_a_round_are_one_per_sensor_in_order() {
     let runner = RoundRunner::new(dyn_of(&[&rf, &gp]));
     let (_, _, votes) = votes_of(
         runner
-            .round(id("alpha-00001"), Generation(0), target(), None)
+            .round(id("alpha-00001"), Generation(0), now(), target(), None)
             .await,
     );
     assert_eq!(kinds(&votes), [SensorKind::RedFlag, SensorKind::Globalping]);
@@ -578,7 +630,7 @@ async fn the_round_has_one_deadline_not_one_per_sensor() {
     let started = Instant::now();
     let (_, _, votes) = votes_of(
         runner
-            .round(id("alpha-00001"), Generation(0), target(), None)
+            .round(id("alpha-00001"), Generation(0), now(), target(), None)
             .await,
     );
     // Waited one after another it would be 360 seconds.
@@ -604,7 +656,7 @@ async fn an_answer_that_arrives_before_the_deadline_is_kept_next_to_a_late_one()
     let started = Instant::now();
     let (_, _, votes) = votes_of(
         runner
-            .round(id("alpha-00001"), Generation(0), target(), None)
+            .round(id("alpha-00001"), Generation(0), now(), target(), None)
             .await,
     );
     assert_eq!(started.elapsed(), SENSOR_TIMEOUT);

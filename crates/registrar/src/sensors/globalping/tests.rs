@@ -982,3 +982,76 @@ async fn a_few_refusals_do_not_hide_a_block() {
     assert_eq!(vote.vote, Vote::Blocked);
     assert_eq!(vote.evidence["probes_refused"], 10);
 }
+
+fn first_probe_evidence(measurement: &Measurement) -> Value {
+    probe_evidence(&measurement.results[0])
+}
+
+fn measurement_of(text: &str) -> Measurement {
+    serde_json::from_str(text).expect("a recorded fixture is a measurement")
+}
+
+#[test]
+fn a_refused_probe_says_refused() {
+    let measurement = measurement_of(REFUSED);
+    assert_eq!(failure_reason(&measurement.results[0]), Some("refused"));
+    assert_eq!(first_probe_evidence(&measurement)["reason"], "refused");
+}
+
+#[test]
+fn a_probe_with_no_tls_says_why() {
+    // The recording holds probes that failed before the handshake: the connection timed out.
+    let measurement = measurement_of(NO_TLS);
+    assert_eq!(failure_reason(&measurement.results[0]), Some("timeout"));
+    assert_eq!(first_probe_evidence(&measurement)["reason"], "timeout");
+}
+
+#[test]
+fn a_timed_out_probe_says_timeout() {
+    let probe = ProbeResult {
+        result: ProbeOutcome {
+            status: "failed".to_owned(),
+            tls: None,
+            raw_output: Some("Request timed out while establishing the TCP connection".to_owned()),
+        },
+        ..ProbeResult::default()
+    };
+    assert_eq!(failure_reason(&probe), Some("timeout"));
+}
+
+#[test]
+fn a_probe_failure_has_a_reason_of_its_kind() {
+    let failed = |text: &str| ProbeResult {
+        result: ProbeOutcome {
+            status: "failed".to_owned(),
+            tls: None,
+            raw_output: Some(text.to_owned()),
+        },
+        ..ProbeResult::default()
+    };
+    assert_eq!(
+        failure_reason(&failed("connect ETIMEDOUT 1.1.1.1:443")),
+        Some("timeout")
+    );
+    assert_eq!(failure_reason(&failed("TLS handshake failed")), Some("tls"));
+    assert_eq!(failure_reason(&failed("bad certificate")), Some("tls"));
+    assert_eq!(failure_reason(&failed("something else")), Some("other"));
+    assert_eq!(failure_reason(&ProbeResult::default()), Some("other"));
+}
+
+#[test]
+fn a_successful_probe_has_no_reason() {
+    let measurement = measurement_of(TLS_403);
+    assert_eq!(failure_reason(&measurement.results[0]), None);
+    assert!(first_probe_evidence(&measurement).get("reason").is_none());
+}
+
+#[test]
+fn the_evidence_keeps_no_raw_output() {
+    let measurement = measurement_of(REFUSED);
+    let vote = tally(ID, &measurement, &GlobalpingSettings::default());
+    let text = vote.evidence.to_string();
+    assert!(!text.contains("rawOutput"));
+    assert!(!text.contains("ECONNREFUSED"));
+    assert!(!text.contains("104.16.132.229"));
+}

@@ -1,4 +1,4 @@
-//! Stand-ins for the services outside the pool: Globalping, cheburcheck, RedFlag, Cloudflare and
+//! Stand-ins for the services outside the pool: Globalping, check-host.net, RedFlag, Cloudflare and
 //! GitHub Releases, plus the plain-text address service and the ipsum list the nodes ask. Every answer has the
 //! shape of the recorded real one (the fixtures of the registrar tests are embedded and patched),
 //! and `POST /__control` switches what a sensor answers. `GET /__state` shows what the stand-ins
@@ -25,10 +25,9 @@ const GP_WAITING: &str = include_str!("../../registrar/tests/fixtures/globalping
 const GP_CREATE: &str = include_str!("../../registrar/tests/fixtures/globalping/create.json");
 const GP_LIMITS: &str = include_str!("../../registrar/tests/fixtures/globalping/limits_anon.json");
 const GP_NOT_FOUND: &str = include_str!("../../registrar/tests/fixtures/globalping/not_found.json");
-const CHEBUR_CHECK: &str =
-    include_str!("../../registrar/tests/fixtures/cheburcheck/check_1.1.1.1.json");
-const CHEBUR_STREAM: &str =
-    include_str!("../../registrar/tests/fixtures/cheburcheck/probe_stream_1.1.1.1.txt");
+const CH_START: &str = include_str!("../../registrar/tests/fixtures/check-host/start.json");
+const CH_CONNECTED: &str = include_str!("../../registrar/tests/fixtures/check-host/connected.json");
+const CH_TIMED_OUT: &str = include_str!("../../registrar/tests/fixtures/check-host/timed_out.json");
 const RF_OK: &str = include_str!("../../registrar/tests/fixtures/redflag/ok.json");
 const RF_BLOCKED: &str = include_str!("../../registrar/tests/fixtures/redflag/rkn_block.json");
 const RF_UNAUTHORIZED: &str =
@@ -56,7 +55,12 @@ const ZONE_ID: &str = "023e105f4ecef8ad9ca31a8372d0c353";
 /// The sensors and the modes each can be switched to; the first mode is the default.
 const MODES: [(&str, &[&str]); 5] = [
     ("globalping", &["ok", "blocked", "timeout", "error"]),
-    ("cheburcheck", &["ok", "blocked", "unavailable"]),
+    (
+        "check_host",
+        &[
+            "ok", "blocked", "refused", "mixed", "limited", "garbage", "foreign", "same_id",
+        ],
+    ),
     ("redflag", &["ok", "blocked", "unauthorized"]),
     ("cloudflare", &["ok", "rate_limited"]),
     ("github", &["ok", "rate_limited", "error"]),
@@ -87,6 +91,14 @@ struct Inner {
     calls: BTreeMap<&'static str, u64>,
     measurements: BTreeMap<String, Measurement>,
     created: u64,
+    /// The check-host starts by id (the latest start owns a shared id), and in order.
+    check_host_starts: BTreeMap<String, CheckHostStart>,
+    check_host_log: Vec<Value>,
+    /// Starts the stub turned away with `limit_exceeded`.
+    check_host_limited: Vec<Value>,
+    /// Every read of an answer, with the mode it was answered in.
+    check_host_fetches: Vec<Value>,
+    check_host_serial: u64,
     records: Vec<Record>,
     next_record: u64,
     /// Every create and delete of a DNS record, in the order they happened.
@@ -223,6 +235,11 @@ async fn state(State(fakes): State<Fakes>) -> Response {
         StatusCode::OK,
         &json!({
             "dns": dns, "dns_log": inner.dns_log,
+            "check_host": {
+                "starts": inner.check_host_log,
+                "limited": inner.check_host_limited,
+                "fetches": inner.check_host_fetches,
+            },
             "measurements": inner.created, "calls": inner.calls,
             "github": {
                 "tag": inner.github_release.as_ref().map(|r| r.tag.clone()),
@@ -290,9 +307,9 @@ async fn dispatch(State(fakes): State<Fakes>, request: Request) -> Response {
             fakes.count("globalping");
             globalping(&fakes, &method, &segments, &body)
         }
-        "cheburcheck" => {
-            fakes.count("cheburcheck");
-            cheburcheck(&fakes, &method, &segments, &query)
+        "check-host" => {
+            fakes.count("check_host");
+            check_host(&fakes, &method, &segments, &query)
         }
         "redflag" => {
             fakes.count("redflag");
@@ -515,54 +532,105 @@ fn measurement_time(unix_ms: i64) -> String {
     format!("{stem}.{:03}Z", unix_ms.rem_euclid(1000))
 }
 
-// --- cheburcheck --------------------------------------------------------------------------------
+// --- check-host.net -----------------------------------------------------------------------------
 
-fn cheburcheck(
+/// The nodes check-host.net is asked to measure from.
+const CH_NODES: [&str; 2] = ["ru1.node.check-host.net", "ru2.node.check-host.net"];
+
+/// The one id every start gets in the `same_id` mode.
+const CH_SHARED_ID: &str = "sharedcheckid0001";
+
+/// What a check start asked for: the address and port the registrar will see in the answer.
+struct CheckHostStart {
+    host: String,
+    port: u64,
+}
+
+fn check_host(
     fakes: &Fakes,
     method: &Method,
     segments: &[&str],
     query: &HashMap<String, String>,
 ) -> Response {
-    let mode = fakes.mode("cheburcheck");
-    if mode == "unavailable" {
-        return json_response(StatusCode::SERVICE_UNAVAILABLE, &json!({"error": "fake"}));
-    }
+    let mode = fakes.mode("check_host");
     match (method, segments) {
-        (&Method::GET, ["api", "v1", "check"]) => {
-            let Some(target) = query.get("target") else {
-                return json_response(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    &json!({"error": "no target"}),
-                );
+        (&Method::GET, ["check-tcp"]) => {
+            let target = query.get("host").map(String::as_str).unwrap_or_default();
+            let Some((host, port)) = target.rsplit_once(':') else {
+                return json_response(StatusCode::OK, &json!({"error": "invalid_host"}));
             };
-            let mut document = recorded(CHEBUR_CHECK);
-            // The fast flag stays what the recording says (a provider network is listed): it is
-            // never a vote.
-            document["id"] = json!(format!("fake-{target}"));
-            document["target"] = json!(target);
-            document["ips"] = json!([target]);
+            let Ok(port) = port.parse::<u64>() else {
+                return json_response(StatusCode::OK, &json!({"error": "invalid_host"}));
+            };
+            if mode == "limited" {
+                fakes
+                    .lock()
+                    .check_host_limited
+                    .push(json!({"host": host, "port": port}));
+                return json_response(StatusCode::OK, &json!({"error": "limit_exceeded"}));
+            }
+            let mut inner = fakes.lock();
+            inner.check_host_serial += 1;
+            let id = if mode == "same_id" {
+                CH_SHARED_ID.to_owned()
+            } else {
+                format!("fakecheck{:06}", inner.check_host_serial)
+            };
+            inner
+                .check_host_log
+                .push(json!({"id": id, "host": host, "port": port, "mode": mode}));
+            inner.check_host_starts.insert(
+                id.clone(),
+                CheckHostStart {
+                    host: host.to_owned(),
+                    port,
+                },
+            );
+            let mut document = recorded(CH_START);
+            document["request_id"] = json!(id);
+            document["permanent_link"] = json!(format!("https://check-host.net/check-report/{id}"));
             json_response(StatusCode::OK, &document)
         }
-        (&Method::GET, ["api", "v1", "probe", id]) => {
-            let stream = CHEBUR_STREAM
-                .replace("820de57d-a653-4e23-8b86-c904d4ef67c7", id)
-                .replace(
-                    "\"target\":\"1.1.1.1\"",
-                    &format!("\"target\":\"{}\"", target_of(id)),
-                );
-            let stream = if mode == "blocked" {
-                stream.replace(r#""verdicts":["ok"]"#, r#""verdicts":["tspu_block"]"#)
-            } else {
-                stream.replace(r#""verdicts":["tspu_block"]"#, r#""verdicts":["ok"]"#)
+        (&Method::GET, ["check-result-extended", id]) => {
+            let mut inner = fakes.lock();
+            inner
+                .check_host_fetches
+                .push(json!({"id": id, "mode": mode}));
+            let Some(start) = inner.check_host_starts.get(*id) else {
+                return json_response(StatusCode::OK, &json!({}));
             };
-            text_response(StatusCode::OK, "text/event-stream", stream)
+            if mode == "garbage" {
+                return text_response(
+                    StatusCode::OK,
+                    "text/html",
+                    "<html><body>check-host.net is busy</body></html>".to_owned(),
+                );
+            }
+            let (template, results) = match mode {
+                "blocked" => (CH_TIMED_OUT, [Some("Connection timed out"); 2]),
+                "refused" => (CH_TIMED_OUT, [Some("Connection refused"); 2]),
+                "mixed" => (CH_TIMED_OUT, [None, Some("Connection timed out")]),
+                _ => (CH_CONNECTED, [None, None]),
+            };
+            let host = if mode == "foreign" {
+                "198.51.100.77"
+            } else {
+                start.host.as_str()
+            };
+            let mut document = recorded(template);
+            document["created"] = json!(now_ms() / 1000);
+            document["host"] = json!(host);
+            document["port"] = json!(start.port.to_string());
+            for (node, error) in CH_NODES.iter().zip(results) {
+                document["results"][*node] = match error {
+                    Some(error) => json!([{"error": error}]),
+                    None => json!([{"address": host, "time": 0.0123}]),
+                };
+            }
+            json_response(StatusCode::OK, &document)
         }
         _ => not_found(),
     }
-}
-
-fn target_of(id: &str) -> &str {
-    id.strip_prefix("fake-").unwrap_or(id)
 }
 
 // --- RedFlag ------------------------------------------------------------------------------------
@@ -799,8 +867,8 @@ mod tests {
             ("globalping", "timeout"),
             ("globalping", "error"),
             ("globalping", "ok"),
-            ("cheburcheck", "blocked"),
-            ("cheburcheck", "unavailable"),
+            ("check_host", "blocked"),
+            ("check_host", "garbage"),
             ("redflag", "unauthorized"),
             ("cloudflare", "rate_limited"),
             ("cloudflare", "ok"),
@@ -926,33 +994,149 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cheburcheck_streams_verdicts_in_the_recorded_shape() {
+    async fn check_host_answers_in_the_recorded_shape() {
         let app = router(Fakes::default());
-        let (_, check) = json_of(&app, get("/cheburcheck/api/v1/check?target=192.0.2.7")).await;
-        assert_eq!(check["target"], "192.0.2.7");
-        assert_eq!(check["blocked"], true, "the fast flag is not a vote");
-        let id = check["id"].as_str().expect("an id");
-
-        let (status, ok) = call(&app, get(&format!("/cheburcheck/api/v1/probe/{id}"))).await;
+        let start = "/check-host/check-tcp?host=192.0.2.7:443&node=ru1.node.check-host.net&node=ru2.node.check-host.net";
+        let (status, started) = json_of(&app, get(start)).await;
         assert_eq!(status, StatusCode::OK);
-        assert!(ok.contains("event:done"));
-        assert!(!ok.contains("tspu_block"));
-        assert!(ok.contains(r#""verdicts":["ok"]"#));
+        assert_eq!(started["ok"], 1);
+        let id = started["request_id"].as_str().expect("an id");
+        assert!(id.chars().all(|c| c.is_ascii_alphanumeric()) && id.len() <= 64);
+        assert!(started["nodes"]["ru1.node.check-host.net"].is_array());
 
+        let (_, ok) = json_of(
+            &app,
+            get(&format!("/check-host/check-result-extended/{id}")),
+        )
+        .await;
+        assert_eq!(ok["command"], "tcp");
+        assert_eq!(ok["host"], "192.0.2.7");
+        assert_eq!(ok["port"], "443", "the port is a string, as recorded");
+        assert!(ok["created"].as_i64().expect("created") > 1_700_000_000);
         assert_eq!(
-            control(&app, "cheburcheck", "blocked").await,
-            StatusCode::OK
+            ok["results"]["ru1.node.check-host.net"][0]["address"],
+            "192.0.2.7"
         );
-        let (_, blocked) = call(&app, get(&format!("/cheburcheck/api/v1/probe/{id}"))).await;
-        assert!(blocked.contains("tspu_block"));
-        assert!(!blocked.contains(r#""verdicts":["ok"]"#));
+        assert!(ok["results"]["ru2.node.check-host.net"][0]["time"].is_number());
 
+        assert_eq!(control(&app, "check_host", "blocked").await, StatusCode::OK);
+        let (_, blocked) = json_of(
+            &app,
+            get(&format!("/check-host/check-result-extended/{id}")),
+        )
+        .await;
+        assert_eq!(blocked["host"], "192.0.2.7");
         assert_eq!(
-            control(&app, "cheburcheck", "unavailable").await,
-            StatusCode::OK
+            blocked["results"]["ru1.node.check-host.net"][0]["error"],
+            "Connection timed out"
         );
-        let (status, _) = call(&app, get("/cheburcheck/api/v1/check?target=192.0.2.7")).await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+
+        assert_eq!(control(&app, "check_host", "refused").await, StatusCode::OK);
+        let (_, refused) = json_of(
+            &app,
+            get(&format!("/check-host/check-result-extended/{id}")),
+        )
+        .await;
+        assert_eq!(
+            refused["results"]["ru2.node.check-host.net"][0]["error"],
+            "Connection refused"
+        );
+
+        assert_eq!(control(&app, "check_host", "mixed").await, StatusCode::OK);
+        let (_, mixed) = json_of(
+            &app,
+            get(&format!("/check-host/check-result-extended/{id}")),
+        )
+        .await;
+        assert!(mixed["results"]["ru1.node.check-host.net"][0]["time"].is_number());
+        assert!(mixed["results"]["ru2.node.check-host.net"][0]["error"].is_string());
+
+        assert_eq!(control(&app, "check_host", "foreign").await, StatusCode::OK);
+        let (_, foreign) = json_of(
+            &app,
+            get(&format!("/check-host/check-result-extended/{id}")),
+        )
+        .await;
+        assert_ne!(foreign["host"], "192.0.2.7");
+
+        assert_eq!(control(&app, "check_host", "garbage").await, StatusCode::OK);
+        let (_, garbage) = call(
+            &app,
+            get(&format!("/check-host/check-result-extended/{id}")),
+        )
+        .await;
+        assert!(serde_json::from_str::<Value>(&garbage).is_err());
+
+        let state = json_of(&app, get("/__state")).await.1;
+        assert_eq!(state["check_host"]["starts"][0]["host"], "192.0.2.7");
+        assert_eq!(state["check_host"]["starts"][0]["port"], 443);
+        assert!(state["calls"]["check_host"].as_u64() >= Some(7));
+        // Every read of an answer is kept with the mode it was answered in.
+        let fetches = state["check_host"]["fetches"].as_array().expect("fetches");
+        assert_eq!(fetches.len(), 6, "{fetches:?}");
+        assert_eq!(fetches[0], json!({"id": id, "mode": "ok"}));
+        assert_eq!(fetches[5], json!({"id": id, "mode": "garbage"}));
+    }
+
+    #[tokio::test]
+    async fn a_limited_start_is_kept_apart_from_the_starts() {
+        let app = router(Fakes::default());
+        assert_eq!(control(&app, "check_host", "limited").await, StatusCode::OK);
+        let (_, answer) = json_of(
+            &app,
+            get("/check-host/check-tcp?host=192.0.2.9:443&node=ru1.node.check-host.net"),
+        )
+        .await;
+        assert_eq!(answer["error"], "limit_exceeded");
+        let state = json_of(&app, get("/__state")).await.1;
+        assert_eq!(state["check_host"]["starts"], json!([]));
+        assert_eq!(
+            state["check_host"]["limited"],
+            json!([{"host": "192.0.2.9", "port": 443}])
+        );
+    }
+
+    #[tokio::test]
+    async fn check_host_control_switches_modes() {
+        let app = router(Fakes::default());
+        let start = "/check-host/check-tcp?host=192.0.2.7:443";
+        for mode in [
+            "ok", "blocked", "refused", "mixed", "limited", "garbage", "foreign", "same_id",
+        ] {
+            assert_eq!(
+                control(&app, "check_host", mode).await,
+                StatusCode::OK,
+                "{mode}"
+            );
+        }
+        assert_eq!(
+            control(&app, "check_host", "unavailable").await,
+            StatusCode::BAD_REQUEST
+        );
+
+        assert_eq!(control(&app, "check_host", "limited").await, StatusCode::OK);
+        let (_, limited) = json_of(&app, get(start)).await;
+        assert_eq!(limited["error"], "limit_exceeded");
+
+        assert_eq!(control(&app, "check_host", "same_id").await, StatusCode::OK);
+        let (_, first) = json_of(&app, get(start)).await;
+        let (_, second) = json_of(&app, get("/check-host/check-tcp?host=192.0.2.8:443")).await;
+        assert_eq!(first["request_id"], second["request_id"]);
+        let id = first["request_id"].as_str().expect("an id");
+        let (_, result) = json_of(
+            &app,
+            get(&format!("/check-host/check-result-extended/{id}")),
+        )
+        .await;
+        assert_eq!(
+            result["host"], "192.0.2.8",
+            "the latest start owns the shared id"
+        );
+
+        assert_eq!(control(&app, "check_host", "ok").await, StatusCode::OK);
+        let (_, a) = json_of(&app, get(start)).await;
+        let (_, b) = json_of(&app, get(start)).await;
+        assert_ne!(a["request_id"], b["request_id"]);
     }
 
     #[tokio::test]

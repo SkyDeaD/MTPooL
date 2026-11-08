@@ -32,6 +32,13 @@ pub struct Settings {
     pub rounds_before_slow: u32,
     pub clean_rounds_to_exit: u32,
     pub reverify_pause_sec: u32,
+    /// How long a confirmation from Russia keeps a node with a disputed Globalping healthy.
+    #[serde(default = "default_ru_confirmation_sec")]
+    pub ru_confirmation_sec: u32,
+    /// How often a disputed node is checked from Russia again. Shorter than the confirmation,
+    /// so the next one arrives before the last expires.
+    #[serde(default = "default_ru_recheck_sec")]
+    pub ru_recheck_sec: u32,
 
     // Masters and DNS.
     pub masters_per_domain: u32,
@@ -150,6 +157,14 @@ impl fmt::Display for SettingsError {
 
 impl std::error::Error for SettingsError {}
 
+fn default_ru_confirmation_sec() -> u32 {
+    1200
+}
+
+fn default_ru_recheck_sec() -> u32 {
+    900
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -168,8 +183,10 @@ impl Default for Settings {
             round_interval_sec: 300,
             round_interval_slow_sec: 900,
             rounds_before_slow: 3,
-            clean_rounds_to_exit: 2,
+            clean_rounds_to_exit: 1,
             reverify_pause_sec: 900,
+            ru_confirmation_sec: default_ru_confirmation_sec(),
+            ru_recheck_sec: default_ru_recheck_sec(),
             masters_per_domain: 1,
             rotation_ttl_sec: 1800,
             dns_ttl: 60,
@@ -252,9 +269,16 @@ impl Settings {
             (self.rounds_before_slow, "rounds_before_slow"),
             (self.clean_rounds_to_exit, "clean_rounds_to_exit"),
             (self.reverify_pause_sec, "reverify_pause_sec"),
+            (self.ru_confirmation_sec, "ru_confirmation_sec"),
+            (self.ru_recheck_sec, "ru_recheck_sec"),
         ] {
             positive(v, field)?;
         }
+        check(
+            self.ru_recheck_sec < self.ru_confirmation_sec,
+            "ru_recheck_sec",
+            "must be shorter than ru_confirmation_sec",
+        )?;
         check(
             (60..=86_400).contains(&self.dns_ttl),
             "dns_ttl",
@@ -427,7 +451,8 @@ mod tests {
             (300, 900)
         );
         assert_eq!(s.rounds_before_slow, 3);
-        assert_eq!(s.clean_rounds_to_exit, 2);
+        assert_eq!(s.clean_rounds_to_exit, 1);
+        assert_eq!((s.ru_confirmation_sec, s.ru_recheck_sec), (1200, 900));
         assert_eq!(s.reverify_pause_sec, 900);
         assert_eq!(s.dns_ttl, 60);
         assert_eq!(s.proxy_port, 443);
@@ -566,6 +591,35 @@ mod tests {
         for s in cases {
             assert!(s.validate().is_err(), "{s:?}");
         }
+    }
+
+    #[test]
+    fn settings_stored_without_the_new_fields_read_as_defaults() {
+        let mut v = serde_json::to_value(Settings::default()).unwrap();
+        let o = v.as_object_mut().unwrap();
+        o.remove("ru_confirmation_sec");
+        o.remove("ru_recheck_sec");
+        let s: Settings = serde_json::from_value(v).unwrap();
+        assert_eq!((s.ru_confirmation_sec, s.ru_recheck_sec), (1200, 900));
+    }
+
+    #[test]
+    fn recheck_must_be_shorter_than_the_confirmation() {
+        let equal = Settings {
+            ru_recheck_sec: 1200,
+            ..Default::default()
+        };
+        assert!(equal.validate().is_err());
+        let zero = Settings {
+            ru_recheck_sec: 0,
+            ..Default::default()
+        };
+        assert!(zero.validate().is_err());
+        let zero = Settings {
+            ru_confirmation_sec: 0,
+            ..Default::default()
+        };
+        assert!(zero.validate().is_err());
     }
 
     #[test]
