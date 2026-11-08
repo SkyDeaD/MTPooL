@@ -64,7 +64,7 @@ export function formatAvailability(bp: number | null | undefined): string {
   return `${text} %`;
 }
 
-export type CheckState = 'ok' | 'bad' | 'none';
+export type CheckState = 'ok' | 'warn' | 'bad' | 'none';
 export type CheckName = 'tcp' | 'metrics' | 'globalping';
 
 export interface CheckRow {
@@ -74,15 +74,23 @@ export interface CheckRow {
 }
 
 /** Every check of a node, passed or not, in the order the table lists them. */
-export function checkRows(checks: NodeChecks): CheckRow[] {
-  const gp: CheckState = checks.globalping === 'ok' ? 'ok' : checks.globalping === 'failed' ? 'bad' : 'none';
+export function checkRows(checks: NodeChecks, disputed = false): CheckRow[] {
+  const gp: CheckState =
+    checks.globalping === 'ok' ? 'ok' : checks.globalping === 'failed' ? (disputed ? 'warn' : 'bad') : 'none';
   return [
     { name: 'tcp', state: checks.tcp ? 'ok' : 'bad', title: checks.tcp ? 'check.ok.tcp' : 'check.bad.tcp' },
     { name: 'metrics', state: checks.metrics ? 'ok' : 'bad', title: checks.metrics ? 'check.ok.metrics' : 'check.bad.metrics' },
     {
       name: 'globalping',
       state: gp,
-      title: gp === 'ok' ? 'check.ok.globalping' : gp === 'bad' ? 'check.bad.globalping' : 'check.none.globalping',
+      title:
+        gp === 'ok'
+          ? 'check.ok.globalping'
+          : gp === 'warn'
+            ? 'check.disputed.globalping'
+            : gp === 'bad'
+              ? 'check.bad.globalping'
+              : 'check.none.globalping',
     },
   ];
 }

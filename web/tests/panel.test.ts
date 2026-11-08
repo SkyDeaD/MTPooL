@@ -156,6 +156,14 @@ describe('settings', () => {
     expect(key('report_max_age_sec').closest('.f')?.textContent).toContain(note);
   });
 
+  it('the_new_settings_are_editable', async () => {
+    await openSettings();
+    for (const k of ['ru_confirmation_sec', 'ru_recheck_sec']) {
+      expect(key(k), k).toBeTruthy();
+      expect(key(k).closest('.f')?.textContent).toContain(t(`settings.${k}` as 'settings.ru_recheck_sec'));
+    }
+  });
+
   it('settings_unsaved_warning', async () => {
     await openSettings();
     const form = formOf('rotation_ttl_sec');
@@ -353,6 +361,7 @@ describe('node page', () => {
       t('panel.rounds.when'),
       t('panel.rounds.verdict'),
       t('sensor.globalping'),
+      t('sensor.check_host'),
       t('sensor.cheburcheck'),
       t('sensor.redflag'),
     ]);
@@ -365,6 +374,22 @@ describe('node page', () => {
     expect(rounds[1].textContent).not.toContain('Москва');
     // The hint about the weakest vote: one "blocked" is not enough for a ban.
     expect(text()).toContain(t('panel.node.hint'));
+  });
+
+  it('the_panel_shows_the_port_filter', async () => {
+    api.mock.state.nodes.find((n: any) => n.id === 'theta-m1d7z').port_filter = 'drop';
+    start('#/nodes/theta-m1d7z');
+    await login();
+    expect(text()).toContain(t('why.port_filter'));
+  });
+
+  it('the_cheburcheck_column_appears_only_with_old_rounds', async () => {
+    for (const r of api.mock.state.rounds) r.votes = r.votes.filter((v: any) => v.sensor !== 'cheburcheck');
+    start('#/nodes/theta-m1d7z');
+    await login();
+    const head = [...document.querySelectorAll('table.rounds thead th')].map((th) => th.textContent?.trim());
+    expect(head).toContain(t('sensor.check_host'));
+    expect(head).not.toContain(t('sensor.cheburcheck'));
   });
 
   it('every_ban_in_force_can_be_lifted_and_a_lifted_one_cannot', async () => {

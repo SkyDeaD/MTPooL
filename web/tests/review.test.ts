@@ -177,7 +177,7 @@ describe('votes', () => {
   });
 
   it('every_api_code_has_a_text', () => {
-    for (const code of ['not_configured', 'key_rejected', 'unavailable', 'rate_limited', 'timeout', 'unknown_answer', 'no_data', 'port_refused']) {
+    for (const code of ['not_configured', 'key_rejected', 'unavailable', 'rate_limited', 'timeout', 'unknown_answer', 'no_data', 'port_refused', 'port_filter', 'port_closed']) {
       expect(read('src', 'strings.ru.ts')).toContain(`'vote.reason.${code}'`);
     }
   });

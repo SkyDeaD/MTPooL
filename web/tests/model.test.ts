@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkRows, formatAvailability, groupNodes, historySlots, panelBans, poolCounts, whyText } from '../src/lib/model';
+import { checkRows, formatAvailability, groupNodes, historySlots, panelBans, poolCounts, sensorName, whyText } from '../src/lib/model';
 import type { BanRecord, PublicNode } from '../src/lib/types';
 import history from './fixtures/node-history.json';
 import nodes from './fixtures/nodes.json';
@@ -70,6 +70,21 @@ describe('model', () => {
     expect(states({ tcp: true, metrics: true, globalping: 'ok' })).toEqual(['tcp:ok', 'metrics:ok', 'globalping:ok']);
     expect(states({ tcp: false, metrics: false, globalping: 'failed' })).toEqual(['tcp:bad', 'metrics:bad', 'globalping:bad']);
     expect(states({ tcp: true, metrics: true, globalping: 'no_data' })).toEqual(['tcp:ok', 'metrics:ok', 'globalping:none']);
+  });
+
+  it('a_disputed_globalping_has_its_own_title', () => {
+    const row = checkRows({ tcp: true, metrics: true, globalping: 'failed' }, true).find((r) => r.name === 'globalping')!;
+    expect(row.title).toBe('check.disputed.globalping');
+    expect(row.state).toBe('warn');
+    expect(row.state).not.toBe('bad');
+  });
+
+  it('the_sensor_check_host_has_a_name', () => {
+    expect(sensorName('check_host')).toBe('check-host');
+  });
+
+  it('an_old_cheburcheck_vote_keeps_its_name', () => {
+    expect(sensorName('cheburcheck')).toBe('cheburcheck');
   });
 
   it('puts_quarantine_reasons_in_words_and_keeps_a_code_it_does_not_know', () => {

@@ -61,7 +61,7 @@
             >
             <td data-l={t('stats.col.state')}><StateCell state={node.state} suspected={node.suspected} reasons={node.quarantine_reasons} /></td>
             <td data-l={t('stats.col.role')}><RoleCell {node} {now} /></td>
-            <td data-l={t('stats.col.checks')}><ChecksCell checks={node.checks} /></td>
+            <td data-l={t('stats.col.checks')}><ChecksCell checks={node.checks} disputed={node.globalping_disputed} /></td>
             <td class="n" data-l={t('stats.col.availability')}>{formatAvailability(node.availability_bp)}</td>
             <td class="n" data-l={t('stats.col.clients')}><ClientsCell clients={node.clients} max={maxClients} other={node.other_clients} /></td>
           </tr>

@@ -58,6 +58,8 @@ export const GROUPS: Group[] = [
       mn('round_interval_slow_sec'),
       count('rounds_before_slow'),
       count('clean_rounds_to_exit'),
+      sec('ru_confirmation_sec'),
+      sec('ru_recheck_sec'),
       mn('reverify_pause_sec'),
     ],
   },
@@ -206,7 +208,7 @@ export const FORMS: Record<string, Form> = {
   },
   h2: {
     id: 'h2',
-    fields: ['round_interval_sec', 'round_interval_slow_sec', 'rounds_before_slow', 'clean_rounds_to_exit', 'quarantine_max_sec', 'reverify_pause_sec'],
+    fields: ['round_interval_sec', 'round_interval_slow_sec', 'rounds_before_slow', 'clean_rounds_to_exit', 'ru_confirmation_sec', 'ru_recheck_sec', 'quarantine_max_sec', 'reverify_pause_sec'],
   },
   gp: {
     id: 'gp',
