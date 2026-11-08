@@ -23,6 +23,7 @@ use crate::hoststats::HostStats;
 use crate::ip_detect::{IpEvent, IpWatch};
 use crate::lifecycle::{ConfigSink, ReportSource, Watch};
 use crate::local_health::{LocalHealth, PortCheck, check_once};
+use crate::port_filter::PortFilterWatch;
 use crate::state_files::Fs;
 
 /// Everything one report is made of.
@@ -33,6 +34,9 @@ pub struct ReportInputs {
     pub gp: GpReport,
     /// `None` for a registrar that does not take the field.
     pub check_host: Option<CheckHostReport>,
+    /// The set of another pool's filter on the port; `None` for a registrar that does not take the
+    /// field, or when there is no filter.
+    pub port_filter: Option<String>,
     pub metrics: EngineResult<MetricsReport>,
     pub dc2: Option<Dc2Report>,
     pub host: Option<HostReport>,
@@ -104,7 +108,7 @@ pub fn build_report(inputs: ReportInputs) -> ReportRequest {
         sni: inputs.sni,
         gp: inputs.gp,
         check_host: inputs.check_host,
-        port_filter: None,
+        port_filter: inputs.port_filter,
         metrics,
         dc2: inputs.dc2,
         host: inputs.host,
@@ -201,6 +205,7 @@ pub struct ChecksSetup<H> {
     pub ip: IpWatch<H>,
     pub gp: GpLoop,
     pub check_host: CheckHostLoop,
+    pub port_filter: PortFilterWatch,
     pub memory: ConfigMemory,
 }
 
@@ -212,6 +217,7 @@ struct Shared<H> {
     ip: AsyncMutex<IpWatch<H>>,
     gp: GpLoop,
     check_host: CheckHostLoop,
+    port_filter: PortFilterWatch,
     memory: ConfigMemory,
     health: Mutex<LocalHealth>,
 }
@@ -242,6 +248,7 @@ impl<H: HttpGet + 'static> NodeChecks<H> {
                 ip: AsyncMutex::new(setup.ip),
                 gp: setup.gp,
                 check_host: setup.check_host,
+                port_filter: setup.port_filter,
                 memory: setup.memory,
                 health: Mutex::new(LocalHealth::new()),
             }),
@@ -313,12 +320,18 @@ impl<H: HttpGet + 'static> ReportSource for NodeChecks<H> {
         } else {
             None
         };
+        let port_filter = if self.shared.memory.reports_check_host() {
+            self.shared.port_filter.current()
+        } else {
+            None
+        };
         Some(build_report(ReportInputs {
             ip,
             port,
             sni,
             gp,
             check_host,
+            port_filter,
             metrics,
             dc2,
             host,
@@ -351,6 +364,9 @@ impl<H: HttpGet + 'static> ReportSource for NodeChecks<H> {
         if self.shared.memory.take_check_host_now() {
             self.shared.check_host.run_soon(now);
         }
+        // The rules are read only for a registrar that takes the answer.
+        let filter_port = port.filter(|_| self.shared.memory.reports_check_host());
+        self.shared.port_filter.tick(now, filter_port).await;
 
         Watch {
             ip_changed: matches!(event, IpEvent::Changed { .. }),

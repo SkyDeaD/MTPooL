@@ -13,8 +13,10 @@ use mtpool_agent::engine::EngineHealth;
 use mtpool_agent::engine::http::HttpResponse;
 use mtpool_agent::engine::http::testing::ScriptedHttp;
 use mtpool_agent::gp::GpLoop;
+use mtpool_agent::host::testing::ScriptedRunner;
 use mtpool_agent::ip_detect::{IP_SOURCES, IpWatch};
 use mtpool_agent::lifecycle::{ConfigSink, Health, ReportSource};
+use mtpool_agent::port_filter::PortFilterWatch;
 use mtpool_agent::report::{
     ChecksSetup, ConfigMemory, NodeChecks, Remembering, ReportInputs, build_report,
 };
@@ -32,6 +34,7 @@ fn inputs() -> ReportInputs {
             id: "2BSGWjCSdcIMKXZfj00021RC5".into(),
         },
         check_host: None,
+        port_filter: None,
         metrics: Ok(MetricsReport {
             ok: true,
             from_client_total: 5,
@@ -219,6 +222,7 @@ struct Node {
     memory: ConfigMemory,
     gp: GpLoop,
     check_host: CheckHostLoop,
+    save: Arc<ScriptedRunner>,
 }
 
 fn node(port_override: Option<u16>) -> Node {
@@ -256,6 +260,7 @@ fn node_with_service(port_override: Option<u16>, check_host_url: &str) -> Node {
     let memory = ConfigMemory::new();
     let gp = GpLoop::new("http://127.0.0.1:9", ports.clone()).unwrap();
     let check_host = CheckHostLoop::new(check_host_url, 22, IpSource::default()).unwrap();
+    let save = Arc::new(ScriptedRunner::new());
     let setup = ChecksSetup {
         engine: engine.clone(),
         port: port_override,
@@ -264,6 +269,7 @@ fn node_with_service(port_override: Option<u16>, check_host_url: &str) -> Node {
         ip: IpWatch::new(http.clone(), fs.clone(), "/state".into()),
         gp: gp.clone(),
         check_host: check_host.clone(),
+        port_filter: PortFilterWatch::new(save.clone()),
         memory: memory.clone(),
     };
     Node {
@@ -275,6 +281,7 @@ fn node_with_service(port_override: Option<u16>, check_host_url: &str) -> Node {
         memory,
         gp,
         check_host,
+        save,
     }
 }
 
@@ -521,4 +528,54 @@ async fn the_registrar_asking_runs_the_check_again_after_the_gap() {
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
     n.check_host.tick(later).await;
     assert_eq!(server.received_requests().await.unwrap().len(), 2);
+}
+
+fn save_with(filter: bool) -> Vec<u8> {
+    let rules = if filter {
+        "-A INPUT -p tcp -m tcp --dport 443 -m set --match-set scan src -j DROP\n"
+    } else {
+        ""
+    };
+    format!("*filter\n:INPUT ACCEPT [0:0]\n{rules}COMMIT\n").into_bytes()
+}
+
+#[tokio::test]
+async fn the_filter_is_sent_only_to_a_registrar_that_takes_it() {
+    let n = node(None);
+    n.save.push_output(0, &save_with(true));
+    n.memory.remember(&agent_config(30, 60));
+    n.checks.watch(Instant::now()).await;
+    assert!(
+        n.save.calls().is_empty(),
+        "no iptables-save for an old registrar"
+    );
+    assert_eq!(n.checks.build().await.unwrap().port_filter, None);
+
+    let mut config = agent_config(30, 60);
+    config.report_check_host = true;
+    n.memory.remember(&config);
+    n.checks.watch(Instant::now()).await;
+    assert_eq!(n.save.calls().len(), 1);
+    assert_eq!(
+        n.checks.build().await.unwrap().port_filter.as_deref(),
+        Some("scan")
+    );
+}
+
+#[tokio::test]
+async fn a_removed_filter_is_no_longer_reported() {
+    let n = node(None);
+    n.save.push_output(0, &save_with(true));
+    n.save.push_output(0, &save_with(false));
+    let mut config = agent_config(30, 60);
+    config.report_check_host = true;
+    n.memory.remember(&config);
+    let t0 = Instant::now();
+    n.checks.watch(t0).await;
+    assert_eq!(
+        n.checks.build().await.unwrap().port_filter.as_deref(),
+        Some("scan")
+    );
+    n.checks.watch(t0 + Duration::from_secs(1800)).await;
+    assert_eq!(n.checks.build().await.unwrap().port_filter, None);
 }

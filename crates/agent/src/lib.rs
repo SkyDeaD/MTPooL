@@ -13,6 +13,7 @@ pub mod hoststats;
 pub mod ip_detect;
 pub mod lifecycle;
 pub mod local_health;
+pub mod port_filter;
 pub mod report;
 pub mod state_files;
 pub mod update;

@@ -19,6 +19,7 @@ use mtpool_agent::lifecycle::{
     ConfigSink, DetectedEngine, EngineProbe, Hooks, Lifecycle, system_jitter,
 };
 use mtpool_agent::local_health::LocalTcp;
+use mtpool_agent::port_filter::PortFilterWatch;
 use mtpool_agent::report::{ChecksSetup, ConfigMemory, NodeChecks, Remembering};
 use mtpool_agent::state_files::RealFs;
 use mtpool_protocol::agent::AgentConfig;
@@ -216,6 +217,7 @@ async fn run(config_path: PathBuf) -> ExitCode {
             .with_allow_private(overrides.allow_private_ips),
         gp,
         check_host,
+        port_filter: PortFilterWatch::new(Arc::new(TokioRunner)),
         memory: memory.clone(),
     });
     let hooks = Hooks {
