@@ -271,6 +271,7 @@ impl Driver {
                     .collect();
                 vec![Command::RoundDone {
                     generation: self.generation(&id, *stale),
+                    started_at: self.now,
                     node: id,
                     votes,
                 }]

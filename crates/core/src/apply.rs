@@ -62,9 +62,10 @@ pub fn apply(state: &mut PoolState, command: Command, now: Ts) -> Vec<Effect> {
         Command::RoundDone {
             node,
             generation,
+            started_at,
             votes,
         } => {
-            round_done(state, &node, generation, votes, now, &mut out);
+            round_done(state, &node, generation, started_at, votes, now, &mut out);
             None
         }
         Command::DnsDone {
@@ -249,15 +250,20 @@ fn add_ms(at: Ts, ms: i64) -> Ts {
     Ts(at.0.saturating_add(ms))
 }
 
+/// The vote of Globalping about a node with a filter on the port.
+fn filter_abstention() -> SensorVote {
+    SensorVote {
+        vote: Vote::Abstain(AbstainReason::PortFilter),
+        evidence: json!({ "source": "port_filter" }),
+    }
+}
+
 /// The recent verified Globalping result of the agent, as a vote: the round does not have to
 /// spend a measurement of its own. A filter on the port makes any measurement of Globalping
 /// meaningless, so a filtered node abstains whatever it said last and no measurement is made.
 fn fresh_gp(node: &NodeRecord, now: Ts, s: &Settings) -> Option<SensorVote> {
     if node.health.port_filter {
-        return Some(SensorVote {
-            vote: Vote::Abstain(AbstainReason::PortFilter),
-            evidence: json!({ "source": "port_filter" }),
-        });
+        return Some(filter_abstention());
     }
     let (vote, at) = match node.health.gp {
         GpStatus::Ok { at } => (Vote::Clear, at),
@@ -276,6 +282,7 @@ fn run_round(node: &mut NodeRecord, now: Ts, s: &Settings, out: &mut Out) {
     out.push(Effect::RunRound {
         node: node.id.clone(),
         generation: node.generation,
+        started_at: now,
         ip: node.ip,
         port: node.port,
         fresh_gp: fresh_gp(node, now, s),
@@ -768,7 +775,8 @@ fn round_done(
     state: &mut PoolState,
     node: &NodeId,
     generation: Generation,
-    votes: Vec<(SensorKind, SensorVote)>,
+    started_at: Ts,
+    mut votes: Vec<(SensorKind, SensorVote)>,
     now: Ts,
     out: &mut Out,
 ) {
@@ -783,9 +791,19 @@ fn round_done(
     if n.generation != generation {
         return;
     }
+    // A filter reported after the round took its vote of Globalping: the vote means nothing, and
+    // with it one `Blocked` from Russia would be enough for a ban.
+    if n.health.port_filter {
+        for (kind, vote) in &mut votes {
+            if *kind == SensorKind::Globalping {
+                *vote = filter_abstention();
+            }
+        }
+    }
     let before = n.clone();
     let result = RoundResult {
         generation,
+        started_at,
         votes: votes.iter().map(|(kind, v)| (*kind, v.vote)).collect(),
     };
     let events = apply_round(n, &result, blocks, now, settings);
@@ -795,6 +813,9 @@ fn round_done(
     }
     let verdict = if before.reverify {
         judge_reverify(&result.votes)
+    } else if before.state == NodeState::Quarantine && started_at < before.state_since {
+        // Not judged: it began on a healthy node, and a round of this quarantine follows.
+        RoundVerdict::Undecided
     } else {
         match judge_round(&result.votes) {
             // A round of a healthy node does not ban: it decided nothing, however many `Blocked`.
@@ -1440,6 +1461,15 @@ mod tests {
         }
 
         fn round(&mut self, name: &str, votes: &[(SensorKind, Vote)]) -> Vec<Effect> {
+            self.round_started(name, self.now, votes)
+        }
+
+        fn round_started(
+            &mut self,
+            name: &str,
+            started_at: Ts,
+            votes: &[(SensorKind, Vote)],
+        ) -> Vec<Effect> {
             let generation = self.generation(name);
             let votes = votes
                 .iter()
@@ -1456,6 +1486,7 @@ mod tests {
             self.run(Command::RoundDone {
                 node: id(name),
                 generation,
+                started_at,
                 votes,
             })
         }
@@ -1745,6 +1776,241 @@ mod tests {
         assert_eq!(run_rounds(&effects).len(), 1);
     }
 
+    fn round_starts(effects: &[Effect]) -> Vec<Ts> {
+        effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::RunRound { started_at, .. } => Some(*started_at),
+                _ => None,
+            })
+            .collect()
+    }
+
+    const TWO_BLOCKED: [(SensorKind, Vote); 2] = [
+        (SensorKind::RedFlag, Vote::Blocked),
+        (SensorKind::CheckHost, Vote::Blocked),
+    ];
+
+    /// A green healthy node confirmed at the returned moment, 1100 seconds ago.
+    fn confirmed_1100_sec_ago() -> (Pool, Ts) {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        let confirmed = p.now;
+        p.state
+            .nodes
+            .get_mut(&id("n1"))
+            .unwrap()
+            .health
+            .ru_confirmed_at = Some(confirmed);
+        p.advance(1100 * SEC);
+        p.beat("n1");
+        (p, confirmed)
+    }
+
+    /// The confirmation runs out while the round is on the way: the tick enters a suspected
+    /// quarantine and asks for a round that the driver drops, because the first one holds its
+    /// place. The clock ends at 1220 seconds, when the first round comes back.
+    fn expire_during_the_round(p: &mut Pool, confirmed: Ts) {
+        p.now = Ts(confirmed.0 + 1200 * SEC);
+        p.beat("n1");
+        let effects = p.run(Command::Tick);
+        assert_eq!(p.state_of("n1"), NodeState::Quarantine);
+        assert!(p.state.nodes[&id("n1")].suspected);
+        assert_eq!(
+            round_starts(&effects),
+            [p.now],
+            "the round the driver drops"
+        );
+        p.now = Ts(confirmed.0 + 1220 * SEC);
+        p.beat("n1");
+    }
+
+    #[test]
+    fn a_round_started_on_a_healthy_node_bans_nothing_after_the_node_left() {
+        type Start = fn(&mut Pool) -> Vec<Effect>;
+        let starts: [Start; 3] = [
+            // Globalping turns red late in the confirmation.
+            |p| {
+                p.report("n1", Vote::Blocked);
+                p.run(Command::Tick)
+            },
+            // A filter appears late in the confirmation.
+            |p| {
+                p.report_filter("n1", Vote::Clear, Some("x"));
+                p.run(Command::Tick)
+            },
+            // An admin asks for a round late in the confirmation.
+            |p| {
+                p.report("n1", Vote::Blocked);
+                let action = p.node_action("n1");
+                p.run(Command::Recheck(action))
+            },
+        ];
+        for start in starts {
+            let (mut p, confirmed) = confirmed_1100_sec_ago();
+            let effects = start(&mut p);
+            assert_eq!(p.state_of("n1"), NodeState::Healthy);
+            let first = round_starts(&effects);
+            assert_eq!(first, [p.now]);
+
+            expire_during_the_round(&mut p, confirmed);
+
+            // The first round comes back with two `Blocked`: no ban, and no verdict of one.
+            let effects = p.round_started("n1", first[0], &TWO_BLOCKED);
+            assert_eq!(p.state_of("n1"), NodeState::Quarantine);
+            assert!(p.state.blocks.is_empty());
+            assert!(!kinds(&effects).contains(&EventKind::NodeBanned));
+            assert!(!persists(&effects).iter().any(|op| matches!(
+                op,
+                PersistOp::RecordBan { .. } | PersistOp::UpsertIpBlock(_)
+            )));
+            assert_eq!(recorded_verdict(&effects), Some(RoundVerdict::Undecided));
+            assert_eq!(p.state.nodes[&id("n1")].last_round_at, None);
+
+            // The next tick runs a real round, and that one decides.
+            p.advance(SEC);
+            p.beat("n1");
+            let effects = p.run(Command::Tick);
+            let second = round_starts(&effects);
+            assert_eq!(second, [p.now]);
+            p.advance(SEC);
+            p.beat("n1");
+            let effects = p.round_started("n1", second[0], &TWO_BLOCKED);
+            assert_eq!(recorded_verdict(&effects), Some(RoundVerdict::Confirmed));
+            assert!(kinds(&effects).contains(&EventKind::NodeBanned));
+            assert_eq!(p.state.blocks.len(), 1);
+        }
+    }
+
+    #[test]
+    fn a_clean_result_after_the_second_round_was_dropped_returns_nothing() {
+        let clean_from_russia = [
+            (SensorKind::RedFlag, Vote::Clear),
+            (SensorKind::CheckHost, Vote::Clear),
+        ];
+        let (mut p, confirmed) = confirmed_1100_sec_ago();
+        p.report("n1", Vote::Blocked);
+        let first = round_starts(&p.run(Command::Tick));
+        expire_during_the_round(&mut p, confirmed);
+
+        let effects = p.round_started("n1", first[0], &clean_from_russia);
+        assert_eq!(p.state_of("n1"), NodeState::Quarantine);
+        assert!(!kinds(&effects).contains(&EventKind::NodeRecovered));
+        assert_eq!(recorded_verdict(&effects), Some(RoundVerdict::Undecided));
+        let n = &p.state.nodes[&id("n1")];
+        assert_eq!(n.health.ru_confirmed_at, Some(confirmed), "not renewed");
+        assert_eq!(n.clean_rounds, 0);
+        assert_eq!(
+            n.undecided_rounds, 0,
+            "the pace of the rounds is not touched"
+        );
+
+        // The round the driver dropped is asked for again at once.
+        p.advance(SEC);
+        p.beat("n1");
+        let second = round_starts(&p.run(Command::Tick));
+        assert_eq!(second, [p.now]);
+        p.advance(SEC);
+        p.beat("n1");
+        let effects = p.round_started("n1", second[0], &clean_from_russia);
+        assert_eq!(p.state_of("n1"), NodeState::Healthy);
+        assert_eq!(recorded_verdict(&effects), Some(RoundVerdict::Clean));
+    }
+
+    #[test]
+    fn a_round_started_in_the_quarantine_is_judged_as_before() {
+        let mut p = Pool::new();
+        p.make_healthy("n1", ip(1));
+        let effects = p.quarantine("n1");
+        let started = round_starts(&effects);
+        assert_eq!(started, [p.state.nodes[&id("n1")].state_since]);
+        p.advance(SEC);
+        p.beat("n1");
+        let effects = p.round_started("n1", started[0], &TWO_BLOCKED);
+        assert!(kinds(&effects).contains(&EventKind::NodeBanned));
+        assert_eq!(p.state.blocks.len(), 1);
+    }
+
+    fn recorded_gp_vote(effects: &[Effect]) -> Option<Vote> {
+        persists(effects).into_iter().find_map(|op| match op {
+            PersistOp::RecordRound { votes, .. } => votes
+                .iter()
+                .find(|(kind, _)| *kind == SensorKind::Globalping)
+                .map(|(_, v)| v.vote),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_filter_reported_during_a_round_takes_the_vote_of_globalping() {
+        let one_from_russia = [
+            (SensorKind::Globalping, Vote::Blocked),
+            (SensorKind::RedFlag, Vote::Blocked),
+            (SensorKind::CheckHost, Vote::Clear),
+        ];
+        let abstain = Vote::Abstain(AbstainReason::PortFilter);
+        let quarantined = || {
+            let mut p = Pool::new();
+            p.make_healthy("n1", ip(1));
+            p.quarantine("n1");
+            p.advance(SEC);
+            p.beat("n1");
+            p
+        };
+
+        // Without a filter the same votes ban.
+        let mut p = quarantined();
+        let effects = p.round("n1", &one_from_russia);
+        assert!(kinds(&effects).contains(&EventKind::NodeBanned));
+        assert_eq!(recorded_gp_vote(&effects), Some(Vote::Blocked));
+
+        // The filter came after the round took its vote of Globalping.
+        let mut p = quarantined();
+        p.report_filter("n1", Vote::Blocked, Some("x"));
+        let effects = p.round("n1", &one_from_russia);
+        assert!(!kinds(&effects).contains(&EventKind::NodeBanned));
+        assert_eq!(p.state_of("n1"), NodeState::Quarantine);
+        assert!(p.state.blocks.is_empty());
+        assert_eq!(recorded_verdict(&effects), Some(RoundVerdict::Undecided));
+        assert_eq!(recorded_gp_vote(&effects), Some(abstain));
+
+        // Both checks from Russia still ban it, and the ban shows the same vote.
+        let mut p = quarantined();
+        p.report_filter("n1", Vote::Blocked, Some("x"));
+        let effects = p.round(
+            "n1",
+            &[
+                (SensorKind::Globalping, Vote::Blocked),
+                (SensorKind::RedFlag, Vote::Blocked),
+                (SensorKind::CheckHost, Vote::Blocked),
+            ],
+        );
+        assert!(kinds(&effects).contains(&EventKind::NodeBanned));
+        assert_eq!(recorded_gp_vote(&effects), Some(abstain));
+        assert!(persists(&effects).iter().any(|op| matches!(
+            op,
+            PersistOp::RecordBan { votes, .. } if votes[0] == (SensorKind::Globalping, abstain)
+        )));
+    }
+
+    #[test]
+    fn a_filter_reported_during_a_reverify_takes_the_clear_of_globalping_too() {
+        let mut p = reverify_pool();
+        p.report_filter("n2", Vote::Clear, Some("x"));
+        let effects = p.round(
+            "n2",
+            &[
+                (SensorKind::Globalping, Vote::Clear),
+                (SensorKind::RedFlag, Vote::Clear),
+            ],
+        );
+        assert_eq!(p.state.blocks.len(), 1, "one `Clear` does not lift a block");
+        assert_eq!(
+            recorded_gp_vote(&effects),
+            Some(Vote::Abstain(AbstainReason::PortFilter))
+        );
+    }
+
     #[test]
     fn a_report_sets_and_clears_the_filter() {
         let filter_stats = |effects: &[Effect]| {
@@ -1958,9 +2224,11 @@ mod tests {
             open: false,
         });
         assert!(effects.is_empty());
+        let now = p.now;
         let effects = p.run(Command::RoundDone {
             node: id("n1"),
             generation: old,
+            started_at: now,
             votes: vec![(
                 SensorKind::Globalping,
                 SensorVote {

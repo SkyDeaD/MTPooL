@@ -419,6 +419,7 @@ async fn a_ban_takes_the_record_and_the_token_and_the_unban_works_without_them()
     node.suspected = true;
     node.owner = OwnerId(1);
     let generation = node.generation;
+    let started_at = node.state_since;
     let env = env(pool(vec![node]));
     let me = owner(&env, "me", 2);
     assert_eq!(me, OwnerId(1));
@@ -434,6 +435,7 @@ async fn a_ban_takes_the_record_and_the_token_and_the_unban_works_without_them()
         .send(Command::RoundDone {
             node: node_id("alpha-00001"),
             generation,
+            started_at,
             votes: vec![
                 (SensorKind::Globalping, blocked.clone()),
                 (SensorKind::Cheburcheck, blocked),

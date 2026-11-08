@@ -293,6 +293,8 @@ pub enum LifecycleEvent {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoundResult {
     pub generation: Generation,
+    /// A round that began before the present quarantine is not judged.
+    pub started_at: Ts,
     pub votes: Vec<(SensorKind, Vote)>,
 }
 
@@ -642,6 +644,13 @@ pub fn apply_round(
         return Vec::new();
     }
     match n.state {
+        // The round began before this quarantine: on a healthy node, whose round does not ban.
+        // The driver runs one round per node, so it dropped the round asked for on entering the
+        // quarantine, and the next tick has to ask again.
+        NodeState::Quarantine if result.started_at < n.state_since => {
+            n.last_round_at = None;
+            Vec::new()
+        }
         // A result that came late for a node no round is due for changes nothing. Blocked answers
         // about a server that has gone down, or that the sensors may not check, prove nothing.
         NodeState::Healthy if needs_sensors(n, now, s) => ru_check_round(n, result, now, s),
@@ -924,6 +933,7 @@ mod tests {
     fn round(n: &NodeRecord, votes: &[(SensorKind, Vote)]) -> RoundResult {
         RoundResult {
             generation: n.generation,
+            started_at: n.state_since,
             votes: votes.to_vec(),
         }
     }
@@ -1504,6 +1514,7 @@ mod tests {
         let mut blocks = Vec::new();
         let stale = RoundResult {
             generation: Generation(1),
+            started_at: n.state_since,
             votes: blocked_votes().to_vec(),
         };
         assert!(apply_round(&mut n, &stale, &mut blocks, at(5), &s()).is_empty());
@@ -1513,6 +1524,7 @@ mod tests {
 
         let current = RoundResult {
             generation: Generation(2),
+            started_at: n.state_since,
             votes: blocked_votes().to_vec(),
         };
         assert_eq!(
@@ -1856,6 +1868,7 @@ mod tests {
         // A round started for the old IP is stale now.
         let stale = RoundResult {
             generation: old_generation,
+            started_at: n.state_since,
             votes: blocked_votes().to_vec(),
         };
         assert!(apply_round(&mut n, &stale, &mut Vec::new(), at(11), &s()).is_empty());
@@ -2369,6 +2382,7 @@ mod tests {
         let before = n.clone();
         let late = RoundResult {
             generation: n.generation.next(),
+            started_at: n.state_since,
             votes: vec![(Rf, Vote::Blocked), (Ch, Vote::Blocked)],
         };
         assert!(apply_round(&mut n, &late, &mut Vec::new(), at(5), &s()).is_empty());
@@ -2505,5 +2519,47 @@ mod tests {
         );
         assert_eq!(n.state, NodeState::Quarantine);
         assert!(n.suspected);
+    }
+
+    #[test]
+    fn a_round_started_before_this_quarantine_is_not_judged() {
+        for votes in [
+            vec![(Rf, Vote::Blocked), (Ch, Vote::Blocked)],
+            clean_votes().to_vec(),
+            undecided_votes().to_vec(),
+        ] {
+            let mut n = quarantined_gp_failed(T0);
+            // The round of this quarantine that the driver dropped.
+            n.last_round_at = Some(T0);
+            let before = n.clone();
+            let mut blocks = Vec::new();
+            let late = RoundResult {
+                generation: n.generation,
+                started_at: Ts(T0.0 - 1),
+                votes: votes.clone(),
+            };
+            assert!(apply_round(&mut n, &late, &mut blocks, at(5), &s()).is_empty());
+            assert!(blocks.is_empty(), "{votes:?}");
+            assert_eq!(n.last_round_at, None, "the next tick runs a real round");
+            assert_eq!(next_round_at(&n, &s()), Some(T0));
+            assert!(needs_sensors(&n, at(5), &s()));
+            // Nothing else moved: no confirmation, no counted round.
+            n.last_round_at = before.last_round_at;
+            assert_eq!(n, before, "{votes:?}");
+        }
+    }
+
+    #[test]
+    fn a_round_started_as_the_quarantine_began_is_judged() {
+        let mut n = quarantined_gp_failed(T0);
+        let mut blocks = Vec::new();
+        let r = RoundResult {
+            generation: n.generation,
+            started_at: n.state_since,
+            votes: vec![(Rf, Vote::Blocked), (Ch, Vote::Blocked)],
+        };
+        assert_eq!(apply_round(&mut n, &r, &mut blocks, at(5), &s()).len(), 1);
+        assert_eq!(n.state, NodeState::Banned);
+        assert_eq!(blocks.len(), 1);
     }
 }

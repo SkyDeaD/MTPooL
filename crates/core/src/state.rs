@@ -96,6 +96,8 @@ pub enum Command {
     RoundDone {
         node: NodeId,
         generation: Generation,
+        /// When the round started: the `started_at` of its `Effect::RunRound`.
+        started_at: Ts,
         votes: Vec<(SensorKind, SensorVote)>,
     },
     /// The outcome of `Effect::PushDns`: `Err` carries the provider's message.
@@ -196,6 +198,8 @@ pub enum Effect {
     RunRound {
         node: NodeId,
         generation: Generation,
+        /// The driver gives it back in `Command::RoundDone`, unchanged.
+        started_at: Ts,
         ip: Ipv4Addr,
         port: u16,
         fresh_gp: Option<SensorVote>,
