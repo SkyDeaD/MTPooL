@@ -81,6 +81,22 @@ describe('stats page', () => {
     expect(row('iota-p2k8v').textContent).not.toContain(t('node.state.quarantine'));
   });
 
+  it('a_disputed_node_says_so_instead_of_a_failed_check', async () => {
+    const list = JSON.parse(readFileSync(join(process.cwd(), 'tests', 'fixtures', 'nodes.json'), 'utf8')) as PublicNode[];
+    const id = list.find((n) => n.state === 'healthy' && !n.is_master)!.id;
+    api.set(
+      'nodes',
+      list.map((n) => (n.id === id ? { ...n, globalping_disputed: true, checks: { ...n.checks, globalping: 'failed' } } : n)),
+    );
+    open();
+    await settle();
+    const row = [...target.querySelectorAll('tr.go')].find((r) => r.textContent?.includes(id))!;
+    const titles = [...row.querySelectorAll('.chks li')].map((l) => l.getAttribute('title'));
+    expect(titles).toContain(t('check.disputed.globalping'));
+    expect(titles).not.toContain(t('check.bad.globalping'));
+    expect(row.querySelector('.chks li.bad')).toBeNull();
+  });
+
   it('stats_empty_pool_shows_explanation', async () => {
     api.set('nodes', []);
     api.set('domains', []);
