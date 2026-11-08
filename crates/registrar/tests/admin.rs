@@ -1110,7 +1110,12 @@ async fn status_shows_sensors_dns_and_counters() {
     assert_eq!(gp["configured"], true);
     assert_eq!(gp["last_vote"], "blocked");
     assert_eq!(gp["last_answer_at"], mtpool_protocol::rfc3339(NOW - 60_000));
-    assert_eq!(sensor("cheburcheck")["configured"], true);
+    assert_eq!(sensor("check_host")["configured"], true);
+    assert_eq!(
+        sensor("cheburcheck")["configured"],
+        false,
+        "no sensor of it remains"
+    );
     let rf = sensor("red_flag");
     assert_eq!(rf["last_vote"], "abstain");
     assert_eq!(rf["last_reason"], "timeout");

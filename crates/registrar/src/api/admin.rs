@@ -1330,7 +1330,8 @@ pub async fn stream(State(app): State<AppState>, _auth: AdminAuth) -> Response {
 const ROUNDS_SHOWN: i64 = 20;
 const DAY_MS: i64 = 24 * 3600 * 1000;
 /// The sensors in the order the panel lists them, under the names their votes are stored with.
-const SENSORS: [&str; 3] = ["globalping", "cheburcheck", "red_flag"];
+/// Cheburcheck is no sensor any more; its old votes stay in the history and are listed last.
+const SENSORS: [&str; 4] = ["globalping", "check_host", "red_flag", "cheburcheck"];
 
 /// What of a node only the state owner knows.
 struct NodeExtras {
@@ -1636,6 +1637,7 @@ pub async fn status(State(app): State<AppState>, _auth: AdminAuth) -> Result<Res
                 secrets::is_set(&store, "globalping_token"),
                 true,
                 secrets::is_set(&store, "redflag_api_key"),
+                false,
             ],
         )
     })
