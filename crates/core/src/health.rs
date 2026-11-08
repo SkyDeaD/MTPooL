@@ -164,7 +164,9 @@ pub fn failed_conditions(h: &NodeHealth, now: Ts, s: &Settings) -> Vec<FailedCon
     if !younger_than(h.last_heartbeat, now, s.heartbeat_ttl_sec) {
         failed.push(FailedCondition::HeartbeatStale);
     }
-    if !younger_than(h.last_report, now, s.report_fresh_sec()) {
+    // Nothing but the check from Russia reports on a filtered node: its Globalping abstains, so
+    // no verified report comes, and the confirmation above is what keeps the node in the pool.
+    if !h.port_filter && !younger_than(h.last_report, now, s.report_fresh_sec()) {
         failed.push(FailedCondition::ReportStale);
     }
     failed
@@ -246,6 +248,21 @@ mod tests {
             ..h
         };
         assert!(failed_conditions(&confirmed, NOW, &Settings::default()).is_empty());
+    }
+
+    #[test]
+    fn a_filtered_node_is_not_failed_by_a_report_that_aged_out() {
+        let stale = |port_filter| NodeHealth {
+            port_filter,
+            ru_confirmed_at: Some(ago(10)),
+            last_report: ago(100_000),
+            ..healthy()
+        };
+        assert!(failed_conditions(&stale(true), NOW, &Settings::default()).is_empty());
+        assert_eq!(
+            failed_conditions(&stale(false), NOW, &Settings::default()),
+            vec![FailedCondition::ReportStale]
+        );
     }
 
     #[test]

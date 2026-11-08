@@ -572,8 +572,11 @@ pub fn tick_node(n: &mut NodeRecord, now: Ts, s: &Settings) -> Vec<LifecycleEven
     match n.state {
         // Its decisive round, not a report, decides whether the block is lifted.
         NodeState::Pending if n.reverify => Vec::new(),
-        // No verified measurement yet: the first report decides.
-        NodeState::Pending if n.health.gp == GpStatus::Unknown => Vec::new(),
+        // No verified measurement yet: the first report decides. A filtered node has no such
+        // report to wait for: its conditions are judged now.
+        NodeState::Pending if n.health.gp == GpStatus::Unknown && !n.health.port_filter => {
+            Vec::new()
+        }
         NodeState::Pending | NodeState::Healthy => {
             let failed = failed_conditions(&n.health, now, s);
             if !failed.is_empty() {
@@ -1841,6 +1844,66 @@ mod tests {
         assert_eq!(n.state, NodeState::Pending);
         assert_eq!(n.health.ru_confirmed_at, None);
         assert!(!n.health.port_filter);
+    }
+
+    /// A filtered node whose Globalping abstains: nothing but the sensors reports on it.
+    fn run_minutes(n: &mut NodeRecord, minutes: i64) -> Vec<(i64, NodeState)> {
+        let votes = [(Gp, ABSTAIN), (Rf, Vote::Clear), (Ch, Vote::Clear)];
+        let mut states = Vec::new();
+        for minute in 1..=minutes {
+            let now = at(minute * 60);
+            beat(n, now);
+            if next_round_at(n, &s()).is_some_and(|due| due <= now) {
+                let r = round(n, &votes);
+                apply_round(n, &r, &mut Vec::new(), now, &s());
+            }
+            tick_node(n, now, &s());
+            states.push((minute, n.state));
+        }
+        states
+    }
+
+    #[test]
+    fn a_filtered_node_stays_in_the_pool_through_clean_rounds() {
+        let mut n = healthy(T0);
+        n.health.port_filter = true;
+        n.health.ru_confirmed_at = Some(T0);
+        // No verified report ever comes: its Globalping abstains.
+        let states = run_minutes(&mut n, 74);
+        assert!(
+            states.iter().all(|&(_, st)| st == NodeState::Healthy),
+            "{states:?}"
+        );
+    }
+
+    #[test]
+    fn an_unfiltered_node_without_reports_still_goes_stale() {
+        let mut n = healthy(T0);
+        let states = run_minutes(&mut n, 74);
+        assert!(
+            states.iter().any(|&(_, st)| st != NodeState::Healthy),
+            "{states:?}"
+        );
+    }
+
+    #[test]
+    fn a_new_filtered_node_leaves_pending_through_a_clean_round() {
+        let mut n = pending("node-bbbbb", "192.0.2.9", T0);
+        n.health.tcp = up();
+        n.health.metrics = up();
+        n.health.port_filter = true;
+        fresh(&mut n, at(60));
+        assert_eq!(n.health.gp, GpStatus::Unknown);
+        let events = tick_node(&mut n, at(60), &s());
+        assert!(
+            matches!(events.as_slice(), [LifecycleEvent::Quarantined { .. }]),
+            "{events:?}"
+        );
+        beat(&mut n, at(120));
+        let r = round(&n, &clean_votes());
+        let events = apply_round(&mut n, &r, &mut Vec::new(), at(120), &s());
+        assert_eq!(events, vec![LifecycleEvent::Recovered]);
+        assert_eq!(n.state, NodeState::Healthy);
     }
 
     #[test]
