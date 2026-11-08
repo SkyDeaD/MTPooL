@@ -114,3 +114,58 @@ pub async fn run_registrar_build(stand: &Stand, version: &str) {
         .expect("the registrar answers");
     assert!(run.output.starts_with(version), "{}", run.output);
 }
+
+/// What `sensor` voted in a round of the public node page: the vote and, for an abstention, why.
+pub fn vote_in(round: &Value, sensor: &str) -> Option<(String, Option<String>)> {
+    let vote = round["votes"]
+        .as_array()?
+        .iter()
+        .find(|v| v["sensor"] == sensor)?;
+    Some((
+        vote["vote"].as_str()?.to_owned(),
+        vote["reason"].as_str().map(str::to_owned),
+    ))
+}
+
+/// Waits until the last round of the node satisfies `accept`, and returns it.
+pub async fn wait_round(
+    stand: &Stand,
+    node_id: &str,
+    what: &str,
+    within: u64,
+    accept: impl Fn(&Value) -> bool,
+) -> Value {
+    eventually(what, secs(within), || async {
+        match stand.node_info(node_id).await {
+            Ok(info) if !info["last_round"].is_null() && accept(&info["last_round"]) => {
+                Ok(info["last_round"].clone())
+            }
+            Ok(info) => Err(info["last_round"].to_string()),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+    .unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// Waits until the public page of the node says `field` is `value`.
+pub async fn wait_flag(stand: &Stand, node_id: &str, field: &str, value: bool, within: u64) {
+    eventually(&format!("{field} is {value}"), secs(within), || async {
+        match stand.node_info(node_id).await {
+            Ok(info) if info[field] == value => Ok(()),
+            Ok(info) => Err(format!("{}: {}", info["state"], info[field])),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+    .unwrap_or_else(|e| panic!("{e}"));
+}
+
+/// The check-host checks the stand-in was asked to start: `{id, host, port, mode}` in order.
+pub async fn check_host_starts(stand: &Stand) -> Vec<Value> {
+    let state = stand.fakes_state().await.expect("the stand-ins answer");
+    state["check_host"]["starts"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}

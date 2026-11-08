@@ -70,6 +70,7 @@ RUN mkdir -p /etc/mtpool /etc/telemt /var/lib/mtpool /etc/systemd/system/multi-u
 RUN printf '%s\n' \
       'MTPOOL_ALLOW_PRIVATE_IPS=true' \
       'MTPOOL_GLOBALPING_URL=http://fakes:9000/globalping/' \
+      'MTPOOL_CHECK_HOST_URL=http://fakes:9000/check-host/' \
       'MTPOOL_IP_SOURCES=http://fakes:9000/ip,http://fakes:9000/ip?2,http://fakes:9000/ip?3,http://fakes:9000/ip?4' \
       'MTPOOL_IPSUM_URL=http://fakes:9000/ipsum' \
       'MTPOOL_AGENT_UPDATE_POLL_SEC=2' \

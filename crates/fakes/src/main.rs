@@ -1,4 +1,4 @@
-//! The stand-ins for Globalping, cheburcheck, RedFlag and Cloudflare that the end-to-end stand
+//! The stand-ins for Globalping, check-host.net, RedFlag and Cloudflare that the end-to-end stand
 //! points the registrar and the nodes at.
 
 use std::net::SocketAddr;

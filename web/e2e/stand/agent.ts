@@ -2,7 +2,7 @@
 // has comes from `X-Forwarded-For` (the registrar trusts it from a loopback peer, as it does from
 // its own reverse proxy), so the stand can give nodes documentation addresses (203.0.113.x).
 
-export type FakesMode = 'globalping' | 'cheburcheck' | 'redflag' | 'cloudflare' | 'github';
+export type FakesMode = 'globalping' | 'check_host' | 'redflag' | 'cloudflare' | 'github';
 
 export interface SimNode {
   name: string;
