@@ -471,8 +471,7 @@ async fn answers_without_a_vote(modes: &[&'static str]) {
     // The first round of each node is the one that uses the check made at its enrolment; the later
     // ones ask for new checks, in the mode the stand-in has by then. All nodes are watched at
     // once so that no first round is missed.
-    let mut rounds: Vec<Option<serde_json::Value>> = vec![None; probes.len()];
-    let seen = std::sync::Mutex::new(&mut rounds);
+    let seen = std::sync::Mutex::new(vec![None::<serde_json::Value>; probes.len()]);
     eventually("a first round of every node", secs(200), || async {
         let mut all = true;
         for (index, probe) in probes.iter().enumerate() {
@@ -501,7 +500,7 @@ async fn answers_without_a_vote(modes: &[&'static str]) {
     })
     .await
     .unwrap_or_else(|e| panic!("{e}"));
-    drop(seen);
+    let rounds = seen.into_inner().unwrap();
 
     for (index, probe) in probes.iter().enumerate() {
         let round = rounds[index].as_ref().expect("a round");
