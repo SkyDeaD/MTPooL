@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::health::FailedCondition;
 use crate::lifecycle::NodeRecord;
 use crate::settings::RolloutSettings;
 use crate::types::{NodeId, NodeState, Ts};
@@ -268,7 +269,7 @@ impl Rollout {
                     let down = nodes
                         .iter()
                         .find(|n| n.id == *id)
-                        .is_some_and(|n| !is_up(n));
+                        .is_some_and(dropped);
                     if down {
                         tripped.get_or_insert((
                             "health_drop",
@@ -376,7 +377,7 @@ impl Rollout {
                 && nodes
                     .iter()
                     .find(|n| n.id == *id)
-                    .is_some_and(|n| !is_up(n))
+                    .is_some_and(dropped)
             {
                 m.stage = Stage::Failed {
                     at: now,
@@ -407,6 +408,16 @@ impl Rollout {
 /// Healthy and alive: the nodes an update goes to and is judged by.
 fn is_up(n: &NodeRecord) -> bool {
     n.state == NodeState::Healthy && n.not_alive_since.is_none()
+}
+
+/// An updated node that is no longer up. A filtered one, alive and out of the pool for its
+/// Globalping alone, is not: the filter is on the way in from Russia, not in the update.
+fn dropped(n: &NodeRecord) -> bool {
+    let foreign_filter = n.state == NodeState::Quarantine
+        && n.health.port_filter
+        && n.not_alive_since.is_none()
+        && n.quarantine_reasons == [FailedCondition::Globalping];
+    !is_up(n) && !foreign_filter
 }
 
 /// The nodes the next batch takes: healthy, alive, on an older version, not touched yet;
@@ -623,6 +634,55 @@ mod tests {
         assert!(matches!(stage(&r, n), Stage::Failed { .. }));
         // A paused rollout offers nothing.
         assert!((0..20).all(|n| !r.offer_for(&id(n))));
+    }
+
+    fn updated_canary(count: usize) -> (Rollout, Vec<NodeRecord>, usize) {
+        let (r, nodes) = in_batches(count);
+        let canary = r.canary.clone().unwrap();
+        assert!(matches!(stage_of(&r, &canary), Stage::Updated { .. }));
+        let i = (0..count).find(|n| id(*n) == canary).unwrap();
+        (r, nodes, i)
+    }
+
+    fn filtered_quarantine(n: &mut NodeRecord) {
+        n.state = NodeState::Quarantine;
+        n.health.port_filter = true;
+        n.quarantine_reasons = vec![FailedCondition::Globalping];
+    }
+
+    #[test]
+    fn a_foreign_filter_does_not_pause_the_rollout() {
+        let (mut r, mut nodes, i) = updated_canary(20);
+        filtered_quarantine(&mut nodes[i]);
+        r.advance(&nodes, &masters(&[0]), at(701));
+        assert!(!matches!(r.phase, Phase::Paused { .. }), "{:?}", r.phase);
+    }
+
+    #[test]
+    fn a_filtered_node_that_is_dead_or_failed_otherwise_still_pauses() {
+        type Break = fn(&mut NodeRecord);
+        let cases: [Break; 3] = [
+            |n| n.state = NodeState::Dead,
+            |n| n.not_alive_since = Some(at(700)),
+            |n| n.quarantine_reasons = vec![FailedCondition::Globalping, FailedCondition::Port],
+        ];
+        for break_it in cases {
+            let (mut r, mut nodes, i) = updated_canary(20);
+            filtered_quarantine(&mut nodes[i]);
+            break_it(&mut nodes[i]);
+            r.advance(&nodes, &masters(&[0]), at(701));
+            assert!(matches!(r.phase, Phase::Paused { .. }));
+            assert_eq!(r.note.as_ref().unwrap().code, "health_drop");
+        }
+    }
+
+    #[test]
+    fn an_unfiltered_quarantined_node_still_pauses() {
+        let (mut r, mut nodes, i) = updated_canary(20);
+        filtered_quarantine(&mut nodes[i]);
+        nodes[i].health.port_filter = false;
+        r.advance(&nodes, &masters(&[0]), at(701));
+        assert_eq!(r.note.as_ref().unwrap().code, "health_drop");
     }
 
     #[test]
