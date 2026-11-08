@@ -32,12 +32,23 @@ describe('model', () => {
   });
 
   it('groups_nodes_and_leaves_out_the_rest', () => {
-    const extra = ['pending', 'dead', 'pruned'].map((state) => ({ ...list[0], id: `x-${state}`, is_master: false, state }));
+    const extra = ['dead', 'pruned'].map((state) => ({ ...list[0], id: `x-${state}`, is_master: false, state }));
     const g = groupNodes([...list, ...(extra as PublicNode[])]);
     expect(g.masters.map((n) => n.id)).toEqual(['alpha-k3m2q', 'beta-r8t4w', 'gamma-x2n9d']);
     expect(g.queue.map((n) => n.id)).toEqual(['epsilon-h4j6s', 'zeta-w9b3y', 'eta-c5f8l']);
     expect(g.quarantine.map((n) => n.id)).toEqual(['theta-m1d7z']);
     expect(g.outside).toEqual([]);
+  });
+
+  it('a_node_passing_registration_has_its_own_group_and_is_not_counted_as_in_the_pool', () => {
+    const pending = { ...list[0], id: 'kappa-t6r1b', is_master: false, state: 'pending' } as PublicNode;
+    const g = groupNodes([...list, pending]);
+    expect(g.pending.map((n) => n.id)).toEqual(['kappa-t6r1b']);
+    expect(g.masters.map((n) => n.id)).not.toContain('kappa-t6r1b');
+    expect(g.queue.map((n) => n.id)).not.toContain('kappa-t6r1b');
+    const c = poolCounts([...list, pending]);
+    expect(c.shown).toBe(7);
+    expect(c.working).toBe(6);
   });
 
   it('a_quarantine_without_a_suspicion_is_only_out_of_the_queue', () => {

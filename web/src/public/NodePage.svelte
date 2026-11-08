@@ -75,6 +75,9 @@
             {:else if n.state === 'healthy'}
               <span class="v">{n.queue_position ? t('node.kpi.queuePlace', { n: n.queue_position }) : t('node.kpi.queue')}</span>
               <span class="s">{t('node.kpi.queueText')}</span>
+            {:else if n.state === 'pending'}
+              <span class="v">{t('node.role.notYet')}</span>
+              <span class="s">{t('node.kpi.pendingText')}</span>
             {:else}
               <span class="v">{t('node.role.outside')}</span>
               {#if round !== null}<span class="s">{t('node.role.nextRound', { time: clock(round) })}</span>{/if}

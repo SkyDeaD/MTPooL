@@ -47,6 +47,14 @@ describe('the owners own users', () => {
     ] as PublicNode[];
     expect(otherClientsTotal(nodes)).toBe(7);
   });
+
+  it('a_pending_node_is_not_on_the_page_and_adds_nothing', () => {
+    const nodes = [
+      { state: 'healthy', other_clients: 5 },
+      { state: 'pending', other_clients: 3065 },
+    ] as PublicNode[];
+    expect(otherClientsTotal(nodes)).toBe(5);
+  });
 });
 
 describe('stats page', () => {
@@ -95,6 +103,32 @@ describe('stats page', () => {
     expect(titles).toContain(t('check.disputed.globalping'));
     expect(titles).not.toContain(t('check.bad.globalping'));
     expect(row.querySelector('.chks li.bad')).toBeNull();
+  });
+
+  it('a_node_passing_registration_is_on_the_page_under_its_own_group', async () => {
+    const list = JSON.parse(readFileSync(join(process.cwd(), 'tests', 'fixtures', 'nodes.json'), 'utf8')) as PublicNode[];
+    const pending = { ...list[0], id: 'kappa-t6r1b', is_master: false, state: 'pending', clients: 0, other_clients: 3065 };
+    api.set('nodes', [...list, pending]);
+    open();
+    await settle();
+    const groups = [...target.querySelectorAll('tr.grp')].map((g) => g.textContent ?? '');
+    expect(groups[groups.length - 1]).toContain(t('stats.group.pending'));
+    const row = [...target.querySelectorAll('tr.go')].find((r) => r.textContent?.includes('kappa-t6r1b'))!;
+    expect(row.textContent).toContain(t('node.state.pending'));
+    expect(row.textContent).not.toContain(t('node.state.healthy'));
+    expect(row.textContent).not.toContain(t('node.role.queue', { n: '?' }));
+    // In the pool it is not yet: the counters do not take it.
+    expect(target.querySelector('[data-kpi="working"]')?.textContent).toContain('6');
+    expect(target.textContent).not.toContain(t('clients.otherPool', { n: 3065, word: tp('unit.ownClient', 3065) }));
+  });
+
+  it('a_pool_with_only_a_registering_node_shows_that_node', async () => {
+    const list = JSON.parse(readFileSync(join(process.cwd(), 'tests', 'fixtures', 'nodes.json'), 'utf8')) as PublicNode[];
+    api.set('nodes', [{ ...list[0], id: 'kappa-t6r1b', is_master: false, state: 'pending' }]);
+    open();
+    await settle();
+    expect(target.textContent).not.toContain(t('stats.empty.title'));
+    expect(target.textContent).toContain('kappa-t6r1b');
   });
 
   it('stats_empty_pool_shows_explanation', async () => {

@@ -6,7 +6,7 @@
   import RoleCell from './RoleCell.svelte';
   import StateCell from './StateCell.svelte';
 
-  // The nodes of the pool in four groups. The table knows nothing of routes: `href` says where a
+  // The nodes of the pool in five groups. The table knows nothing of routes: `href` says where a
   // node's page is. Below 720px the stylesheet turns it into a list (`tb list`), and `data-l`
   // is the label each cell gets there.
   let {
@@ -20,12 +20,13 @@
     { key: 'queue', title: t('stats.group.queue'), nodes: groups.queue },
     { key: 'quarantine', title: t('stats.group.quarantine'), nodes: groups.quarantine },
     { key: 'outside', title: t('stats.group.outside'), nodes: groups.outside },
+    { key: 'pending', title: t('stats.group.pending'), nodes: groups.pending },
   ].filter((s) => s.nodes.length > 0));
 
   const maxClients = $derived(
     Math.max(
       1,
-      ...[...groups.masters, ...groups.queue, ...groups.quarantine, ...groups.outside].map((n) => n.clients ?? 0),
+      ...[...groups.masters, ...groups.queue, ...groups.quarantine, ...groups.outside, ...groups.pending].map((n) => n.clients ?? 0),
     ),
   );
 

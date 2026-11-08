@@ -91,6 +91,7 @@ export const messages = {
   'node.state.healthy': 'Работает',
   'node.state.quarantine': 'Карантин',
   'node.state.outside': 'Вне очереди',
+  'node.state.pending': 'Проходит проверки',
   'node.state.banned': 'Забанена',
   'node.role.master': 'Мастер',
   'node.role.queue': 'В очереди, {n}-я',
@@ -98,6 +99,8 @@ export const messages = {
   'node.role.rotates': 'смена через {time}',
   'node.role.outside': 'Вне очереди',
   'node.role.none': '—',
+  'node.role.notYet': 'Ещё не в очереди',
+  'node.kpi.pendingText': 'Встанет в очередь, когда пройдёт проверки',
   'node.role.nextRound': 'следующий раунд через {time}',
 
   // Bans table
@@ -188,6 +191,7 @@ export const messages = {
   'stats.group.queue': 'В очереди',
   'stats.group.quarantine': 'Карантин',
   'stats.group.outside': 'Вне очереди',
+  'stats.group.pending': 'Регистрируются',
   'stats.col.node': 'Нода',
   'stats.col.state': 'Состояние',
   'stats.col.role': 'Роль',

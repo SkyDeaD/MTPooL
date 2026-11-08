@@ -16,28 +16,32 @@ export interface NodeGroups {
   quarantine: PublicNode[];
   /** In quarantine for a port, metrics or a stale report: only out of the queue. */
   outside: PublicNode[];
+  /** Passing registration: on the page, but not in the pool yet. */
+  pending: PublicNode[];
 }
 
 /**
- * The nodes the pool shows, in four groups. Nodes that are pending, dead or pruned are neither
- * shown nor counted; banned nodes do not come in this list at all.
+ * The nodes the pool shows, in five groups. Dead and pruned nodes are neither shown nor counted;
+ * banned nodes do not come in this list at all.
  */
 export function groupNodes(nodes: readonly PublicNode[]): NodeGroups {
   const masters: PublicNode[] = [];
   const queue: PublicNode[] = [];
   const quarantine: PublicNode[] = [];
   const outside: PublicNode[] = [];
+  const pending: PublicNode[] = [];
   for (const node of nodes) {
-    if (node.state === 'quarantine') (node.suspected ? quarantine : outside).push(node);
+    if (node.state === 'pending') pending.push(node);
+    else if (node.state === 'quarantine') (node.suspected ? quarantine : outside).push(node);
     else if (node.state === 'healthy') (node.is_master ? masters : queue).push(node);
   }
   const place = (n: PublicNode) => n.queue_position ?? Number.MAX_SAFE_INTEGER;
   queue.sort((a, b) => place(a) - place(b));
-  return { masters, queue, quarantine, outside };
+  return { masters, queue, quarantine, outside, pending };
 }
 
 export interface PoolCounts {
-  /** Nodes shown in the table. */
+  /** Nodes in the pool. A node passing registration is in the table, but not here yet. */
   shown: number;
   /** Of them, the healthy ones. */
   working: number;
@@ -96,10 +100,11 @@ export function checkRows(checks: NodeChecks, disputed = false): CheckRow[] {
 }
 
 /** Why a node is not working, in words; a code the page does not know is shown as it came. */
-/** The owner's own users of the nodes the pool counts. A node in no such state keeps a stale number. */
+/** The owner's own users of the nodes in the pool. A pending node is not in the pool yet, and a
+ * node in any other state keeps a stale number. */
 export function otherClientsTotal(nodes: readonly PublicNode[]): number {
   return nodes
-    .filter((n) => n.state === 'pending' || n.state === 'healthy' || n.state === 'quarantine')
+    .filter((n) => n.state === 'healthy' || n.state === 'quarantine')
     .reduce((sum, n) => sum + (n.other_clients ?? 0), 0);
 }
 
