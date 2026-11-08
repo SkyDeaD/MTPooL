@@ -108,15 +108,20 @@ impl CheckHostLoop {
         self.state().allowed = allowed;
     }
 
-    /// The node has enrolled (again): forget the old result and check at once.
+    /// The node has enrolled (again): forget the old result and check. The very first check comes
+    /// at once; a later one still waits out [`GAP`] and [`LIMIT_PAUSE`], which the service counts
+    /// by the node's address.
     pub fn restart(&self) {
         let mut state = self.state();
         state.epoch += 1;
         state.result = None;
-        state.started_at = None;
-        state.limited_until = None;
         state.wanted = true;
-        state.not_before = None;
+        state.not_before = state
+            .started_at
+            .map(|started| started + GAP)
+            .into_iter()
+            .chain(state.limited_until)
+            .max();
     }
 
     /// The registrar asks for a check: it comes no sooner than [`GAP`] after the last one began,

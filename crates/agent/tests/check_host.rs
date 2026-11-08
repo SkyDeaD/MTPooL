@@ -204,3 +204,44 @@ async fn the_service_is_left_alone_until_the_registrar_takes_the_result() {
     check.tick(Instant::now()).await;
     assert_eq!(requests(&server).await, 1, "the wish was kept");
 }
+
+#[tokio::test]
+async fn a_restart_inside_the_gap_makes_no_request_until_the_gap_ends() {
+    let server = MockServer::start().await;
+    answer(&server, 200, START).await;
+    let check = node_loop(&server, 22);
+    let t0 = Instant::now();
+    check.restart();
+    check.tick(t0).await;
+    assert_eq!(requests(&server).await, 1);
+
+    check.restart();
+    check.tick(t0 + Duration::from_secs(5)).await;
+    check.tick(t0 + GAP - Duration::from_secs(1)).await;
+    assert_eq!(requests(&server).await, 1, "the gap still holds");
+    assert_eq!(check.take_report(), None, "the old result is dropped");
+
+    check.tick(t0 + GAP).await;
+    assert_eq!(requests(&server).await, 2);
+    assert_eq!(check.take_report(), Some(started(22)));
+}
+
+#[tokio::test]
+async fn a_restart_inside_the_limit_pause_makes_no_request_until_it_ends() {
+    let server = MockServer::start().await;
+    // Shape not recorded: the real service's limit answer has not been seen yet.
+    answer(&server, 200, r#"{"error":"limit_exceeded"}"#).await;
+    let check = node_loop(&server, 22);
+    let t0 = Instant::now();
+    check.restart();
+    check.tick(t0).await;
+    assert_eq!(requests(&server).await, 1);
+
+    check.restart();
+    check.tick(t0 + GAP + Duration::from_secs(1)).await;
+    check.tick(t0 + LIMIT_PAUSE - Duration::from_secs(1)).await;
+    assert_eq!(requests(&server).await, 1, "the pause still holds");
+
+    check.tick(t0 + LIMIT_PAUSE).await;
+    assert_eq!(requests(&server).await, 2);
+}
