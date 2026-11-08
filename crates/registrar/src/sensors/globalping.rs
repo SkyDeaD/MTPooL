@@ -440,6 +440,27 @@ fn trimmed(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).take(64).collect()
 }
 
+/// Why a probe did not succeed, as a short code: the probe's own text can hold the node's
+/// address, so only the code is kept as evidence.
+fn failure_reason(probe: &ProbeResult) -> Option<&'static str> {
+    if probe.is_success() {
+        return None;
+    }
+    let text = probe.result.raw_output.as_deref().unwrap_or_default();
+    Some(if text.contains("ECONNREFUSED") {
+        "refused"
+    } else if text.contains("timed out") || text.contains("ETIMEDOUT") {
+        "timeout"
+    } else if ["TLS", "certificate", "handshake"]
+        .iter()
+        .any(|word| text.contains(word))
+    {
+        "tls"
+    } else {
+        "other"
+    })
+}
+
 fn probe_evidence(probe: &ProbeResult) -> Value {
     let mut entry = Map::new();
     entry.insert("country".to_owned(), json!(trimmed(&probe.probe.country)));
@@ -454,6 +475,9 @@ fn probe_evidence(probe: &ProbeResult) -> Value {
         "tls".to_owned(),
         json!(probe.result.tls.as_ref().is_some_and(Value::is_object)),
     );
+    if let Some(reason) = failure_reason(probe) {
+        entry.insert("reason".to_owned(), json!(reason));
+    }
     Value::Object(entry)
 }
 
