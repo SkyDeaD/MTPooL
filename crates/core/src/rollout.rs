@@ -348,14 +348,16 @@ impl Rollout {
         })
     }
 
-    /// Nothing is left to do: no node waits for its turn or is under way, and every node has
-    /// had time to report its version.
+    /// Nothing is left to do: no node that may still come back waits for its turn or is under
+    /// way, and every node has had time to report its version.
     fn finished(&self, nodes: &[NodeRecord], now: Ts) -> bool {
         let in_flight = self
             .members
             .values()
             .any(|m| matches!(m.stage, Stage::Offered { .. } | Stage::Started { .. }));
-        let waiting = self.members.keys().any(|id| self.is_idle_outdated(id));
+        let waiting = nodes
+            .iter()
+            .any(|n| may_return(n) && self.is_idle_outdated(&n.id));
         let unheard = now.0 < self.created_at.0 + i64::from(self.timings.offer_wait_sec) * 1000
             && nodes
                 .iter()
@@ -402,6 +404,15 @@ impl Rollout {
 /// Healthy and alive: the nodes an update goes to and is judged by.
 fn is_up(n: &NodeRecord) -> bool {
     n.state == NodeState::Healthy && n.not_alive_since.is_none()
+}
+
+/// Worth waiting for. A dead, pruned or banned node may never update, and a rollout that waits for
+/// it never ends; if it does come back after the end, it updates with the next release.
+fn may_return(n: &NodeRecord) -> bool {
+    matches!(
+        n.state,
+        NodeState::Pending | NodeState::Healthy | NodeState::Quarantine
+    )
 }
 
 /// An updated node that is no longer up. A filtered one, alive and out of the pool for its
@@ -868,6 +879,76 @@ mod tests {
         let text = serde_json::to_string(&r).unwrap();
         let back: Rollout = serde_json::from_str(&text).unwrap();
         assert_eq!(back, r);
+    }
+
+    /// A node that is gone stays outdated for good: nothing may wait for it.
+    #[test]
+    fn a_node_that_cannot_return_does_not_hold_the_rollout_open() {
+        for state in [NodeState::Dead, NodeState::Pruned, NodeState::Banned] {
+            let mut nodes = fleet(2);
+            nodes[1].state = state;
+            let mut r = Rollout::new(1, "0.2.0", T0, RolloutSettings::default());
+            r.observe_version(&id(0), "0.2.0", T0);
+            r.observe_version(&id(1), "0.1.0", T0);
+            r.advance(&nodes, &masters(&[]), at(1));
+            assert_eq!(r.phase, Phase::Done { at: at(1) }, "{state:?}");
+        }
+    }
+
+    #[test]
+    fn a_node_no_longer_listed_does_not_hold_the_rollout_open() {
+        let mut r = Rollout::new(1, "0.2.0", T0, RolloutSettings::default());
+        r.observe_version(&id(0), "0.1.0", T0);
+        r.advance(&[], &masters(&[]), at(1));
+        assert_eq!(r.phase, Phase::Done { at: at(1) });
+    }
+
+    #[test]
+    fn a_quarantined_node_holds_the_rollout_until_it_dies() {
+        let mut nodes = vec![node(0, NodeState::Quarantine)];
+        let m = masters(&[]);
+        let mut r = started(1);
+        r.advance(&nodes, &m, at(1));
+        assert_eq!(r.phase, Phase::Canary);
+        assert_eq!(r.note.as_ref().unwrap().code, "no_canary_candidate");
+        nodes[0].state = NodeState::Dead;
+        r.advance(&nodes, &m, at(2));
+        assert_eq!(r.phase, Phase::Done { at: at(2) });
+    }
+
+    /// A node that polled once during the batches and died: the rollout still ends.
+    #[test]
+    fn the_last_batch_ends_the_rollout_past_a_dead_node() {
+        let (mut r, mut nodes) = in_batches(3);
+        nodes.push(node(9, NodeState::Dead));
+        r.observe_version(&id(9), "0.1.0", at(620));
+        let m = masters(&[0]);
+        let mut t = 620;
+        for _ in 0..10 {
+            for n in 0..3 {
+                if r.offer_for(&id(n)) {
+                    r.on_status(&id(n), &Status::Updated, at(t));
+                }
+            }
+            t += 301;
+            r.advance(&nodes, &m, at(t));
+        }
+        assert!(matches!(r.phase, Phase::Done { .. }), "{:?}", r.phase);
+    }
+
+    /// A dead node that comes back before the end is still updated.
+    #[test]
+    fn a_dead_node_back_in_time_is_still_offered() {
+        let mut nodes = fleet(2);
+        nodes[1].state = NodeState::Dead;
+        let m = masters(&[0]);
+        let mut r = started(2);
+        r.advance(&nodes, &m, at(1));
+        // Only the master is left to update: the rollout waits for a canary.
+        assert_eq!(r.phase, Phase::Canary);
+        nodes[1].state = NodeState::Healthy;
+        r.advance(&nodes, &m, at(2));
+        assert_eq!(r.canary, Some(id(1)));
     }
 
     #[test]
