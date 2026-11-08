@@ -928,8 +928,8 @@ export interface components {
             /** @description Absent when the owner is gone. */
             owner_name?: string | null;
             /**
-             * @description What the node's firewall does to the proxy port, as its agent last reported; absent when
-             *     there is no filter.
+             * @description The name of the set whose addresses another pool's firewall rules drop on the proxy port,
+             *     as its agent last reported; absent when there is no such filter.
              */
             port_filter?: string | null;
         };
@@ -1684,9 +1684,9 @@ export interface components {
             /** Format: int32 */
             port: number;
             /**
-             * @description What the node's firewall does to the proxy port, as the agent reads it (for example
-             *     `iptables`); absent when there is no filter or the agent cannot tell.
-             * @example iptables
+             * @description The name of the set whose addresses another pool's firewall rules drop on the proxy port,
+             *     as the agent reads it; absent when there is no such filter or the agent cannot tell.
+             * @example blocklist
              */
             port_filter?: string | null;
             /**

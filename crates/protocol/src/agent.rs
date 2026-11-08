@@ -150,10 +150,10 @@ pub struct ReportRequest {
     /// counts no data from it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_host: Option<CheckHostReport>,
-    /// What the node's firewall does to the proxy port, as the agent reads it (for example
-    /// `iptables`); absent when there is no filter or the agent cannot tell.
+    /// The name of the set whose addresses another pool's firewall rules drop on the proxy port,
+    /// as the agent reads it; absent when there is no such filter or the agent cannot tell.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(example = "iptables")]
+    #[schema(example = "blocklist")]
     pub port_filter: Option<String>,
     pub metrics: MetricsReport,
     pub dc2: Option<Dc2Report>,

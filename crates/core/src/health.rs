@@ -111,8 +111,9 @@ pub struct NodeHealth {
     /// as never confirmed.
     #[serde(default)]
     pub ru_confirmed_at: Option<Ts>,
-    /// The check from Russia sees the port filtered: the node answers, the way in does not.
-    /// Such a node needs a confirmation even with a green Globalping.
+    /// The agent reports another pool's filter on the proxy port: the node answers, the way in
+    /// does not. Such a node needs a confirmation from Russia even with a green Globalping, and
+    /// the age of its last report fails it no more: its Globalping abstains.
     #[serde(default)]
     pub port_filter: bool,
 }

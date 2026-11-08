@@ -1833,7 +1833,7 @@ mod tests {
         };
         let mut n = healthy(T0);
         mark(&mut n);
-        assert!(n.change_ip(ip("95.216.0.7"), at(10)));
+        assert!(n.change_ip(ip("192.0.2.7"), at(10)));
         assert_eq!(n.health.ru_confirmed_at, None);
         assert!(!n.health.port_filter);
 

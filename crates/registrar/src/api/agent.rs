@@ -749,7 +749,6 @@ impl Settled {
             other_traffic: self.other_traffic,
             other_clients: self.other_clients,
             pool_user_taken: self.pool_user_taken,
-            // The agent does not report a filter yet.
             port_filter: self.port_filter.clone(),
         })
     }

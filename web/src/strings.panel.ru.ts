@@ -215,7 +215,7 @@ export const panelMessages = {
   'settings.h.latch_fail_threshold': 'Защита от случайной потери пакета.',
   'settings.h.latch_ok_threshold': 'Столько успешных проверок вернут порт в строй.',
   'settings.h.round_interval_sec': 'Как часто сенсоры проверяют ноду на карантине.',
-  'settings.h.ru_confirmation_sec': 'Сколько check-host подтверждает, что порт доступен из РФ, прежде чем спор с Globalping снимется.',
+  'settings.h.ru_confirmation_sec': 'Сколько действует подтверждение из РФ: раунд, в котором RedFlag и check-host не дали ни одного «Заблокирована», а хотя бы один дал «Доступна». Пока оно действует, красный Globalping не выводит ноду из работы.',
   'settings.h.ru_recheck_sec': 'Как часто нода повторно проверяется из РФ, пока Globalping с ней не согласен.',
   'settings.h.clean_rounds_to_exit': 'Столько раундов подряд без блокировки вернут ноду в очередь.',
   'settings.h.quarantine_max_sec': 'Если решения нет, нода останется вне очереди и попадёт в «Требует внимания».',
