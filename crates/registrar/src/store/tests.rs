@@ -127,7 +127,7 @@ fn migrations_apply_on_empty_db() {
             r.get(0)
         })
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
     let mode: String = conn
         .query_row("PRAGMA journal_mode", [], |r| r.get(0))
         .unwrap();
@@ -144,7 +144,35 @@ fn migrations_apply_on_empty_db() {
     // Opening again applies nothing twice.
     let store = Store::open(&path).unwrap();
     store.close().unwrap();
-    assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 9);
+    assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 10);
+}
+
+#[test]
+fn the_stored_two_clean_rounds_become_one() {
+    for (stored, expected) in [(2, 1), (3, 3)] {
+        let (_dir, path) = temp_db();
+        database_at(&path, 9);
+        let json = serde_json::to_string(&Settings {
+            clean_rounds_to_exit: stored,
+            proxy_port: 8443,
+            ..Settings::default()
+        })
+        .unwrap();
+        fresh(&path)
+            .execute(
+                "INSERT INTO settings(id, json) VALUES (1, ?1) \
+                 ON CONFLICT(id) DO UPDATE SET json = excluded.json",
+                [json],
+            )
+            .unwrap();
+
+        let store = Store::open(&path).unwrap();
+        let settings = store.load_at(NOW).unwrap().settings;
+        assert_eq!(settings.clean_rounds_to_exit, expected);
+        assert_eq!(settings.proxy_port, 8443);
+        store.close().unwrap();
+        assert_eq!(version_of(&path), 10);
+    }
 }
 
 #[test]
@@ -173,7 +201,7 @@ fn a_database_at_version_5_upgrades_cleanly() {
     store.close().unwrap();
     assert_eq!(
         count(&path, "SELECT max(version) FROM schema_migrations"),
-        9
+        10
     );
     assert_eq!(count(&path, "SELECT count(*) FROM client_samples"), 0);
 }
@@ -331,7 +359,7 @@ fn a_database_at_version_6_upgrades_cleanly() {
     store.close().unwrap();
     assert_eq!(
         count(&path, "SELECT max(version) FROM schema_migrations"),
-        9
+        10
     );
     assert_eq!(count(&path, "SELECT count(*) FROM node_samples"), 0);
 }
@@ -541,7 +569,7 @@ fn unknown_schema_version_refuses_open() {
             err,
             StoreError::UnknownSchemaVersion {
                 found: 999,
-                supported: 9
+                supported: 10
             }
         ),
         "{err:?}"
@@ -1399,7 +1427,7 @@ fn processes_opening_a_new_database_together_all_succeed() {
         for result in results {
             assert_eq!(result, Ok(()));
         }
-        assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 9);
+        assert_eq!(count(&path, "SELECT count(*) FROM schema_migrations"), 10);
     }
 }
 
@@ -1657,7 +1685,7 @@ fn a_migration_first_keeps_a_copy_of_the_database() {
     assert!(copy.is_file(), "{}", copy.display());
     assert_eq!(version_of(&copy), 7);
     assert_eq!(count(&copy, "SELECT COUNT(*) FROM bans"), 1);
-    assert_eq!(version_of(&path), 9);
+    assert_eq!(version_of(&path), 10);
 
     // A restore checks the sum beside the copy, so the sum must be there.
     crate::backup::restore(&path, &copy).unwrap();
@@ -1722,7 +1750,7 @@ fn an_old_copy_is_not_taken_back() {
 
     assert!(!undo_schema(&path, 7, Duration::ZERO).unwrap());
 
-    assert_eq!(version_of(&path), 9, "the database is left as it was");
+    assert_eq!(version_of(&path), 10, "the database is left as it was");
     assert!(crate::backup::before_migration(&path, 7).is_file());
 }
 
@@ -1730,7 +1758,7 @@ fn an_old_copy_is_not_taken_back() {
 fn a_database_this_build_knows_is_left_alone() {
     let (_dir, path) = temp_db();
     rolled_back(&path);
-    assert!(!undo_schema(&path, 9, UNDO_WINDOW).unwrap());
+    assert!(!undo_schema(&path, 10, UNDO_WINDOW).unwrap());
     assert_eq!(count(&path, "SELECT COUNT(*) FROM bans"), 2);
 }
 
@@ -1758,7 +1786,7 @@ fn a_damaged_copy_is_not_taken_back() {
     std::fs::write(crate::backup::before_migration(&path, 7), b"damaged").unwrap();
 
     assert!(undo_schema(&path, 7, UNDO_WINDOW).is_err());
-    assert_eq!(version_of(&path), 9, "the database is left as it was");
+    assert_eq!(version_of(&path), 10, "the database is left as it was");
 }
 
 #[test]

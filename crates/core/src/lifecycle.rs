@@ -90,6 +90,8 @@ impl NodeRecord {
                 last_report: Ts(0),
                 port_ok: port == s.proxy_port,
                 pool_user_taken: false,
+                ru_confirmed_at: None,
+                port_filter: false,
             },
             registered_at: now,
             queued_at: now,
@@ -141,8 +143,8 @@ impl NodeRecord {
         true
     }
 
-    /// Back to `Pending` with nothing proven about the IP: Globalping, the TCP latch and the
-    /// report age start over. The metrics latch and the heartbeat describe the agent, not the
+    /// Back to `Pending` with nothing proven about the IP: Globalping, its confirmation from
+    /// Russia, the port filter, the TCP latch and the report age start over. The metrics latch and the heartbeat describe the agent, not the
     /// IP, so they stay.
     fn reset_for_recheck(&mut self, now: Ts) {
         self.quarantine_reasons.clear();
@@ -152,6 +154,9 @@ impl NodeRecord {
         self.health.tcp = Latch::new();
         self.health.gp = GpStatus::Unknown;
         self.health.last_report = Ts(0);
+        // A confirmation and a filter both describe the old address.
+        self.health.ru_confirmed_at = None;
+        self.health.port_filter = false;
         self.not_alive_since = None;
         self.last_round_at = None;
         self.undecided_rounds = 0;
@@ -805,6 +810,8 @@ mod tests {
             last_report: now,
             port_ok: true,
             pool_user_taken: false,
+            ru_confirmed_at: None,
+            port_filter: false,
         }
     }
 
@@ -1689,6 +1696,27 @@ mod tests {
             unban(&mut n, &mut blocks, at(61)).is_empty(),
             "nothing left to lift"
         );
+    }
+
+    #[test]
+    fn a_new_address_or_a_recheck_forgets_the_confirmation_and_the_filter() {
+        let mark = |n: &mut NodeRecord| {
+            n.health.ru_confirmed_at = Some(T0);
+            n.health.port_filter = true;
+        };
+        let mut n = healthy(T0);
+        mark(&mut n);
+        assert!(n.change_ip(ip("95.216.0.7"), at(10)));
+        assert_eq!(n.health.ru_confirmed_at, None);
+        assert!(!n.health.port_filter);
+
+        let mut n = healthy(T0);
+        n.state = NodeState::Banned;
+        mark(&mut n);
+        unban(&mut n, &mut Vec::new(), at(10));
+        assert_eq!(n.state, NodeState::Pending);
+        assert_eq!(n.health.ru_confirmed_at, None);
+        assert!(!n.health.port_filter);
     }
 
     #[test]

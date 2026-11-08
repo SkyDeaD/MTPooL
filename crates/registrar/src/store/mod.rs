@@ -54,6 +54,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (7, include_str!("../../migrations/0007_node_samples.sql")),
     (8, include_str!("../../migrations/0008_record_cleanup.sql")),
     (9, include_str!("../../migrations/0009_traffic_by_hour.sql")),
+    (
+        10,
+        include_str!("../../migrations/0010_one_clean_round.sql"),
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]
