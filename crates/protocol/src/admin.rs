@@ -230,6 +230,10 @@ pub struct AdminNode {
     /// new check began.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_report_at: Option<String>,
+    /// What the node's firewall does to the proxy port, as its agent last reported; absent when
+    /// there is no filter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port_filter: Option<String>,
     /// The agent version from the rollout record; absent until the node has polled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_version: Option<String>,

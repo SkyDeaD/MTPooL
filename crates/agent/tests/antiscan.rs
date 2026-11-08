@@ -480,6 +480,8 @@ fn config(antiscan: bool) -> AgentConfig {
         antiscan,
         report_other_users: false,
         measure_now: false,
+        report_check_host: false,
+        check_host_now: false,
     }
 }
 

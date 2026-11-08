@@ -1339,6 +1339,7 @@ struct NodeExtras {
     owner_id: i64,
     last_heartbeat: Option<String>,
     last_report_at: Option<String>,
+    port_filter: Option<String>,
     failed: Vec<String>,
 }
 
@@ -1361,6 +1362,7 @@ async fn admin_nodes(app: &AppState) -> Result<Vec<AdminNode>, Failure> {
                         .then(|| rfc3339(n.health.last_heartbeat.0)),
                     last_report_at: (n.health.last_report.0 > 0)
                         .then(|| rfc3339(n.health.last_report.0)),
+                    port_filter: state.stats.get(&n.id).and_then(|s| s.port_filter.clone()),
                     failed: failed_conditions(&n.health, now, &state.settings)
                         .into_iter()
                         .filter_map(|c| match serde_json::to_value(c) {
@@ -1395,6 +1397,7 @@ async fn admin_nodes(app: &AppState) -> Result<Vec<AdminNode>, Failure> {
                 owner_id: e.owner_id,
                 last_heartbeat: e.last_heartbeat,
                 last_report_at: e.last_report_at,
+                port_filter: e.port_filter,
                 failed: e.failed,
             })
         })

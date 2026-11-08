@@ -1678,7 +1678,9 @@ async fn config_returns_users_sni_port_intervals() {
             },
             "antiscan": true,
             "report_other_users": true,
-            "measure_now": false
+            "measure_now": false,
+            "report_check_host": false,
+            "check_host_now": false
         })
     );
 

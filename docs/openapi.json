@@ -4071,6 +4071,13 @@
                   "null"
                 ],
                 "description": "Absent when the owner is gone."
+              },
+              "port_filter": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "What the node's firewall does to the proxy port, as its agent last reported; absent when\nthere is no filter."
               }
             }
           }
@@ -4190,6 +4197,10 @@
             "type": "boolean",
             "description": "Whether the agent defends the port against active probing."
           },
+          "check_host_now": {
+            "type": "boolean",
+            "description": "The registrar asks for a check-host measurement out of turn: a decisive check of a node\nsuspected of a block is due."
+          },
           "intervals": {
             "$ref": "#/components/schemas/Intervals"
           },
@@ -4201,6 +4212,10 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "report_check_host": {
+            "type": "boolean",
+            "description": "This registrar takes `check_host` and `port_filter` in a report. Without it the agent\nleaves them out."
           },
           "report_other_users": {
             "type": "boolean",
@@ -4354,6 +4369,75 @@
             "$ref": "#/components/schemas/Vote"
           }
         }
+      },
+      "CheckHostReport": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A check was started; the registrar fetches its result under the id.",
+            "required": [
+              "id",
+              "port",
+              "kind"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "example": "abc123"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "started"
+                ]
+              },
+              "port": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The port the check connected to.",
+                "example": 443,
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "No check this time. Not a failure.",
+            "required": [
+              "reason",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "no_data"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "description": "`rate_limited`, `unavailable`, `timeout`; anything else counts as no data.",
+                "example": "rate_limited"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The agent does not run check-host (switched off on the node).",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "disabled"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What the agent says about its check-host measurement."
       },
       "ClientsMark": {
         "type": "object",
@@ -4944,7 +5028,7 @@
               "string",
               "null"
             ],
-            "description": "Why the sensor abstained: `not_configured`, `key_rejected`, `unavailable`, `rate_limited`,\n`timeout`, `unknown_answer`, `no_data` or `port_refused` (most probes were refused the\nconnection: the port is closed). Only for `abstain`."
+            "description": "Why the sensor abstained: `not_configured`, `key_rejected`, `unavailable`, `rate_limited`,\n`timeout`, `unknown_answer`, `no_data`, `port_refused` (most probes were refused the\nconnection: the port is closed), `port_filter` (the node's own firewall filters the port)\nor `port_closed` (check-host found the port closed). Only for `abstain`."
           },
           "sensor": {
             "type": "string",
@@ -5618,6 +5702,10 @@
           "engine": {
             "$ref": "#/components/schemas/Engine"
           },
+          "globalping_disputed": {
+            "type": "boolean",
+            "description": "A healthy node whose Globalping check is red: the pool keeps checking it with check-host\nand does not quarantine it on Globalping alone. Says nothing about a port filter; the\npanel shows that."
+          },
           "id": {
             "type": "string",
             "example": "alpha-a1b2c"
@@ -5654,7 +5742,7 @@
               "string",
               "null"
             ],
-            "description": "When the next sensor round of the node is due (RFC 3339, UTC). Only for a node the\nsensors check: suspected of a block in quarantine, or a node on reverify."
+            "description": "When the next sensor round of the node is due (RFC 3339, UTC). Only for a node the\nsensors check: suspected of a block in quarantine, a node on reverify, or a healthy node\nwhose Globalping check is red."
           },
           "other_clients": {
             "type": [
@@ -5767,6 +5855,17 @@
           "checked_at"
         ],
         "properties": {
+          "check_host": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CheckHostReport",
+                "description": "The check-host measurement. Absent in a report of an older agent: the registrar then\ncounts no data from it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "checked_at": {
             "type": "string",
             "description": "When the agent made the checks, RFC 3339. Must be within 10 minutes before and one\nminute after the registrar's clock.",
@@ -5815,6 +5914,14 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "port_filter": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the node's firewall does to the proxy port, as the agent reads it (for example\n`iptables`); absent when there is no filter or the agent cannot tell.",
+            "example": "iptables"
           },
           "sni": {
             "type": "string",

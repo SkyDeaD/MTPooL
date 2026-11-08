@@ -1014,6 +1014,8 @@ pub async fn config(State(app): State<AppState>, auth: NodeAuth) -> Result<Respo
                 antiscan: true,
                 report_other_users: true,
                 measure_now: wants_measurement(node, now, s),
+                report_check_host: false,
+                check_host_now: false,
             }))
         })
         .await

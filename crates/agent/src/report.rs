@@ -100,6 +100,8 @@ pub fn build_report(inputs: ReportInputs) -> ReportRequest {
         port: inputs.port,
         sni: inputs.sni,
         gp: inputs.gp,
+        check_host: None,
+        port_filter: None,
         metrics,
         dc2: inputs.dc2,
         host: inputs.host,

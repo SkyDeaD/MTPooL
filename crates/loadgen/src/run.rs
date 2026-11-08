@@ -261,6 +261,8 @@ impl Node {
             port: self.shared.args.node_port,
             sni: self.config.sni.clone(),
             gp,
+            check_host: None,
+            port_filter: None,
             metrics: MetricsReport {
                 ok: true,
                 from_client_total: sent,
