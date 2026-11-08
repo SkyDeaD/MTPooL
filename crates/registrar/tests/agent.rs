@@ -22,7 +22,7 @@ use mtpool_protocol::rfc3339;
 use mtpool_registrar::actor::{Actor, ActorHandle, ActorOptions, Clock, EffectDriver};
 use mtpool_registrar::auth::tokens::{self, NewToken, TokenHash, TokenKind};
 use mtpool_registrar::sensors::check_host::{
-    CheckHostInbox, CheckHostSensor, CheckHostVerifier, PortConnector,
+    CheckHostInbox, CheckHostSensor, CheckHostVerifier, Entry, PortConnector,
 };
 use mtpool_registrar::sensors::round::RoundRunner;
 use mtpool_registrar::sensors::{Sensor, Target};
@@ -2063,10 +2063,16 @@ async fn a_rejected_check_is_never_a_block() {
 
     let resp = report(&env, &token, check_report(&env, started(CHECK_ID, 443))).await;
     assert_eq!(resp.status, StatusCode::OK, "{}", resp.body);
-    wait_for_requests(&service, 1).await;
-
-    let vote = check_host_sensor(&env).vote(&target(CHECKED_IP)).await;
-    assert!(matches!(vote.vote, Vote::Abstain(_)), "{vote:?}");
+    // The refusal is in the inbox before anything is read: only then does the test mean it.
+    let entry = env
+        .check_host
+        .take(checked_ip(), Duration::from_secs(10))
+        .await;
+    assert!(
+        matches!(entry, Some(Entry::NoData(_))),
+        "{}",
+        entry.is_some()
+    );
 }
 
 #[tokio::test]
@@ -2298,4 +2304,44 @@ async fn the_report_keeps_the_filter() {
     let seen = get(&env, "/api/v1/admin/nodes", PEER_ADMIN, &admin).await;
     assert_eq!(seen.status, StatusCode::OK, "{}", seen.body);
     assert_eq!(seen.json()[0]["port_filter"], "iptables", "{}", seen.body);
+}
+
+#[tokio::test]
+async fn a_second_check_during_a_slow_verify_is_ignored_and_its_id_stays_free() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(CONNECTED)
+                .set_delay(Duration::from_millis(1500)),
+        )
+        .mount(&server)
+        .await;
+    let env = env_with_check_host(pool(vec![checked_node()]), &server);
+    let token = node_token(&env, "alpha-00001");
+
+    let first = report(&env, &token, check_report(&env, started("first", 443))).await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.body);
+    wait_for_requests(&server, 1).await;
+    let second = report(&env, &token, check_report(&env, started("second", 443))).await;
+    assert_eq!(second.status, StatusCode::OK, "{}", second.body);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        check_requests(&server).await,
+        1,
+        "no second fetch while one is under way"
+    );
+
+    // The first ends, whichever way, and gives the place back.
+    let entry = env
+        .check_host
+        .take(checked_ip(), Duration::from_secs(10))
+        .await;
+    assert!(entry.is_some());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // The id of the ignored report was not claimed, so it can be sent again.
+    let again = report(&env, &token, check_report(&env, started("second", 443))).await;
+    assert_eq!(again.status, StatusCode::OK, "{}", again.body);
+    wait_for_requests(&server, 2).await;
 }

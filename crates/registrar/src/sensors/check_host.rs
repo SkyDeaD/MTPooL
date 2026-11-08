@@ -12,7 +12,7 @@
 //! The evidence holds the result code and the connection time of each point. The node's address
 //! and the text of the service's errors stay out of it: it is shown publicly.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -331,6 +331,8 @@ struct Slot {
 struct Inner {
     slots: HashMap<Ipv4Addr, Slot>,
     ids: HashMap<String, Ts>,
+    /// Addresses whose answer is being fetched.
+    flying: HashSet<Ipv4Addr>,
 }
 
 /// What the agents reported, waiting for the round of their node.
@@ -338,6 +340,18 @@ pub struct CheckHostInbox {
     inner: Mutex<Inner>,
     notify: Notify,
     clock: Clock,
+}
+
+/// The place of a fetch for one address.
+pub struct Flight {
+    inbox: Arc<CheckHostInbox>,
+    ip: Ipv4Addr,
+}
+
+impl Drop for Flight {
+    fn drop(&mut self) {
+        self.inbox.lock().flying.remove(&self.ip);
+    }
 }
 
 impl CheckHostInbox {
@@ -356,6 +370,15 @@ impl CheckHostInbox {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Takes the only place for a fetch for this address; false while another is under way. The
+    /// place is given back when the returned guard is dropped, however the fetch ends.
+    pub fn begin(self: &Arc<Self>, ip: Ipv4Addr) -> Option<Flight> {
+        self.lock().flying.insert(ip).then(|| Flight {
+            inbox: Arc::clone(self),
+            ip,
+        })
     }
 
     /// True for the first claim of an id. An id is remembered for 15 minutes.

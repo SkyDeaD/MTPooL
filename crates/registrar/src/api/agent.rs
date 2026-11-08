@@ -46,7 +46,7 @@ use utoipa_axum::routes;
 use super::ApiError;
 use crate::auth::middleware::{ClientIp, EnrollAuth, NodeAuth};
 use crate::auth::tokens::{self, NewToken, TokenKind};
-use crate::sensors::check_host::{CheckExpect, Entry};
+use crate::sensors::check_host::{CheckExpect, Entry, Flight};
 use crate::server::AppState;
 use crate::store::{ReportOp, measurement_seen};
 use crate::verifier::{GpExpect, GpRejected};
@@ -987,22 +987,28 @@ fn handle_check_host(
         None => {}
         Some(CheckHostReport::Disabled) => app.check_host.put(ip, Entry::Disabled),
         Some(CheckHostReport::NoData { reason }) => app.check_host.put(ip, Entry::NoData(reason)),
-        // The id is used once, whatever the answer turns out to be.
-        Some(CheckHostReport::Started { id, port }) if app.check_host.claim(&id, now) => {
-            let expect = CheckExpect {
-                ip,
-                port,
-                reported_at: Ts(checked_at),
+        Some(CheckHostReport::Started { id, port }) => {
+            // One fetch per address at a time. A `Started` that is ignored claims nothing, so
+            // its id is not lost.
+            let Some(flight) = app.check_host.begin(ip) else {
+                return;
             };
-            tokio::spawn(settle_check_host(app.clone(), id, expect));
+            // The id is used once, whatever the answer turns out to be.
+            if app.check_host.claim(&id, now) {
+                let expect = CheckExpect {
+                    ip,
+                    port,
+                    reported_at: Ts(checked_at),
+                };
+                tokio::spawn(settle_check_host(app.clone(), id, expect, flight));
+            }
         }
-        Some(CheckHostReport::Started { .. }) => {}
     }
 }
 
 /// Fetches the check's answer, which may take seconds, and leaves it for the round. An answer
 /// that is refused leaves a note without data: it can never be a `Blocked` vote.
-async fn settle_check_host(app: AppState, id: String, expect: CheckExpect) {
+async fn settle_check_host(app: AppState, id: String, expect: CheckExpect, _flight: Flight) {
     let verified =
         tokio::time::timeout(VERIFY_TIMEOUT, app.check_host_verifier.verify(&id, &expect)).await;
     let entry = match verified {
