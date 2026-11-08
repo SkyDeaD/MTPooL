@@ -742,6 +742,7 @@ fn full_state() -> (PoolState, Vec<PersistOp>) {
                 other_from_client_total: 30,
                 other_to_client_total: 40,
                 other_clients: Some(5),
+                port_filter: None,
                 availability_bp: None,
             },
         ),

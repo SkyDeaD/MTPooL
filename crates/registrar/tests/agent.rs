@@ -416,6 +416,7 @@ async fn enroll_limit_counts_only_live_nodes_of_the_owner() {
 async fn a_ban_takes_the_record_and_the_token_and_the_unban_works_without_them() {
     let mut node = alpha();
     node.state = NodeState::Quarantine;
+    node.suspected = true;
     node.owner = OwnerId(1);
     let generation = node.generation;
     let env = env(pool(vec![node]));

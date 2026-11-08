@@ -27,7 +27,7 @@ pub use health::{FailedCondition, GpStatus, Latch, NodeHealth, failed_conditions
 pub use lifecycle::{
     EnrollDecision, EnrollInput, IpBlock, LifecycleEvent, NodeRecord, RejectReason, RoundResult,
     Tombstone, apply_round, decide_enroll, is_alive, needs_sensors, next_round_at, record_prune,
-    reset_tombstones, tick_node, unban,
+    reset_tombstones, tick_node, unban, wants_check_host,
 };
 pub use links::{build_proxy_link, link_secret};
 pub use selection::{
