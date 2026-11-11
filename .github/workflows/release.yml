@@ -150,7 +150,7 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.15.2
-      - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-zigbuild@0.24.0
       # No build cache here on purpose: a release is built from the pinned sources only.
@@ -203,7 +203,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-cyclonedx@0.5.9
       - name: Stamp the version
